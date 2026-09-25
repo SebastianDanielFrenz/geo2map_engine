@@ -35,6 +35,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(G2M_BUILD_TESTS "Build the Catch2 test suites" ON)
 option(G2M_BUILD_REFGEN "Build tools/refgen (fetches GeographicLib; reference-value generator, never linked into g2m)" OFF)
 option(G2M_SANITIZER_BUILD "This build instruments code with a sanitizer (ASan/UBSan/TSan)" OFF)
+option(G2M_BUILD_FUZZERS "Build the libFuzzer targets in tests/fuzz_formats (clang only; set by the WSL clang presets)" OFF)
 
 # An optimised build type must carry an optimisation flag. CMake seeds
 # CMAKE_CXX_FLAGS_<CONFIG> only on a build dir's first configure; a cache
