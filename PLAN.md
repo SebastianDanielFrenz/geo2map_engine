@@ -53,7 +53,7 @@ acing_game\PLAN.md`. Section numbers are kept identical in both files, so a refe
    - Only bridges (later also tunnels and buildings) are streamed static mesh bodies.
    - The glue is `g2m_ps_bridge`, an opt-in target in the geo2map_engine repo. It is built only when the consumer already provides `ps_core`.
 7. **physics_sim needs a few additive changes (section 9).**
-   - Blocker R1: pool heightfields clamp heights to about ±200 m, and the home region spans roughly 90–880 m [unverified: typical Taunus/Main elevations].
+   - R1 (the ±200 m height clamp) and R3 (the tile-seam contact spike) are done in physics_sim 5c648a5, which racing_game pins. One boundary is still open: a heightfield-vs-static-mesh boundary spike (162 m/s² at test_ground x = −500). Our bridges and structures create the same kind of boundary; see G3.
 8. **The game builds one GDExtension DLL (`rg_godot`, section 10).**
    - It contains `ps_core`, `g2m`, the bridge, and the game's own engine-neutral `rg_core`.
    - Both libraries are pinned as git submodules at explicit commits. Pinning a sibling path is not an option: it would build against another session's uncommitted work.
@@ -798,7 +798,7 @@ On lidar data this mostly removes noise. On GLO-30 it is what makes a road driva
 - `TileKey.packed` = (ix, iy) of the session 255 m grid, whose origin is offset by half a metre so samples sit on DGM1 cell centres (4.4, 4.9); the zone is fixed per session.
 - `fill_tile`:
   - copies samples from the resident immutable `terrain.height` tiles (up to 4 g2m tiles per physics tile);
-  - writes heights relative to the tile's datum, with `tile_origin_xy.z` = datum (needs R1);
+  - writes ABSOLUTE heights (orthometric, session frame). physics_sim's TileManager chooses a per-tile datum itself (R1, physics_sim 1f1e0f8: the midpoint of the tile's range snapped to 128 m, subtracted before upload, added back via the body pose) and counts tiles with more than ±200 m of local relief (`World::terrain_relief_overflow_count`). Measured at 1 m spacing: exact on flat ground, ≤ 1.15 mm on a 30 % slope, a 5 mm step kept to ~10 µm. Error grows with local relief inside a Jolt block, not with absolute height;
   - maps `SurfaceKind`/`LandClass` to `SurfaceId` by name through the game's table.
 - `TerrainConfig`:
   - `suppress_terrain_under_static_geometry = false`;
