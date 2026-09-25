@@ -196,22 +196,21 @@ TEST_CASE("ring_assembly: figure-eight splits into two rings sharing one vertex"
                                    way(6, "", b3)},
                                   nt.fn());
     REQUIRE(r.ok()); // sharing exactly one vertex between the two rings is not a bad intersection
-    // The core property this test is after is the CHAIN SPLIT itself: one
-    // connected traversal through the shared vertex A must still yield two
-    // separate 3-point rings, not one 5-point ring or an error. Both split
-    // rings start exactly at A (chain_open_ways always splits a repeat off
-    // starting at the repeated node), and ring_set.h's contains() is
-    // documented "on-edge = inside" (plan step 9 is deliberately a simple
-    // even-odd-of-a-sample-point rule, with no special tangency handling) -
-    // so each ring's sample point (its own front(), = A) lands exactly on
-    // the OTHER ring's boundary too, and both are consistently classified
-    // odd-depth ("inner") rather than disambiguated as two siblings. This
-    // is an accepted I1 simplification, not asserted here as outer/inner;
-    // only that assembly succeeds and the two point sets are exactly right.
-    CHECK(r->rings.outers.size() + r->rings.inners.size() == 2);
+    // Item 0 fix: both split rings start exactly at the shared vertex A
+    // (chain_open_ways always splits a repeat off starting at the repeated
+    // node), so this is exactly the tangency case step 9's nesting test
+    // must get right regardless of which point is sampled - two separate
+    // 3-point triangles meeting at one corner, NEITHER nested inside the
+    // other. Before the fix, both rings' sample point (front() == A)
+    // landed exactly on the other ring's boundary, and contains()'s
+    // documented "on-edge = inside" rule made both read as odd-depth
+    // ("inner"), not disambiguated. The fix (ring_i_is_inside_ring_j: use
+    // the first vertex NOT on the other ring's boundary) must now classify
+    // both as outer, since neither triangle actually contains the other.
+    CHECK(r->rings.outers.size() == 2);
+    CHECK(r->rings.inners.empty());
     std::vector<std::vector<PointMm>> got;
     for (const Ring& ring : r->rings.outers) got.push_back(sorted_points(ring));
-    for (const Ring& ring : r->rings.inners) got.push_back(sorted_points(ring));
     std::sort(got.begin(), got.end(), points_less);
     std::vector<std::vector<PointMm>> want = {sorted_points(Ring{pt(0, 0), pt(10, 0), pt(10, 10)}),
                                               sorted_points(Ring{pt(0, 0), pt(-10, 0), pt(-10, -10)})};
@@ -287,12 +286,6 @@ TEST_CASE("ring_assembly: two rings touching at exactly one vertex is fine", "[g
     nt.add(6, pt(20, 20));
     nt.add(7, pt(10, 20));
     const std::vector<std::int64_t> square_a = {1, 2, 3, 4, 1};
-    // Starting at node 5 (not the shared node 3) so this ring's own sample
-    // point (its front(), used by step 9's nesting test) does not itself
-    // land on square_a's boundary - see the figure-eight test above for
-    // what happens when it does (contains()'s documented "on-edge =
-    // inside" rule then makes the two rings' classification depend on
-    // which point happens to be sampled, not disambiguated tangency).
     const std::vector<std::int64_t> square_b = {5, 6, 7, 3, 5}; // shares only vertex 3 = (10,10) with square_a
 
     const auto r = assemble_rings({way(1, "outer", square_a), way(2, "outer", square_b)}, nt.fn());
@@ -300,6 +293,83 @@ TEST_CASE("ring_assembly: two rings touching at exactly one vertex is fine", "[g
     CHECK(r->rings.outers.size() == 2);
     CHECK(r->rings.inners.empty());
     CHECK(r->role_mismatches == 0);
+}
+
+TEST_CASE("ring_assembly: tangent vertex is the FIRST ring's front(), not the second's", "[geom][ring]") {
+    // Item 0 fix regression: two squares sharing exactly one corner
+    // (10,10), first square's closed way listed starting AT the shared
+    // vertex (so rings[0].front() == the tangent point), second square's
+    // way starting elsewhere. Before the fix, sampling rings[0].front()
+    // against ring 1 would find it exactly on ring 1's boundary and
+    // (on-edge = inside) misclassify depth. Neither square actually
+    // contains the other - both must come out outer.
+    NodeTable nt;
+    nt.add(1, pt(0, 0));
+    nt.add(2, pt(10, 0));
+    nt.add(3, pt(10, 10)); // the shared/tangent vertex
+    nt.add(4, pt(0, 10));
+    nt.add(5, pt(20, 10));
+    nt.add(6, pt(20, 20));
+    nt.add(7, pt(10, 20));
+    const std::vector<std::int64_t> square_a = {3, 4, 1, 2, 3}; // starts AT the shared vertex
+    const std::vector<std::int64_t> square_b = {5, 6, 7, 3, 5}; // starts elsewhere
+
+    const auto r = assemble_rings({way(1, "outer", square_a), way(2, "outer", square_b)}, nt.fn());
+    REQUIRE(r.ok());
+    CHECK(r->rings.outers.size() == 2);
+    CHECK(r->rings.inners.empty());
+}
+
+TEST_CASE("ring_assembly: tangent vertex is the SECOND ring's front(), not the first's", "[geom][ring]") {
+    // Same shape, roles of the two ways swapped: the shared vertex is now
+    // the SECOND way's own first listed node - the mirror-image ordering
+    // of the case above ("both orders").
+    NodeTable nt;
+    nt.add(1, pt(0, 0));
+    nt.add(2, pt(10, 0));
+    nt.add(3, pt(10, 10)); // the shared/tangent vertex
+    nt.add(4, pt(0, 10));
+    nt.add(5, pt(20, 10));
+    nt.add(6, pt(20, 20));
+    nt.add(7, pt(10, 20));
+    const std::vector<std::int64_t> square_a = {1, 2, 3, 4, 1}; // starts elsewhere
+    const std::vector<std::int64_t> square_b = {3, 5, 6, 7, 3}; // starts AT the shared vertex
+
+    const auto r = assemble_rings({way(1, "outer", square_a), way(2, "outer", square_b)}, nt.fn());
+    REQUIRE(r.ok());
+    CHECK(r->rings.outers.size() == 2);
+    CHECK(r->rings.inners.empty());
+}
+
+TEST_CASE("ring_assembly: inscribed triangle touching only at 3 shared vertices", "[geom][ring]") {
+    // Item 0's "every vertex of i lies on j's boundary" fallback: a convex
+    // hexagon (outer) and a triangle formed by every other one of its own
+    // vertices (V0, V2, V4) - strictly inside the hexagon, touching its
+    // boundary only at those 3 shared vertices (a diagonal chord of a
+    // convex polygon never touches the boundary except at its own
+    // endpoints). EVERY vertex of the triangle ring is therefore on the
+    // hexagon ring's boundary, so ring_i_is_inside_ring_j must fall back to
+    // the doubled-midpoint test to classify the triangle as an inner ring
+    // (a hole) - and, symmetrically, the hexagon's own vertex V1 is NOT on
+    // the triangle's boundary, so its classification (outer) uses the
+    // ordinary per-vertex path.
+    NodeTable nt;
+    nt.add(10, pt(0, 0));  // V0
+    nt.add(11, pt(4, 0));  // V1
+    nt.add(12, pt(6, 3));  // V2
+    nt.add(13, pt(4, 6));  // V3
+    nt.add(14, pt(0, 6));  // V4
+    nt.add(15, pt(-2, 3)); // V5
+    const std::vector<std::int64_t> hexagon = {10, 11, 12, 13, 14, 15, 10};
+    const std::vector<std::int64_t> triangle = {10, 12, 14, 10}; // V0, V2, V4 - alternating hexagon vertices
+
+    const auto r = assemble_rings({way(1, "outer", hexagon), way(2, "inner", triangle)}, nt.fn());
+    REQUIRE(r.ok());
+    CHECK(r->rings.outers.size() == 1);
+    CHECK(r->rings.inners.size() == 1);
+    CHECK(r->role_mismatches == 0);
+    CHECK(sorted_points(r->rings.inners.front()) ==
+         sorted_points(Ring{pt(0, 0), pt(6, 3), pt(0, 6)}));
 }
 
 TEST_CASE("ring_assembly: permutation invariance over 20 seeded shuffles", "[geom][ring]") {

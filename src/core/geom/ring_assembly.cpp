@@ -244,6 +244,73 @@ bool ring_contains_point_only(const Ring& r, PointMm p) {
     return contains(tmp, p);
 }
 
+// Item 0 fix (tangency-robust nesting classification): step 9 originally
+// sampled `rings[i].front()` against every other ring, which made the
+// outer/inner classification depend on which vertex happened to be first
+// whenever that vertex lay exactly ON another ring's boundary (rings may
+// legally touch at shared vertices - step 8 already forbids proper
+// crossings and collinear overlaps, so a touch is always at a single
+// point). The three helpers below instead find, per (ring i, ring j) pair,
+// a point of ring i that is PROVABLY not on ring j's boundary, so the
+// strict containment test is unambiguous.
+
+bool on_segment_inclusive_local(PointMm a, PointMm b, PointMm p) {
+    return std::min(a.x, b.x) <= p.x && p.x <= std::max(a.x, b.x) && std::min(a.y, b.y) <= p.y &&
+           p.y <= std::max(a.y, b.y);
+}
+
+// Is `p` exactly on ring `r`'s own boundary (any edge, endpoints
+// inclusive)?
+bool point_on_ring_boundary(const Ring& r, PointMm p) {
+    const std::size_t n = r.size();
+    for (std::size_t k = 0; k < n; ++k) {
+        const PointMm a = r[k], b = r[(k + 1) % n];
+        if (orient(a, b, p) == 0 && on_segment_inclusive_local(a, b, p)) return true;
+    }
+    return false;
+}
+
+// Strict (no on-edge branch) even-odd containment test for a DOUBLED point
+// `p2` (== 2 * the true point) against ring `r`'s own (undoubled) vertices.
+// Used only for a point already known not to lie on `r`'s boundary: the
+// true point may not have integer coordinates (an edge midpoint), so
+// instead of dividing, the factor of 2 is carried through the orientation
+// test itself. For m = p2 / 2 (rational), orient(a, b, m) has exactly the
+// sign of sign_diff_products(b.x-a.x, p2.y-2*a.y, b.y-a.y, p2.x-2*a.x):
+// dividing both cross-product terms by the same positive constant (2) does
+// not change the sign of their difference. This stays exact integer
+// arithmetic and never computes m itself.
+bool ring_contains_doubled(const Ring& r, PointMm p2) {
+    bool crossing = false;
+    const std::size_t n = r.size();
+    for (std::size_t k = 0; k < n; ++k) {
+        const PointMm a = r[k], b = r[(k + 1) % n];
+        const std::int64_t ay2 = a.y * 2, by2 = b.y * 2;
+        if ((ay2 > p2.y) != (by2 > p2.y)) {
+            const int side = sign_diff_products(b.x - a.x, p2.y - ay2, b.y - a.y, p2.x - 2 * a.x);
+            if ((side > 0) == (b.y > a.y)) crossing = !crossing;
+        }
+    }
+    return crossing;
+}
+
+// True iff `v` (a vertex of some ring) is inside ring `j`, choosing the
+// test point per the Item 0 rule: the first vertex of ring `i` (in ring
+// order) not on ring `j`'s boundary; if every vertex of `i` lies on `j`'s
+// boundary (e.g. a triangle inscribed in `j`, touching only at its own 3
+// vertices), the doubled midpoint of `i`'s first edge instead - since step
+// 8 already forbids any crossing/overlap between the two rings, that
+// midpoint must be strictly inside or outside `j`.
+bool ring_i_is_inside_ring_j(const Ring& ring_i, const Ring& ring_j) {
+    for (const PointMm& v : ring_i) {
+        if (point_on_ring_boundary(ring_j, v)) continue;
+        return ring_contains_point_only(ring_j, v);
+    }
+    const PointMm a = ring_i[0], b = ring_i[1];
+    const PointMm mid2{a.x + b.x, a.y + b.y}; // == 2 * midpoint(a, b), exact integer
+    return ring_contains_doubled(ring_j, mid2);
+}
+
 void normalize_ring(Ring& ring, bool is_outer) {
     const std::size_t n = ring.size();
     std::size_t m = 0;
@@ -327,13 +394,14 @@ Result<AssembledArea> assemble_rings(std::vector<MemberWay> members, const NodeP
     if (auto r = check_no_bad_intersections(rings); !r) return r.error();
 
     // 9. classify by even-odd nesting depth; count role mismatches.
+    // Item 0 fix: per (i, j) pair, not one fixed sample point for ring i -
+    // see ring_i_is_inside_ring_j() above.
     std::vector<bool> is_outer(rings.size());
     for (std::size_t i = 0; i < rings.size(); ++i) {
         int depth = 0;
-        const PointMm sample = rings[i].front();
         for (std::size_t j = 0; j < rings.size(); ++j) {
             if (j == i) continue;
-            if (ring_contains_point_only(rings[j], sample)) ++depth;
+            if (ring_i_is_inside_ring_j(rings[i], rings[j])) ++depth;
         }
         is_outer[i] = (depth % 2) == 0;
         const std::string_view want = is_outer[i] ? "outer" : "inner";
