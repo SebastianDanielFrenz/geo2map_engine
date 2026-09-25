@@ -33,6 +33,22 @@ std::string utm_scheme_name(UtmZone zone) {
     return "utm" + std::to_string(zone.zone) + (zone.hemisphere == Hemisphere::North ? "n" : "s");
 }
 
+std::optional<UtmZone> parse_utm_scheme(std::string_view s) {
+    if (s.size() < 5 || s.size() > 6 || !s.starts_with("utm")) return std::nullopt;
+    const char h = s.back();
+    if (h != 'n' && h != 's') return std::nullopt;
+    const std::string_view digits = s.substr(3, s.size() - 4);
+    if (digits[0] == '0') return std::nullopt; // canonical: no leading zero
+    int zone = 0;
+    for (char c : digits) {
+        if (c < '0' || c > '9') return std::nullopt;
+        zone = zone * 10 + (c - '0');
+    }
+    const UtmZone z{zone, h == 's' ? Hemisphere::South : Hemisphere::North};
+    if (!z.valid()) return std::nullopt;
+    return z;
+}
+
 Utm::Utm(const Ellipsoid& ellipsoid) : tm_(ellipsoid, kUtmK0) {}
 
 UtmForward Utm::forward(UtmZone zone, double lat, double lon) const {

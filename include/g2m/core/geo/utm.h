@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace g2m::geo {
 
@@ -50,6 +51,8 @@ std::optional<UtmZone> utm_standard_zone(double lat, double lon);
 
 // "utm32n" / "utm33s": the tile scheme name of a zone (PLAN.md 3.4).
 std::string utm_scheme_name(UtmZone zone);
+// Its exact inverse: "utm" + zone 1..60 without leading zero + n|s.
+std::optional<UtmZone> parse_utm_scheme(std::string_view name);
 
 struct UtmForward {
     double easting;   // m, false easting included

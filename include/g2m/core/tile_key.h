@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace g2m {
 
@@ -79,5 +80,8 @@ std::optional<TileKey> tile_key_at(geo::UtmZone zone, int level, double easting,
 
 // "utm32n/0/1953/21582": scheme/level/x/y as used in the tile URLs (PLAN.md 3.4).
 std::string to_string(const TileKey& key);
+// Its exact inverse (canonical decimal integers only: no "+", no leading
+// zeros, no "-0"); empty unless the result is valid().
+std::optional<TileKey> parse_tile_path(std::string_view path);
 
 } // namespace g2m

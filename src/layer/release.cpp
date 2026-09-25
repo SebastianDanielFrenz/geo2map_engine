@@ -32,22 +32,7 @@ void put_str(ByteWriter& w, std::string_view s) {
 
 std::string scheme_name(geo::UtmZone z) { return geo::utm_scheme_name(z); }
 
-std::optional<geo::UtmZone> parse_scheme(std::string_view s) {
-    // utm{1..60}{n|s}
-    if (s.size() < 5 || s.size() > 6 || !s.starts_with("utm")) return std::nullopt;
-    const char h = s.back();
-    if (h != 'n' && h != 's') return std::nullopt;
-    const std::string_view digits = s.substr(3, s.size() - 4);
-    int zone = 0;
-    for (char c : digits) {
-        if (c < '0' || c > '9') return std::nullopt;
-        zone = zone * 10 + (c - '0');
-    }
-    if (digits[0] == '0') return std::nullopt; // canonical: no leading zero
-    geo::UtmZone z{zone, h == 's' ? geo::Hemisphere::South : geo::Hemisphere::North};
-    if (!z.valid()) return std::nullopt;
-    return z;
-}
+std::optional<geo::UtmZone> parse_scheme(std::string_view s) { return geo::parse_utm_scheme(s); }
 
 const char* kind_name(LayerKind k) { return k == LayerKind::Raw ? "raw" : "baked"; }
 const char* availability_name(Availability a) {

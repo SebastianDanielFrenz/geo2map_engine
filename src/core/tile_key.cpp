@@ -75,4 +75,47 @@ std::string to_string(const TileKey& key) {
            std::to_string(key.y);
 }
 
+namespace {
+
+// A canonical decimal int64 with magnitude <= 2^31 (enough for level and
+// the 24-bit indices; range is checked by valid()).
+std::optional<std::int64_t> parse_canonical_int(std::string_view s) {
+    bool neg = false;
+    if (!s.empty() && s[0] == '-') {
+        neg = true;
+        s.remove_prefix(1);
+    }
+    if (s.empty() || s.size() > 10 || (s[0] == '0' && (s.size() > 1 || neg))) return std::nullopt;
+    std::int64_t v = 0;
+    for (char c : s) {
+        if (c < '0' || c > '9') return std::nullopt;
+        v = v * 10 + (c - '0');
+    }
+    return neg ? -v : v;
+}
+
+} // namespace
+
+std::optional<TileKey> parse_tile_path(std::string_view path) {
+    std::string_view part[4];
+    for (int i = 0; i < 4; ++i) {
+        const std::size_t slash = path.find('/');
+        if ((i < 3) != (slash != std::string_view::npos)) return std::nullopt;
+        part[i] = path.substr(0, slash);
+        path = i < 3 ? path.substr(slash + 1) : std::string_view();
+    }
+    const auto zone = geo::parse_utm_scheme(part[0]);
+    const auto level = parse_canonical_int(part[1]);
+    const auto x = parse_canonical_int(part[2]);
+    const auto y = parse_canonical_int(part[3]);
+    if (!zone || !level || !x || !y) return std::nullopt;
+    if (*level < 0 || *level > TileKey::kMaxLevel || *x < TileKey::kIndexMin || *x > TileKey::kIndexMax ||
+        *y < TileKey::kIndexMin || *y > TileKey::kIndexMax) {
+        return std::nullopt;
+    }
+    TileKey k{*zone, static_cast<int>(*level), static_cast<std::int32_t>(*x), static_cast<std::int32_t>(*y)};
+    if (!k.valid()) return std::nullopt;
+    return k;
+}
+
 } // namespace g2m

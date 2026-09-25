@@ -102,6 +102,38 @@ TEST_CASE("tile key parent/child", "[tile]") {
     }
 }
 
+TEST_CASE("tile key path strings: parse_tile_path inverts to_string", "[tile]") {
+    g2m_test::SplitMix64 rng(77);
+    for (int i = 0; i < 2000; ++i) {
+        TileKey k;
+        const auto zone = static_cast<int>(1 + rng.next() % 60);
+        const bool south = (rng.next() & 1) != 0;
+        k.zone = UtmZone{zone, south ? Hemisphere::South : Hemisphere::North};
+        k.level = static_cast<int>(rng.next() % (TileKey::kMaxLevel + 1));
+        const auto x = static_cast<std::int64_t>(rng.next() % (std::uint64_t{1} << TileKey::kIndexBits));
+        k.x = static_cast<std::int32_t>(x + TileKey::kIndexMin);
+        const auto y = static_cast<std::int64_t>(rng.next() % (std::uint64_t{1} << TileKey::kIndexBits));
+        k.y = static_cast<std::int32_t>(y + TileKey::kIndexMin);
+        REQUIRE(k.valid());
+        const auto back = parse_tile_path(to_string(k));
+        REQUIRE(back);
+        CHECK(*back == k);
+    }
+    CHECK(parse_tile_path("utm32n/2/350/5450") == TileKey{k32N, 2, 350, 5450});
+    CHECK(parse_tile_path("utm1s/0/-8388608/8388607") ==
+          TileKey{UtmZone{1, Hemisphere::South}, 0, TileKey::kIndexMin, TileKey::kIndexMax});
+    for (const char* bad : {"", "utm32n", "utm32n/2/350", "utm32n/2/350/5450/", "/utm32n/2/350/5450",
+                            "utm32n/2/350/+5450", "utm32n/02/350/5450", "utm32n/2/-0/5450", "utm32n/2/ 350/5450",
+                            "utm32n/21/0/0", "utm32n/2/8388608/0", "utm32n/2/0/-8388609", "utm0n/2/0/0",
+                            "utm61n/2/0/0", "utm032n/2/0/0", "utm32N/2/0/0", "UTM32n/2/0/0", "utm32/2/0/0",
+                            "utm32n/2/0/99999999999999999999"}) {
+        INFO(bad);
+        CHECK_FALSE(parse_tile_path(bad));
+    }
+    CHECK(geo::parse_utm_scheme("utm60s") == UtmZone{60, Hemisphere::South});
+    CHECK_FALSE(geo::parse_utm_scheme("utm60"));
+}
+
 TEST_CASE("height quantisation", "[raster]") {
     CHECK(*quantise_height(0.0) == 0);
     CHECK(*quantise_height(1.0) == 256);
