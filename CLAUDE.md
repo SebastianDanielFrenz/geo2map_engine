@@ -8,10 +8,10 @@ This file only maps what exists and how to build, test and run it.
 - Milestone state: **G0 done**. G0 covers the library skeleton, deterministic
   math, geodesy, tile keys, rasters, hashes and golden infrastructure.
   **G1a done**: the layer model, the tile formats, releases, the SQLite tile
-  stores, the in-process server and the client cache. G1b (decoders:
-  `include/g2m/decode/`, `src/decode/`, `cmake/deps_decoders.cmake`,
-  `tests/fuzz`) is being built in a separate worktree. G1c (tiler plus
-  import) comes later.
+  stores, the in-process server and the client cache. **G1b done**: pure,
+  bounds-checked decoders for the source formats (ZIP, TIFF/GeoTIFF/BigTIFF/
+  COG, Hessen DGM1, OSM PBF) - see `g2m_decode` below. G1c (tiler plus
+  import) comes next.
 
 C++20, namespace `g2m`, MIT. g2m never includes or links anything from
 physics_sim.
@@ -85,6 +85,26 @@ geo2map_engine/
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
                                       src_landcover, src_osm, pack, release_manifest, protocol, cache_db
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)
+  include/g2m/decode/                 public API of g2m_decode (no third-party types); milestone G1b
+    byte_source.h                     IByteSource (abstract random-access read), FileByteSource, MemoryByteSource,
+                                      DecodeError (every decoder's one error channel)
+    zip/zip_reader.h                  ZipReader: EOCD/ZIP64/central directory, stored+deflate, CRC-32 (libdeflate),
+                                      raw (non-UTF-8-tolerant) filenames, read_entry_as_source (nested-zip re-parse)
+    tiff/tiff_types.h                 Ifd/StripOrTile/tag enums (compression, predictor, sample format, PlanarConfig)
+    tiff/tiff_reader.h                TiffReader: IFD chain (classic + BigTIFF), strips/tiles, LZW/Deflate/PackBits,
+                                      predictor 1/2/3, decode_window_f32 (bounds-checked sub-rectangle read)
+    tiff/geotransform.h               GeoTransform (pixel-centre affine) from GeoTIFF tags; to_raster_georef()
+                                      (UTM-only bridge to g2m::RasterGeoref, NorthToSouth + exact-mm alignment)
+    tiff/tfw.h                        World-file (.tfw) parser; rejects rotation/non-north-up
+    dgm1.h                            Hessen DGM1: enumerate_tiles/decode_tile over nested PKT_*.zip deliveries -
+                                      see this file's own header comment for the real filename convention (G2M-003)
+    osm/pbf_reader.h                  PbfHandler (virtual-dispatch seam, no osmium type in this header),
+                                      BoundingBox, read_pbf (libosmium+protozero+zlib-ng, single-threaded,
+                                      streamed in file order, bbox prefilter)
+  src/decode/                         implementation (mirrors include/g2m/decode/); CMakeLists.txt defines g2m_decode
+    tiff/lzw.h+.cpp                   TIFF-flavored LZW decoder (ClearCode/EOI, early-change code-width growth)
+    tiff/predictor.h+.cpp             Predictor 2 (horizontal differencing) / 3 (floating-point byte-plane) undo
+    tiff/packbits.h+.cpp              PackBits decoder
   tests/
     support/                          test-only: headless_env (Windows CRT dialogs off), catch_main, splitmix64.h,
                                       synthetic.h (SplitMix64 elev/landcover tiles and OSM sets for tests and the g1 golden)
@@ -94,13 +114,18 @@ geo2map_engine/
     fuzz_formats/                     fuzz target bodies (fuzz_run.cpp) + seeds (fuzz_seeds.cpp); g2m_fuzz_smoke_tests
                                       (every leg); fuzz_<name> libFuzzer executables + g2m_fuzz_seeds (G2M_BUILD_FUZZERS)
     unit/                             g2m_unit_tests: test_det_math, test_tm_reference, test_geo_frames,
-                                      test_tile_raster_hash
+                                      test_tile_raster_hash, test_decode_zip, test_decode_tiff, test_decode_osm,
+                                      test_decode_real_data (gated on env var G2M_DATA_DIR, SKIP when unset)
     golden/                           golden.h/.cpp + golden_g1.cpp (g2m_golden), dump_main.cpp (g2m_golden_dump [g0|g1]),
                                       test_golden.cpp (g2m_golden_tests)
+    fuzz/                             libFuzzer targets for g2m_decode (fuzz_zip, fuzz_tiff, fuzz_pbf) over a
+                                      fuzz-instrumented copy of G2M_DECODE_SOURCES; same G2M_BUILD_FUZZERS gate and
+                                      CTest `fuzz` label as fuzz_formats (WSL clang legs)
   testdata/
     geodesy/                          GeographicLib reference values (written by tools/refgen; see below)
     golden/g0_golden.txt              committed G0 golden hashes
     golden/g1_golden.txt              committed G1 golden hashes (encoded bytes of every G1 format)
+  cmake/deps_decoders.cmake           FetchContent for g2m_decode's deps (libdeflate, zlib-ng, protozero, libosmium)
   tools/
     ci.ps1                            CI (below)
     setup_dev_env.ps1                 verify (-CheckOnly) or install the toolchain
@@ -157,6 +182,13 @@ end of `CMakeLists.txt`):
     fixture). The CTest tests `fuzz_<name>` run 10 s each
     (`G2M_FUZZ_SECONDS`, `-seed=1`), label `fuzz`.
 - `g2m_refgen` (exe, `G2M_BUILD_REFGEN=ON` only): links GeographicLib.
+- `g2m_decode` (STATIC, milestone G1b): `src/decode/**`, links `g2m_core`
+  PRIVATE plus `libdeflate::libdeflate_static` and (via `g2m_dep_libosmium`)
+  `zlib`/`g2m_dep_protozero`. No third-party type in any public header
+  (`include/g2m/decode/`).
+- `tests/fuzz` (`G2M_BUILD_FUZZERS`, default OFF): libFuzzer targets for
+  `g2m_decode`; clang only, not clang-cl (not exercised by the Windows
+  presets).
 
 ## CMake options
 
@@ -180,6 +212,10 @@ end of `CMakeLists.txt`):
 | zstd | `v1.5.7` (release tarball, SHA-256) | g2m_layers; static-asserted version; level 12, every parameter pinned |
 | SQLite | `3.53.4` amalgamation (SHA3-256) | g2m_server tile stores |
 | nlohmann_json | `v3.12.0` (release tarball, SHA-256) | g2m_layers / g2m_server, PRIVATE only |
+| libdeflate | `v1.26` | `g2m_decode`: DEFLATE + CRC-32 for ZIP and TIFF/COG |
+| zlib-ng | `2.3.3` | `g2m_decode`: zlib-API DEFLATE for libosmium's PBF blob decompression only |
+| protozero | `v1.8.2` | `g2m_decode`: header-only protobuf decode, under libosmium |
+| libosmium | `v2.23.1` | `g2m_decode`: OSM PBF parsing (`src/decode/osm/`) |
 
 ## Presets
 
