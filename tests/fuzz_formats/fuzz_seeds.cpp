@@ -6,6 +6,7 @@
 #include "g2m/layer/layer_id.h"
 #include "g2m/layer/osm_clip.h"
 #include "g2m/layer/pack.h"
+#include "g2m/layer/region.h"
 #include "g2m/layer/release.h"
 #include "g2m/layer/src_elev.h"
 #include "g2m/layer/src_landcover.h"
@@ -133,6 +134,40 @@ std::vector<Bytes> paths() {
     };
 }
 
+std::vector<Bytes> regions() {
+    std::vector<Bytes> out;
+    out.push_back(text(R"({"format":"g2m.regions/1","regions":[{"name":"home","scheme":"utm32n","halo_m":2000,)"
+                        R"("parts":[{"kind":"utm_bbox","west":474000,"south":5560000,"east":480000,"north":5566000},)"
+                        R"({"kind":"osm_admin","relation":62650,"expect_name":"Frankfurt am Main","expect_admin_level":6}]}]})"));
+
+    g2m::ResolvedRegion r;
+    r.name = "home";
+    r.scheme = "utm32n";
+    r.level = 2;
+    r.halo_m = 2000;
+    g2m::ResolvedPart bbox_part;
+    bbox_part.kind = g2m::ResolvedPartKind::UtmBbox;
+    bbox_part.vertices = 4;
+    bbox_part.geometry_hash = 0x0123456789abcdefull;
+    r.parts.push_back(bbox_part);
+    g2m::ResolvedPart admin_part;
+    admin_part.kind = g2m::ResolvedPartKind::OsmAdmin;
+    admin_part.id = 62650;
+    admin_part.name = "Frankfurt am Main";
+    admin_part.admin_level = 6;
+    admin_part.vertices = 1842;
+    admin_part.geometry_hash = 0xfedcba9876543210ull;
+    r.parts.push_back(admin_part);
+    r.pbf_name = "hessen-latest.osm.pbf";
+    r.pbf_sha256[0] = 0xab;
+    r.pbf_sha256[31] = 0xcd;
+    r.tiles = {g2m::CoverageRun{100, 200, 210}, g2m::CoverageRun{101, 199, 211}};
+    r.interior = {g2m::CoverageRun{100, 202, 208}};
+    r.tile_count = 33;
+    out.push_back(text(g2m::to_json(r)));
+    return out;
+}
+
 } // namespace
 
 std::vector<std::vector<std::uint8_t>> seeds(Target target) {
@@ -152,6 +187,7 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
     case Target::Pack: return {pack()};
     case Target::Manifest: return manifests();
     case Target::Path: return paths();
+    case Target::Region: return regions();
     }
     return {};
 }

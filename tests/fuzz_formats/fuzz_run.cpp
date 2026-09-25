@@ -5,6 +5,7 @@
 #include "fuzz_targets.h"
 
 #include "g2m/layer/pack.h"
+#include "g2m/layer/region.h"
 #include "g2m/layer/release.h"
 #include "g2m/layer/src_elev.h"
 #include "g2m/layer/src_landcover.h"
@@ -111,6 +112,20 @@ void path(std::span<const std::uint8_t> data) {
     check(g2m::to_path(*r) == text, "path: to_path(parse_path(p)) != p");
 }
 
+void region(std::span<const std::uint8_t> data) {
+    const std::string_view text(reinterpret_cast<const char*>(data.data()), data.size());
+    // regions.json (g2m.regions/1) has no to_json (it is hand-authored
+    // only, never re-serialised by g2m itself) so the only property this
+    // target can check for it is "does not crash" - exercised by simply
+    // calling parse_regions. The resolved-region artefact does round-trip.
+    (void)g2m::parse_regions(text);
+    if (auto r = g2m::parse_resolved_region(text)) {
+        const std::string j = g2m::to_json(*r);
+        auto back = g2m::parse_resolved_region(j);
+        check(back.ok() && *back == *r && g2m::to_json(*back) == j, "resolved region: round trip");
+    }
+}
+
 } // namespace
 
 void run(Target target, std::span<const std::uint8_t> data) {
@@ -134,6 +149,7 @@ void run(Target target, std::span<const std::uint8_t> data) {
     case Target::Pack: pack(data); return;
     case Target::Manifest: manifest(data); return;
     case Target::Path: path(data); return;
+    case Target::Region: region(data); return;
     }
 }
 

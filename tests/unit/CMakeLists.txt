@@ -9,6 +9,8 @@ add_executable(g2m_unit_tests
   test_decode_tiff.cpp
   test_decode_osm.cpp
   test_decode_real_data.cpp
+  test_geom_exact.cpp
+  test_ring_assembly.cpp
 )
 target_link_libraries(g2m_unit_tests PRIVATE g2m_core g2m_decode g2m_test_catch_main g2m_warnings g2m_options
                                               libdeflate::libdeflate_static)

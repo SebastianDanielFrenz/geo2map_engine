@@ -12,6 +12,7 @@ reject anything that breaks a rule stated here.
 | [src_osm.md](src_osm.md) | body encoding 3: `g2m.src.osm` columnar OSM | `g2m/layer/src_osm.h`, `osm_clip.h`, `osm_data.h` |
 | [pack.md](pack.md) | a 16×16 pack of containers with a directory of body hashes | `g2m/layer/pack.h` |
 | [release_manifest.md](release_manifest.md) | release id (rid) and the `g2m.release/1` manifest JSON | `g2m/layer/release.h` |
+| [regions.md](regions.md) | `g2m.regions/1` region definitions, ring assembly rules, `g2m.resolved_region/1` | `g2m/layer/region.h`, `g2m/core/geom/*` |
 | [protocol.md](protocol.md) | protocol v1 paths, statuses, the `g2m.server/1` manifest JSON | `g2m/server/protocol.h` |
 | [cache_db.md](cache_db.md) | tile store on disk: SQLite schema and blob-file layout | `g2m/server/tile_store.h` |
 

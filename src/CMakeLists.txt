@@ -13,6 +13,9 @@ add_library(g2m_core STATIC
   core/geo/utm.cpp
   core/geo/ecef.cpp
   core/geo/session_frame.cpp
+  core/geom/exact.cpp
+  core/geom/ring_set.cpp
+  core/geom/ring_assembly.cpp
   $<TARGET_OBJECTS:g2m_musl_math>
 )
 target_include_directories(g2m_core

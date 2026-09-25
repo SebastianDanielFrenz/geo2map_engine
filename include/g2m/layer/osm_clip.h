@@ -23,6 +23,7 @@
 // Deterministic: the output depends only on (set, key, halo_m).
 #pragma once
 
+#include "g2m/core/geom/exact.h"
 #include "g2m/core/result.h"
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/osm_data.h"
@@ -37,7 +38,9 @@ Result<OsmTile> clip_osm(const osm::OsmData& set, const TileKey& key, std::uint3
 
 // Exposed for tests: does segment (ax,ay)-(bx,by) touch the closed box
 // [x0,x1] x [y0,y1]? Exact for all int64 inputs with |value| < 2^62.
-bool segment_touches_box(std::int64_t ax, std::int64_t ay, std::int64_t bx, std::int64_t by, std::int64_t x0,
-                         std::int64_t y0, std::int64_t x1, std::int64_t y1);
+// (Now implemented in g2m::geom, core/geom/exact.h - PLAN G1c I1; brought
+// into g2m so existing unqualified callers, e.g. tests/layer/test_osm.cpp's
+// `using namespace g2m;`, keep working unchanged.)
+using g2m::geom::segment_touches_box;
 
 } // namespace g2m

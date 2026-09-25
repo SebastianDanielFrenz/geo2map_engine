@@ -27,6 +27,20 @@ std::optional<std::int32_t> quantise_height(double metres) {
     return static_cast<std::int32_t>(std::llround(scaled));
 }
 
+std::optional<std::int32_t> quantise_height_half_even(double metres) {
+    if (!std::isfinite(metres)) return std::nullopt;
+    const double x = metres * kHeightUnitsPerMetre; // exact (power of two)
+    const double r = std::floor(x);
+    const double d = x - r;
+    const bool r_odd = std::fmod(r, 2.0) != 0.0;
+    const double result = (d > 0.5 || (d == 0.5 && r_odd)) ? r + 1.0 : r;
+    // INT32_MIN is reserved for NoData.
+    if (!(result > static_cast<double>(INT32_MIN) + 0.5 && result < static_cast<double>(INT32_MAX) + 0.5)) {
+        return std::nullopt;
+    }
+    return static_cast<std::int32_t>(result);
+}
+
 double dequantise_height(std::int32_t units) { return static_cast<double>(units) / kHeightUnitsPerMetre; }
 
 bool RasterGeoref::valid() const {

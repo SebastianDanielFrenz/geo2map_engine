@@ -12,6 +12,7 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/src_osm.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/osm_clip.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/release.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/region.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/pack.cpp
   CACHE INTERNAL "g2m_layers sources (also compiled into the fuzz-instrumented copy, tests/fuzz_formats)"
 )

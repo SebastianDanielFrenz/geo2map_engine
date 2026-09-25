@@ -67,6 +67,13 @@ inline constexpr std::int32_t kHeightNoData = INT32_MIN;
 // library rounding choice). Empty for non-finite input or out of int32
 // range (|h| > ~8,388 km, or the NoData value itself).
 std::optional<std::int32_t> quantise_height(double metres);
+// round(metres * 256), ties to even (banker's rounding - nearbyint under
+// the default IEEE rounding mode, but computed with only floor/compare so
+// it does not depend on the caller's current rounding mode, PLAN.md D7).
+// Used by the DGM1 import path (G1c I1 Q3); `quantise_height` (ties away
+// from zero) is unchanged and still used elsewhere. Same range/NoData
+// contract as `quantise_height`.
+std::optional<std::int32_t> quantise_height_half_even(double metres);
 // units / 256 (exact).
 double dequantise_height(std::int32_t units);
 
