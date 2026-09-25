@@ -109,7 +109,7 @@ std::vector<std::byte> lzw_decode(std::span<const std::byte> compressed, std::si
         // "len(table) + 1" in the Python reference (which counts the two
         // reserved placeholder slots 256/257 that this C++ table never
         // stores) becomes "table.size() + kFirstFreeCode + 1" here.
-        if (table.size() + kFirstFreeCode + 1 >= (1u << nbits) && nbits < kMaxCodeBits) {
+        if (table.size() + kFirstFreeCode + 1 >= (std::uint64_t{1} << nbits) && nbits < kMaxCodeBits) {
             ++nbits;
         }
     }

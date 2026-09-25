@@ -14,10 +14,20 @@
 #include <fstream>
 #include <string>
 
+// G2M_BUILD_FUZZERS is clang-only (WSL legs), never the Windows presets, so
+// a POSIX getpid() is always available here.
+#include <unistd.h>
+
 namespace {
 std::string scratch_path() {
+    // Unique per process: tools/ci.ps1's linux-release and linux-asan-ubsan
+    // fuzz legs can run concurrently in the same WSL instance (G1c step 0
+    // item 4c), and a single fixed filename let one leg's scratch file be
+    // truncated/rewritten mid-read by the other leg's fuzzer process.
     static const std::filesystem::path dir = std::filesystem::temp_directory_path();
-    return (dir / "g2m_fuzz_pbf_input.osm.pbf").string();
+    static const std::string path =
+        (dir / ("g2m_fuzz_pbf_input_" + std::to_string(::getpid()) + ".osm.pbf")).string();
+    return path;
 }
 } // namespace
 

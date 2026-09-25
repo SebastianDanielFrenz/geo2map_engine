@@ -13,6 +13,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -100,7 +101,7 @@ std::vector<std::byte> lzw_encode_literal_only(const std::vector<std::byte>& in)
             have_prev = true;
         } else {
             ++table_size;
-            if (table_size + kFirstFreeCode + 1 >= (1u << nbits) && nbits < kMaxCodeBits) ++nbits;
+            if (table_size + kFirstFreeCode + 1 >= (std::uint64_t{1} << nbits) && nbits < kMaxCodeBits) ++nbits;
         }
     }
     emit(kEoiCode, nbits);
@@ -504,6 +505,32 @@ TEST_CASE("tiff: decode window out of bounds throws", "[decode][tiff]") {
     auto src = std::make_shared<MemoryByteSource>(std::move(bytes));
     TiffReader reader(src);
     CHECK_THROWS_AS(reader.decode_window_u8(0, 2, 2, 4, 4), DecodeError);
+}
+
+TEST_CASE("tiff: fuzz_tiff regression - crafted IFD (Count=0 tag, huge entry/field counts) throws DecodeError, not std::terminate",
+          "[decode][tiff]") {
+    // 60-byte crafted classic TIFF from the G1c step 0 fuzz_tiff crash (WSL
+    // linux-asan-ubsan/linux-release fuzz legs, ~a few seconds in): before
+    // the fix, an ImageWidth entry with Count=0 made
+    // read_uint_array(...).at(0) throw std::out_of_range, and other entries
+    // in the same file carry implausibly large Count/entry-count values
+    // that reached out.reserve()/raw_entries.reserve() directly - none of
+    // that is a g2m::decode::DecodeError, so it escaped every catch
+    // boundary as std::terminate instead of a clean decode failure.
+    const std::vector<std::byte> bytes = {
+        std::byte{0x49}, std::byte{0x49}, std::byte{0x2a}, std::byte{0x00}, std::byte{0x04}, std::byte{0x00},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0x2a}, std::byte{0x00}, std::byte{0x04}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0x00}, std::byte{0x01}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x2a},
+        std::byte{0x00}, std::byte{0x04}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0x01}, std::byte{0x01}, std::byte{0x00}, std::byte{0x49}, std::byte{0x2a}, std::byte{0x00},
+        std::byte{0x04}, std::byte{0x00}, std::byte{0x00}, std::byte{0xc9}, std::byte{0xc9}, std::byte{0xc9},
+        std::byte{0xc9}, std::byte{0xc9}, std::byte{0xc9}, std::byte{0xc9}, std::byte{0xc9}, std::byte{0x08},
+        std::byte{0x00}, std::byte{0x03}, std::byte{0x2a}, std::byte{0x00}, std::byte{0x04}, std::byte{0x00},
+    };
+    auto src = std::make_shared<MemoryByteSource>(bytes);
+    CHECK_THROWS_AS(TiffReader(src), DecodeError);
 }
 
 TEST_CASE("tfw: parses a well-formed world file", "[decode][tiff][io]") {

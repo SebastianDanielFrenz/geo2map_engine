@@ -97,6 +97,24 @@ private:
     bool big_;
 };
 
+// Every file-derived element/byte count is validated here before it drives a
+// reserve()/resize()/vector construction. A crafted count near UINT64_MAX
+// (or one that only overflows a downstream byte-count multiplication) must
+// never reach an allocation call directly: std::vector::reserve/resize
+// throws std::length_error or std::bad_alloc for an implausible size, and
+// that is not a DecodeError - it would escape every "catch (const
+// DecodeError&)" fuzz/caller boundary as an uncaught std::terminate
+// (G1c step 0 item 3; found via fuzz_tiff). The bound is deliberately loose
+// (a count may never need more elements than there are bytes in the whole
+// source, since even the smallest element is 1 byte) so it rejects only
+// implausible/overflow-driven values, never a legitimately large real file.
+void check_file_derived_count(std::uint64_t count, std::uint64_t available_bytes, const char* what) {
+    if (count > available_bytes) {
+        throw DecodeError(std::string("tiff: ") + what + " count implausible for a " +
+                           std::to_string(available_bytes) + "-byte source");
+    }
+}
+
 // Reads one field's values as unsigned integers (valid for
 // Byte/SByte/Short/SShort/Long/SLong/Long8/SLong8/Ifd/Ifd8 - i.e. every
 // integer-ish type this reader's recognised tags actually use).
@@ -113,6 +131,7 @@ std::vector<std::uint64_t> read_uint_array(const IByteSource& src, const Endian&
         bytes = src.read(offset, total);
     }
     std::vector<std::uint64_t> out;
+    check_file_derived_count(e.count, src.size(), "field value array");
     out.reserve(e.count);
     for (std::uint64_t i = 0; i < e.count; ++i) {
         const std::byte* p = bytes.data() + i * elem_size;
@@ -125,6 +144,17 @@ std::vector<std::uint64_t> read_uint_array(const IByteSource& src, const Endian&
         }
     }
     return out;
+}
+
+// A required scalar tag (ImageWidth, Compression, ...) must carry at least
+// one value; a crafted zero-Count entry would otherwise make
+// read_uint_array(...).at(0) throw std::out_of_range - again not a
+// DecodeError, escaping uncaught (found via fuzz_tiff on a 60-byte crafted
+// TIFF with ImageWidth Count=0).
+std::uint64_t read_uint_scalar(const IByteSource& src, const Endian& en, const RawEntry& e, const char* tag_name) {
+    const std::vector<std::uint64_t> v = read_uint_array(src, en, e);
+    if (v.empty()) throw DecodeError(std::string("tiff: ") + tag_name + " tag has Count 0");
+    return v.front();
 }
 
 std::vector<double> read_double_array(const IByteSource& src, const Endian& en, const RawEntry& e) {
@@ -140,6 +170,7 @@ std::vector<double> read_double_array(const IByteSource& src, const Endian& en, 
         bytes = src.read(offset, total);
     }
     std::vector<double> out;
+    check_file_derived_count(e.count, src.size(), "field value array");
     out.reserve(e.count);
     if (e.type == FieldType::Double) {
         for (std::uint64_t i = 0; i < e.count; ++i) {
@@ -235,6 +266,12 @@ TiffReader::TiffReader(std::shared_ptr<IByteSource> source) : source_(std::move(
         const auto count_bytes = source_->read(ifd_offset, count_field_size);
         const std::uint64_t entry_count =
             count_field_size == 8 ? en.u64(count_bytes.data()) : en.u16(count_bytes.data());
+        // Validated BEFORE `entry_count * entry_size` below: that
+        // multiplication itself can overflow uint64 for a crafted huge
+        // entry_count, wrapping to a small value that then passes
+        // source_->read()'s own bounds check while entry_count stays huge
+        // for reserve()/the entry loop.
+        check_file_derived_count(entry_count, source_->size() / entry_size, "IFD entry");
 
         std::vector<RawEntry> raw_entries;
         raw_entries.reserve(entry_count);
@@ -257,21 +294,21 @@ TiffReader::TiffReader(std::shared_ptr<IByteSource> source) : source_(std::move(
         Ifd ifd;
         for (const RawEntry& e : raw_entries) {
             switch (e.tag) {
-                case tag::kImageWidth: ifd.width = read_uint_array(*source_, en, e).at(0); break;
-                case tag::kImageLength: ifd.height = read_uint_array(*source_, en, e).at(0); break;
-                case tag::kBitsPerSample: ifd.bits_per_sample = static_cast<unsigned>(read_uint_array(*source_, en, e).at(0)); break;
-                case tag::kCompression: ifd.compression = to_compression(read_uint_array(*source_, en, e).at(0)); break;
-                case tag::kSamplesPerPixel: ifd.samples_per_pixel = static_cast<unsigned>(read_uint_array(*source_, en, e).at(0)); break;
-                case tag::kRowsPerStrip: ifd.rows_per_strip = read_uint_array(*source_, en, e).at(0); break;
+                case tag::kImageWidth: ifd.width = read_uint_scalar(*source_, en, e, "ImageWidth"); break;
+                case tag::kImageLength: ifd.height = read_uint_scalar(*source_, en, e, "ImageLength"); break;
+                case tag::kBitsPerSample: ifd.bits_per_sample = static_cast<unsigned>(read_uint_scalar(*source_, en, e, "BitsPerSample")); break;
+                case tag::kCompression: ifd.compression = to_compression(read_uint_scalar(*source_, en, e, "Compression")); break;
+                case tag::kSamplesPerPixel: ifd.samples_per_pixel = static_cast<unsigned>(read_uint_scalar(*source_, en, e, "SamplesPerPixel")); break;
+                case tag::kRowsPerStrip: ifd.rows_per_strip = read_uint_scalar(*source_, en, e, "RowsPerStrip"); break;
                 case tag::kStripOffsets: ifd.strip_offsets = read_uint_array(*source_, en, e); break;
                 case tag::kStripByteCounts: ifd.strip_byte_counts = read_uint_array(*source_, en, e); break;
-                case tag::kPlanarConfiguration: ifd.planar_config = static_cast<PlanarConfig>(read_uint_array(*source_, en, e).at(0)); break;
-                case tag::kPredictor: ifd.predictor = static_cast<Predictor>(read_uint_array(*source_, en, e).at(0)); break;
-                case tag::kTileWidth: ifd.tile_width = read_uint_array(*source_, en, e).at(0); break;
-                case tag::kTileLength: ifd.tile_height = read_uint_array(*source_, en, e).at(0); break;
+                case tag::kPlanarConfiguration: ifd.planar_config = static_cast<PlanarConfig>(read_uint_scalar(*source_, en, e, "PlanarConfiguration")); break;
+                case tag::kPredictor: ifd.predictor = static_cast<Predictor>(read_uint_scalar(*source_, en, e, "Predictor")); break;
+                case tag::kTileWidth: ifd.tile_width = read_uint_scalar(*source_, en, e, "TileWidth"); break;
+                case tag::kTileLength: ifd.tile_height = read_uint_scalar(*source_, en, e, "TileLength"); break;
                 case tag::kTileOffsets: ifd.tile_offsets = read_uint_array(*source_, en, e); break;
                 case tag::kTileByteCounts: ifd.tile_byte_counts = read_uint_array(*source_, en, e); break;
-                case tag::kSampleFormat: ifd.sample_format = static_cast<SampleFormat>(read_uint_array(*source_, en, e).at(0)); break;
+                case tag::kSampleFormat: ifd.sample_format = static_cast<SampleFormat>(read_uint_scalar(*source_, en, e, "SampleFormat")); break;
                 case tag::kGdalNoData: ifd.gdal_nodata = read_ascii(*source_, en, e); break;
                 default: break; // geo tags handled in a second pass below (need width/height context-free values only)
             }
@@ -431,10 +468,21 @@ void TiffReader::decode_window_raw(const Ifd& ifd, std::int64_t x, std::int64_t 
         }
     };
 
+    // A generous absolute cap on one decompressed strip/tile unit. Below
+    // this, real strip/tile geometry from any file this project reads (COG
+    // tiles are typically 256x256, DGM1 strips are 1000 samples wide) stays
+    // untouched; above it, a crafted TileWidth/TileLength/RowsPerStrip (or
+    // the full image Width for a stripped read) would otherwise reach
+    // decompress_unit's out.reserve()/vector(N) with an implausible size -
+    // std::length_error/bad_alloc, not a DecodeError, escaping uncaught
+    // (G1c step 0 item 3, found via fuzz_tiff).
+    constexpr std::size_t kMaxDecodedUnitBytes = std::size_t{1} << 30; // 1 GiB
+
     if (ifd.is_tiled()) {
         if (ifd.tile_offsets.empty() || ifd.tile_offsets.size() != ifd.tile_byte_counts.size()) {
             throw DecodeError("tiff: tiled image missing tile offsets/byte counts");
         }
+        if (ifd.tile_height == 0) throw DecodeError("tiff: TileLength is 0");
         const std::uint64_t tiles_across = (ifd.width + ifd.tile_width - 1) / ifd.tile_width;
         const std::uint64_t tiles_down = (ifd.height + ifd.tile_height - 1) / ifd.tile_height;
         const std::int64_t tx0 = x / static_cast<std::int64_t>(ifd.tile_width);
@@ -451,6 +499,7 @@ void TiffReader::decode_window_raw(const Ifd& ifd, std::int64_t x, std::int64_t 
                     source_->read(ifd.tile_offsets[tile_index], ifd.tile_byte_counts[tile_index]);
                 const std::size_t expected =
                     static_cast<std::size_t>(ifd.tile_width) * static_cast<std::size_t>(ifd.tile_height) * bytes;
+                if (expected > kMaxDecodedUnitBytes) throw DecodeError("tiff: tile too large");
                 auto unit = decompress_unit(ifd, compressed, expected);
                 fix_up_rows(ifd, unit, ifd.tile_width, ifd.tile_height, big_endian_);
                 copy_rect(unit, ifd.tile_width, tx * static_cast<std::int64_t>(ifd.tile_width),
@@ -471,6 +520,7 @@ void TiffReader::decode_window_raw(const Ifd& ifd, std::int64_t x, std::int64_t 
             const auto compressed =
                 source_->read(ifd.strip_offsets[static_cast<std::size_t>(s)], ifd.strip_byte_counts[static_cast<std::size_t>(s)]);
             const std::size_t expected = static_cast<std::size_t>(ifd.width) * static_cast<std::size_t>(rows_here) * bytes;
+            if (expected > kMaxDecodedUnitBytes) throw DecodeError("tiff: strip too large");
             auto unit = decompress_unit(ifd, compressed, expected);
             fix_up_rows(ifd, unit, ifd.width, rows_here, big_endian_);
             copy_rect(unit, ifd.width, 0, static_cast<std::int64_t>(strip_row0), rows_here);
