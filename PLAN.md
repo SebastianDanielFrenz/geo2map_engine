@@ -23,7 +23,8 @@ A future farming simulator is a fourth repo that pins the same two libraries.
 
 ---
 
-> **Split note.** This file holds the library and server parts (sections 2-8, plus the dependency list from 13) of the joint plan written on 2026-09-25. The cross-repo schedule (milestones G0-G8 and R0-R10), the risks, the owner decisions and the game-side sections (1, 9-15) live in `S:\claude_codeacing_game\PLAN.md`. Section numbers are kept identical in both files, so a reference such as "(11.7)" or "D12" points there.
+> **Split note.** This file holds the library and server parts (sections 2-8, plus the dependency list from 13) of the joint plan written on 2026-09-25. The cross-repo schedule (milestones G0-G8 and R0-R10), the risks, the owner decisions and the game-side sections (1, 9-15) live in `S:\claude_code
+acing_game\PLAN.md`. Section numbers are kept identical in both files, so a reference such as "(11.7)" or "D12" points there.
 
 ## 0. Key decisions (details in the sections named)
 
@@ -465,7 +466,8 @@ GET /releases/{rid}/hashes/{layer}/{scheme}/{level}/{x}/{y}
      - grid north differs from true north by about 0.4° [estimate]; the compass and map correct for it.
 4. **Keys shared everywhere.**
    - g2m tiles, the client cache, the server URLs and the bridge's `TileKey.packed` all derive from integer grid metres.
-   - Physics tiles (255 m, 256 samples, 1 m spacing, integer-metre origins) sample exactly on the g2m 1 m grid. `fill_tile` is therefore a copy from up to 4 g2m tiles, never an interpolation.
+   - Data tiles (L0, 256 m) are **cell-registered**, exactly like Hessen DGM1: 256×256 samples at half-metre cell centres (E + 0.5, N + 0.5).
+   - Physics tiles (255 m, 256 samples, 1 m spacing, node-registered with shared borders, as physics_sim needs) have origins at **half-metre** positions, so every physics sample lies on a data-tile sample. `fill_tile` is therefore an integer-offset copy (`lattice_offset`) from up to 4 g2m tiles, never an interpolation. (Ruling 2026-09-25, see 4.9 and vault G2M-003.)
 5. **Zone boundaries.**
    - A session keeps its zone. Tiles beyond the boundary are derived in the extended zone, where the series stays accurate far outside the 6° strip, and cached under that zone's key.
    - Sessions more than about 1,500 km from their central meridian are out of scope; start a new session.
@@ -480,6 +482,12 @@ GET /releases/{rid}/hashes/{layer}/{scheme}/{level}/{x}/{y}
    - Rendering uses the existing origin rebasing (`origin_rebase.h`, 500 m threshold; 8.6 µm error at 50 km per PHYS-011).
    - Every g2m client item carries a double origin, with float vertices relative to it.
    - Official Godot builds are single precision, and double builds need a custom engine build (research), so floating origin is mandatory.
+9. **Rulings after G0 (2026-09-25, vault G2M-003).**
+   - **Round-trip target.** Geodetic → TM → geodetic round trip ≤ 5 nm (was < 1 nm). Measured: 3.16 nm for g2m, 3.17 nm for GeographicLib itself in double. 1 nm is out of reach for a 6th-order series in double, so the `[!mayfail]` 1 nm test is removed.
+   - **Sample lattice.** Data tiles are cell-registered (the native DGM1 lattice, no resampling). Physics tiles are node-registered, 255 m / 256 samples, anchored on the half-metre cell centres (see 4.4).
+   - Rejected alternatives:
+     - resampling to integer-metre nodes: it adds interpolation error, and 257 samples is odd, which Jolt rejects;
+     - 258-sample 256 m physics tiles: not a 1 m spacing.
 
 ---
 
@@ -787,7 +795,7 @@ On lidar data this mostly removes noise. On GLO-30 it is what makes a road driva
 ### 8.1 `G2mTerrainSource : ps::terrain::ITerrainSource`
 
 - `tile_size_m() = 255`, `samples_per_tile() = 256`.
-- `TileKey.packed` = (ix, iy) of the session 255 m grid; the zone is fixed per session.
+- `TileKey.packed` = (ix, iy) of the session 255 m grid, whose origin is offset by half a metre so samples sit on DGM1 cell centres (4.4, 4.9); the zone is fixed per session.
 - `fill_tile`:
   - copies samples from the resident immutable `terrain.height` tiles (up to 4 g2m tiles per physics tile);
   - writes heights relative to the tile's datum, with `tile_origin_xy.z` = datum (needs R1);
