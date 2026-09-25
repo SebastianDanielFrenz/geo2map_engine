@@ -2,12 +2,19 @@
 // covering compression none/LZW/Deflate/PackBits, predictor 1/2/3, sample
 // formats uint8/uint16/int16/int32/float32, GeoTIFF tag parsing, .tfw
 // parsing, and the georeference bridge to RasterGeoref.
+//
+// TiffBuilder/lzw_encode_literal_only now live in tests/support/tiff_builder.h
+// (promoted unchanged, PLAN.md G1c I2, for tests/support/fixture_cut's
+// future cut-worldcover subcommand to reuse) - only this file's own
+// test-case-local encoders (deflate_zlib_compress, packbits_encode_trivial,
+// apply_predictor2_encode, apply_predictor3_encode) stay here.
 
 #include "g2m/core/geo/utm.h"
 #include "g2m/decode/byte_source.h"
 #include "g2m/decode/tiff/geotransform.h"
 #include "g2m/decode/tiff/tfw.h"
 #include "g2m/decode/tiff/tiff_reader.h"
+#include "tiff_builder.h"
 
 #include <libdeflate.h>
 
@@ -21,31 +28,10 @@
 using namespace g2m;
 using namespace g2m::decode;
 using namespace g2m::decode::tiff;
+using g2m::test_support::lzw_encode_literal_only;
+using g2m::test_support::TiffBuilder;
 
 namespace {
-
-// --- little helpers -------------------------------------------------------
-
-std::vector<std::byte> le_u16(std::uint16_t v) {
-    std::vector<std::byte> b(2);
-    std::memcpy(b.data(), &v, 2);
-    return b;
-}
-std::vector<std::byte> le_u32(std::uint32_t v) {
-    std::vector<std::byte> b(4);
-    std::memcpy(b.data(), &v, 4);
-    return b;
-}
-std::vector<std::byte> le_f64_array(const std::vector<double>& vals) {
-    std::vector<std::byte> b(vals.size() * 8);
-    std::memcpy(b.data(), vals.data(), b.size());
-    return b;
-}
-std::vector<std::byte> le_u16_array(const std::vector<std::uint16_t>& vals) {
-    std::vector<std::byte> b(vals.size() * 2);
-    std::memcpy(b.data(), vals.data(), b.size());
-    return b;
-}
 
 std::vector<std::byte> deflate_zlib_compress(const std::vector<std::byte>& in) {
     libdeflate_compressor* c = libdeflate_alloc_compressor(6);
@@ -67,44 +53,6 @@ std::vector<std::byte> packbits_encode_trivial(const std::vector<std::byte>& in)
         out.push_back(std::byte{0}); // literal run of 1 byte (ctrl 0 -> n+1=1)
         out.push_back(b);
     }
-    return out;
-}
-
-// TIFF-flavoured LZW encoder emitting every symbol as a LITERAL code only
-// (never a dictionary match) - still exercises MSB-first bit packing and
-// the early-change code-width growth rule exactly the way lzw_decode
-// expects (a dictionary entry is pushed for every non-first code
-// regardless of whether it was itself a literal or a match), just without
-// covering the dictionary-hit/KwKwK decode paths. Those paths are instead
-// covered by the real-data DGM1 cross-check (PLAN.md/this milestone's
-// final report).
-std::vector<std::byte> lzw_encode_literal_only(const std::vector<std::byte>& in) {
-    constexpr int kClearCode = 256, kEoiCode = 257, kFirstFreeCode = 258, kMaxCodeBits = 12;
-    std::vector<std::byte> out;
-    std::size_t bitpos = 0;
-    auto emit = [&](std::uint32_t code, int nbits) {
-        for (int b = nbits - 1; b >= 0; --b) {
-            const bool bit = ((code >> b) & 1u) != 0;
-            const std::size_t byte_idx = bitpos >> 3;
-            if (byte_idx >= out.size()) out.push_back(std::byte{0});
-            if (bit) out[byte_idx] |= static_cast<std::byte>(1u << (7 - (bitpos & 7)));
-            ++bitpos;
-        }
-    };
-    int nbits = 9;
-    emit(kClearCode, nbits);
-    std::size_t table_size = 0;
-    bool have_prev = false;
-    for (std::byte bb : in) {
-        emit(static_cast<std::uint8_t>(bb), nbits);
-        if (!have_prev) {
-            have_prev = true;
-        } else {
-            ++table_size;
-            if (table_size + kFirstFreeCode + 1 >= (std::uint64_t{1} << nbits) && nbits < kMaxCodeBits) ++nbits;
-        }
-    }
-    emit(kEoiCode, nbits);
     return out;
 }
 
@@ -160,104 +108,6 @@ std::vector<std::byte> apply_predictor3_encode(const std::vector<std::byte>& hos
     }
     return out;
 }
-
-// --- classic little-endian TIFF builder ------------------------------------
-
-class TiffBuilder {
-public:
-    void add_short(std::uint16_t tag, std::uint16_t value) { add_inline(tag, 3, 1, le_u16(value)); }
-    void add_long(std::uint16_t tag, std::uint32_t value) { add_inline(tag, 4, 1, le_u32(value)); }
-    void add_short_array(std::uint16_t tag, const std::vector<std::uint16_t>& values) {
-        add_external(tag, 3, values.size(), le_u16_array(values));
-    }
-    void add_double_array(std::uint16_t tag, const std::vector<double>& values) {
-        add_external(tag, 12, values.size(), le_f64_array(values));
-    }
-    void add_ascii(std::uint16_t tag, const std::string& s) {
-        std::string with_nul = s;
-        with_nul.push_back('\0');
-        std::vector<std::byte> bytes(with_nul.size());
-        std::memcpy(bytes.data(), with_nul.data(), with_nul.size());
-        add_external(tag, 2, with_nul.size(), bytes);
-    }
-
-    // Builds the full file: header + one IFD (entries added so far, plus
-    // StripOffsets/StripByteCounts for `strip_data`) + external value blocks
-    // + strip data.
-    std::vector<std::byte> build(const std::vector<std::byte>& strip_data) const {
-        std::vector<Entry> all = entries_;
-        const std::size_t ifd_header_size = 2 + 12 * (all.size() + 2) + 4;
-        const std::uint32_t base_offset = 8 + static_cast<std::uint32_t>(ifd_header_size);
-
-        std::uint32_t running = 0;
-        std::vector<std::uint32_t> external_offsets(all.size(), 0);
-        for (std::size_t i = 0; i < all.size(); ++i) {
-            if (!all[i].external.empty()) {
-                external_offsets[i] = base_offset + running;
-                running += static_cast<std::uint32_t>(all[i].external.size());
-            }
-        }
-        const std::uint32_t strip_offset = base_offset + running;
-
-        Entry strip_offsets_entry;
-        strip_offsets_entry.tag = 273;
-        strip_offsets_entry.type = 4;
-        strip_offsets_entry.count = 1;
-        strip_offsets_entry.inline_value = le_u32(strip_offset);
-        Entry strip_bytecounts_entry;
-        strip_bytecounts_entry.tag = 279;
-        strip_bytecounts_entry.type = 4;
-        strip_bytecounts_entry.count = 1;
-        strip_bytecounts_entry.inline_value = le_u32(static_cast<std::uint32_t>(strip_data.size()));
-        all.push_back(strip_offsets_entry);
-        all.push_back(strip_bytecounts_entry);
-
-        std::vector<std::byte> out;
-        out.push_back(std::byte{'I'});
-        out.push_back(std::byte{'I'});
-        auto app32 = [&](std::vector<std::byte>& v, const std::vector<std::byte>& b) {
-            v.insert(v.end(), b.begin(), b.end());
-        };
-        app32(out, le_u16(42));
-        app32(out, le_u32(8));
-        app32(out, le_u16(static_cast<std::uint16_t>(all.size())));
-        for (std::size_t i = 0; i < all.size(); ++i) {
-            const Entry& e = all[i];
-            app32(out, le_u16(e.tag));
-            app32(out, le_u16(e.type));
-            app32(out, le_u32(e.count));
-            if (!e.external.empty()) {
-                app32(out, le_u32(external_offsets[i]));
-            } else {
-                std::vector<std::byte> v = e.inline_value;
-                v.resize(4, std::byte{0});
-                app32(out, v);
-            }
-        }
-        app32(out, le_u32(0)); // next IFD
-        for (std::size_t i = 0; i < all.size(); ++i) {
-            if (!all[i].external.empty()) app32(out, all[i].external);
-        }
-        app32(out, strip_data);
-        return out;
-    }
-
-private:
-    struct Entry {
-        std::uint16_t tag;
-        std::uint16_t type;
-        std::uint32_t count;
-        std::vector<std::byte> inline_value; // used when external is empty
-        std::vector<std::byte> external;     // used when the value doesn't fit in 4 bytes
-    };
-    void add_inline(std::uint16_t tag, std::uint16_t type, std::uint32_t count, std::vector<std::byte> value) {
-        entries_.push_back(Entry{tag, type, count, std::move(value), {}});
-    }
-    void add_external(std::uint16_t tag, std::uint16_t type, std::size_t count, std::vector<std::byte> value) {
-        entries_.push_back(Entry{tag, type, static_cast<std::uint32_t>(count), {}, std::move(value)});
-    }
-    std::vector<Entry> entries_;
-};
 
 std::vector<std::byte> make_raster_bytes_u8(int w, int h) {
     std::vector<std::byte> v(static_cast<std::size_t>(w) * h);

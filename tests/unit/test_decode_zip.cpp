@@ -1,176 +1,26 @@
 // tests/unit/test_decode_zip.cpp - ZipReader: synthetic in-test fixtures
 // (stored, DEFLATE, ZIP64-flagged sizes, nested ZIP, CRC rejection).
+//
+// ZipBuilder itself now lives in tests/support/zip_builder.h (promoted
+// unchanged, PLAN.md G1c I2, for tests/support/fixture_cut's future
+// cut-worldcover/repack-dgm1 subcommands to reuse) - only this file's own
+// test-case-local helpers (to_bytes) stay here.
 
 #include "g2m/decode/byte_source.h"
 #include "g2m/decode/zip/zip_reader.h"
-
-#include <libdeflate.h>
+#include "zip_builder.h"
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
 
 using namespace g2m::decode;
+using g2m::test_support::ZipBuilder;
 
 namespace {
-
-void put_u16(std::vector<std::byte>& v, std::uint16_t x) {
-    v.push_back(static_cast<std::byte>(x & 0xFF));
-    v.push_back(static_cast<std::byte>((x >> 8) & 0xFF));
-}
-void put_u32(std::vector<std::byte>& v, std::uint32_t x) {
-    for (int i = 0; i < 4; ++i) v.push_back(static_cast<std::byte>((x >> (8 * i)) & 0xFF));
-}
-void put_bytes(std::vector<std::byte>& v, const std::string& s) {
-    for (char c : s) v.push_back(static_cast<std::byte>(c));
-}
-
-std::vector<std::byte> deflate_compress(const std::vector<std::byte>& in) {
-    libdeflate_compressor* c = libdeflate_alloc_compressor(6);
-    REQUIRE(c != nullptr);
-    std::vector<std::byte> out(in.size() + 4096);
-    const std::size_t n = libdeflate_deflate_compress(c, in.data(), in.size(), out.data(), out.size());
-    libdeflate_free_compressor(c);
-    REQUIRE(n != 0);
-    out.resize(n);
-    return out;
-}
-
-// A minimal, hand-rolled ZIP writer covering exactly what ZipReader needs to
-// parse: stored/deflate entries, and an optional forced-ZIP64 mode (sizes
-// written as 0xFFFFFFFF in the classic fields with a ZIP64 extra field
-// carrying the real values, plus an EOCD64 record/locator) even for a tiny
-// archive - exercises the ZIP64 *parsing* path without needing an actual
-// >4 GiB fixture.
-class ZipBuilder {
-public:
-    struct Item {
-        std::string name;
-        std::vector<std::byte> content; // uncompressed
-        bool deflate = false;
-        bool force_zip64 = false;
-    };
-
-    void add(Item item) { items_.push_back(std::move(item)); }
-
-    std::vector<std::byte> build() const {
-        std::vector<std::byte> data;
-        struct CdRec {
-            std::string name;
-            std::uint16_t method;
-            std::uint32_t crc;
-            std::uint64_t comp_size;
-            std::uint64_t uncomp_size;
-            std::uint64_t local_offset;
-            bool force_zip64;
-        };
-        std::vector<CdRec> cd;
-
-        for (const Item& it : items_) {
-            const std::vector<std::byte> compressed = it.deflate ? deflate_compress(it.content) : it.content;
-            const std::uint32_t crc = libdeflate_crc32(0, it.content.data(), it.content.size());
-            const std::uint64_t local_offset = data.size();
-
-            std::vector<std::byte> zip64_extra;
-            if (it.force_zip64) {
-                put_u16(zip64_extra, 0x0001);
-                put_u16(zip64_extra, 16);
-                for (int i = 0; i < 8; ++i)
-                    zip64_extra.push_back(static_cast<std::byte>((it.content.size() >> (8 * i)) & 0xFF));
-                for (int i = 0; i < 8; ++i)
-                    zip64_extra.push_back(static_cast<std::byte>((compressed.size() >> (8 * i)) & 0xFF));
-            }
-
-            // Local file header.
-            put_u32(data, 0x04034b50);
-            put_u16(data, 20); // version needed
-            put_u16(data, 0);  // flags
-            put_u16(data, it.deflate ? 8 : 0);
-            put_u16(data, 0); // mod time
-            put_u16(data, 0); // mod date
-            put_u32(data, crc);
-            put_u32(data, it.force_zip64 ? 0xFFFFFFFFu : static_cast<std::uint32_t>(compressed.size()));
-            put_u32(data, it.force_zip64 ? 0xFFFFFFFFu : static_cast<std::uint32_t>(it.content.size()));
-            put_u16(data, static_cast<std::uint16_t>(it.name.size()));
-            put_u16(data, static_cast<std::uint16_t>(zip64_extra.size()));
-            put_bytes(data, it.name);
-            data.insert(data.end(), zip64_extra.begin(), zip64_extra.end());
-            data.insert(data.end(), compressed.begin(), compressed.end());
-
-            cd.push_back(CdRec{it.name, static_cast<std::uint16_t>(it.deflate ? 8 : 0), crc, compressed.size(),
-                                it.content.size(), local_offset, it.force_zip64});
-        }
-
-        const std::uint64_t cd_start = data.size();
-        for (const CdRec& r : cd) {
-            std::vector<std::byte> zip64_extra;
-            if (r.force_zip64) {
-                put_u16(zip64_extra, 0x0001);
-                put_u16(zip64_extra, 24);
-                for (int i = 0; i < 8; ++i) zip64_extra.push_back(static_cast<std::byte>((r.uncomp_size >> (8 * i)) & 0xFF));
-                for (int i = 0; i < 8; ++i) zip64_extra.push_back(static_cast<std::byte>((r.comp_size >> (8 * i)) & 0xFF));
-                for (int i = 0; i < 8; ++i) zip64_extra.push_back(static_cast<std::byte>((r.local_offset >> (8 * i)) & 0xFF));
-            }
-            put_u32(data, 0x02014b50);
-            put_u16(data, 20); // version made by
-            put_u16(data, 20); // version needed
-            put_u16(data, 0);  // flags
-            put_u16(data, r.method);
-            put_u16(data, 0); // mod time
-            put_u16(data, 0); // mod date
-            put_u32(data, r.crc);
-            put_u32(data, r.force_zip64 ? 0xFFFFFFFFu : static_cast<std::uint32_t>(r.comp_size));
-            put_u32(data, r.force_zip64 ? 0xFFFFFFFFu : static_cast<std::uint32_t>(r.uncomp_size));
-            put_u16(data, static_cast<std::uint16_t>(r.name.size()));
-            put_u16(data, static_cast<std::uint16_t>(zip64_extra.size()));
-            put_u16(data, 0); // comment length
-            put_u16(data, 0); // disk number start
-            put_u16(data, 0); // internal attrs
-            put_u32(data, 0); // external attrs
-            put_u32(data, r.force_zip64 ? 0xFFFFFFFFu : static_cast<std::uint32_t>(r.local_offset));
-            put_bytes(data, r.name);
-            data.insert(data.end(), zip64_extra.begin(), zip64_extra.end());
-        }
-        const std::uint64_t cd_size = data.size() - cd_start;
-
-        // EOCD (+ ZIP64 EOCD/locator when forced).
-        const bool any_zip64 = std::any_of(items_.begin(), items_.end(), [](const Item& i) { return i.force_zip64; });
-        if (any_zip64) {
-            const std::uint64_t eocd64_off = data.size();
-            put_u32(data, 0x06064b50);
-            for (int i = 0; i < 8; ++i) data.push_back(static_cast<std::byte>((std::uint64_t{44} >> (8 * i)) & 0xFF));
-            put_u16(data, 20);
-            put_u16(data, 20);
-            put_u32(data, 0);
-            put_u32(data, 0);
-            for (int i = 0; i < 8; ++i) data.push_back(static_cast<std::byte>((cd.size() >> (8 * i)) & 0xFF));
-            for (int i = 0; i < 8; ++i) data.push_back(static_cast<std::byte>((cd.size() >> (8 * i)) & 0xFF));
-            for (int i = 0; i < 8; ++i) data.push_back(static_cast<std::byte>((cd_size >> (8 * i)) & 0xFF));
-            for (int i = 0; i < 8; ++i) data.push_back(static_cast<std::byte>((cd_start >> (8 * i)) & 0xFF));
-
-            put_u32(data, 0x07064b50);
-            put_u32(data, 0);
-            for (int i = 0; i < 8; ++i) data.push_back(static_cast<std::byte>((eocd64_off >> (8 * i)) & 0xFF));
-            put_u32(data, 1);
-        }
-        put_u32(data, 0x06054b50);
-        put_u16(data, 0);
-        put_u16(data, 0);
-        put_u16(data, any_zip64 ? 0xFFFF : static_cast<std::uint16_t>(cd.size()));
-        put_u16(data, any_zip64 ? 0xFFFF : static_cast<std::uint16_t>(cd.size()));
-        put_u32(data, any_zip64 ? 0xFFFFFFFFu : static_cast<std::uint32_t>(cd_size));
-        put_u32(data, any_zip64 ? 0xFFFFFFFFu : static_cast<std::uint32_t>(cd_start));
-        put_u16(data, 0);
-        return data;
-    }
-
-private:
-    std::vector<Item> items_;
-};
 
 std::vector<std::byte> to_bytes(const std::string& s) {
     std::vector<std::byte> v(s.size());

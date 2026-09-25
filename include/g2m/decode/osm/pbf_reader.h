@@ -87,11 +87,37 @@ struct PbfStats {
     std::uint64_t relation_count = 0;
 };
 
+// Which entity types a read_pbf() call should decode and deliver (I2,
+// g2m_import's region_resolve.h/g2m_tiler): a multi-pass reader (find the
+// admin relation among relations only, then its member ways, then their
+// node positions) is both cheaper and simpler when each pass skips decoding
+// the block types it does not need, rather than filtering entities the
+// Bridge already spent time converting. Bitwise-combinable
+// (`PbfEntities::Nodes | PbfEntities::Ways`).
+enum class PbfEntities : std::uint8_t {
+    Nodes = 1,
+    Ways = 2,
+    Relations = 4,
+    All = Nodes | Ways | Relations,
+};
+constexpr PbfEntities operator|(PbfEntities a, PbfEntities b) {
+    return static_cast<PbfEntities>(static_cast<std::uint8_t>(a) | static_cast<std::uint8_t>(b));
+}
+constexpr PbfEntities operator&(PbfEntities a, PbfEntities b) {
+    return static_cast<PbfEntities>(static_cast<std::uint8_t>(a) & static_cast<std::uint8_t>(b));
+}
+constexpr bool any(PbfEntities a) { return static_cast<std::uint8_t>(a) != 0; }
+
 // Streams `path` (a .osm.pbf file) to `handler` in file order. `bbox`, if
 // non-null, prefilters nodes by location (see BoundingBox's own comment).
-// Counts every entity actually delivered (post-filter) in the returned
-// PbfStats. Throws DecodeError if the file cannot be opened or is
-// malformed.
-PbfStats read_pbf(const std::string& path, PbfHandler& handler, const BoundingBox* bbox = nullptr);
+// `entities` restricts which of on_node/on_way/on_relation are ever called
+// (and, for entity types entirely excluded, lets the underlying reader skip
+// decoding those blocks - a real cost saving on a large file: I2's
+// region_resolve.h reads a whole-country PBF once per entity type it
+// actually needs per pass). Counts every entity actually delivered
+// (post-filter) in the returned PbfStats. Throws DecodeError if the file
+// cannot be opened or is malformed.
+PbfStats read_pbf(const std::string& path, PbfHandler& handler, const BoundingBox* bbox = nullptr,
+                   PbfEntities entities = PbfEntities::All);
 
 } // namespace g2m::decode::osm

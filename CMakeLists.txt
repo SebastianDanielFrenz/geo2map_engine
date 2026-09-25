@@ -36,6 +36,7 @@ option(G2M_BUILD_TESTS "Build the Catch2 test suites" ON)
 option(G2M_BUILD_REFGEN "Build tools/refgen (fetches GeographicLib; reference-value generator, never linked into g2m)" OFF)
 option(G2M_SANITIZER_BUILD "This build instruments code with a sanitizer (ASan/UBSan/TSan)" OFF)
 option(G2M_BUILD_FUZZERS "Build the libFuzzer targets in tests/fuzz_formats and tests/fuzz (clang only; set by the WSL clang presets)" OFF)
+option(G2M_BUILD_APPS "Build the g2m_tiler CLI (apps/g2m_tiler, PLAN.md G1c I2)" ON)
 
 # An optimised build type must carry an optimisation flag. CMake seeds
 # CMAKE_CXX_FLAGS_<CONFIG> only on a build dir's first configure; a cache
@@ -119,6 +120,13 @@ add_subdirectory(src)
 include(cmake/deps_decoders.cmake)
 add_subdirectory(src/decode)
 
+# G1c I2: the importer support library (region resolution, tile-write seam)
+# and its CLI, apps/g2m_tiler.
+add_subdirectory(src/import)
+if(G2M_BUILD_APPS)
+  add_subdirectory(apps/g2m_tiler)
+endif()
+
 if(G2M_BUILD_TESTS)
   include(CTest)
   enable_testing()
@@ -136,6 +144,7 @@ if(G2M_BUILD_REFGEN)
 endif()
 
 # Later targets (PLAN.md 2.3), not built yet - placeholders only, see CLAUDE.md:
-#   g2m_layers (G1+), g2m_server / g2m_client (G1+), g2m_c (C API), g2m_http
-#   (G6), g2m_ps_bridge (bridges/physics_sim, only if(TARGET ps_core)),
-#   g2m_godot (adapters/godot), apps g2m_server / g2m_tiler / g2m_cli.
+#   g2m_c (C API), g2m_http (G6), g2m_ps_bridge (bridges/physics_sim, only
+#   if(TARGET ps_core)), g2m_godot (adapters/godot), apps g2m_server / g2m_cli.
+#   (g2m_layers/g2m_server/g2m_client: G1+, already built above. g2m_import
+#   and its app g2m_tiler: G1c I2, already built above.)

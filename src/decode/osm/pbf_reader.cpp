@@ -183,13 +183,20 @@ private:
     PbfStats stats_;
 };
 
+osmium::osm_entity_bits::type to_osmium_entity_bits(PbfEntities entities) {
+    osmium::osm_entity_bits::type bits = osmium::osm_entity_bits::nothing;
+    if (any(entities & PbfEntities::Nodes)) bits |= osmium::osm_entity_bits::node;
+    if (any(entities & PbfEntities::Ways)) bits |= osmium::osm_entity_bits::way;
+    if (any(entities & PbfEntities::Relations)) bits |= osmium::osm_entity_bits::relation;
+    return bits;
+}
+
 } // namespace
 
-PbfStats read_pbf(const std::string& path, PbfHandler& handler, const BoundingBox* bbox) {
+PbfStats read_pbf(const std::string& path, PbfHandler& handler, const BoundingBox* bbox, PbfEntities entities) {
     try {
         validate_pbf_framing(path);
-        osmium::io::Reader reader(path, osmium::osm_entity_bits::node | osmium::osm_entity_bits::way |
-                                             osmium::osm_entity_bits::relation);
+        osmium::io::Reader reader(path, to_osmium_entity_bits(entities));
         try {
             Bridge bridge(handler, bbox);
             while (osmium::memory::Buffer buffer = reader.read()) {
