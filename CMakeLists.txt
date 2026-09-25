@@ -108,12 +108,16 @@ endif()
 add_subdirectory(third_party/musl_math)
 add_subdirectory(src)
 
+include(cmake/deps_decoders.cmake)
+add_subdirectory(src/decode)
+
 if(G2M_BUILD_TESTS)
   include(CTest)
   enable_testing()
   add_subdirectory(tests/support)
   add_subdirectory(tests/unit)
   add_subdirectory(tests/golden)
+  add_subdirectory(tests/fuzz)
 endif()
 
 if(G2M_BUILD_REFGEN)
