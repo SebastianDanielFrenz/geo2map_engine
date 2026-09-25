@@ -21,6 +21,7 @@
       "hidden": true,
       "inherits": "windows-base",
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl",
         "CMAKE_CXX_COMPILER": "clang-cl"
       }
     },
@@ -30,6 +31,7 @@
       "inherits": "clang-cl-base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "/Z7",
         "CMAKE_CXX_FLAGS": "/Z7",
         "CMAKE_EXE_LINKER_FLAGS": "/DEBUG"
       }
@@ -57,6 +59,7 @@
       "cacheVariables": {
         "G2M_SANITIZER_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_FLAGS": "-fsanitize=address",
         "CMAKE_CXX_FLAGS": "-fsanitize=address",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address /OPT:NOICF",
         "CMAKE_TRY_COMPILE_CONFIGURATION": "RelWithDebInfo"
@@ -70,6 +73,7 @@
       "hidden": true,
       "inherits": "windows-base",
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
         "CMAKE_CXX_COMPILER": "cl"
       }
     },
@@ -101,6 +105,7 @@
       },
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_EXE_LINKER_FLAGS": "-fuse-ld=lld"
       }
@@ -120,6 +125,7 @@
       "cacheVariables": {
         "G2M_SANITIZER_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all",
         "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all",
         "CMAKE_EXE_LINKER_FLAGS": "-fuse-ld=lld -fsanitize=address,undefined"
       }
@@ -131,6 +137,7 @@
       "cacheVariables": {
         "G2M_SANITIZER_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=thread",
         "CMAKE_CXX_FLAGS": "-fsanitize=thread",
         "CMAKE_EXE_LINKER_FLAGS": "-fuse-ld=lld -fsanitize=thread"
       }

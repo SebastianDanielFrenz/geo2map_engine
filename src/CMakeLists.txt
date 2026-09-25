@@ -5,6 +5,7 @@ add_library(g2m_core STATIC
   core/det_math.cpp
   core/version.cpp
   core/hash.cpp
+  core/result.cpp
   core/tile_key.cpp
   core/raster.cpp
   core/geo/angle.cpp

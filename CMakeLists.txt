@@ -105,12 +105,18 @@ else()
   target_compile_options(g2m_options INTERFACE -mavx2 -mfma -ffp-contract=off)
 endif()
 
+# G1a: zstd / SQLite / nlohmann (cmake/deps_core.cmake) and the layer, server
+# and client libraries (src/layer, src/server, src/client).
+include(cmake/deps_core.cmake)
+add_subdirectory(src/layer)
+
 add_subdirectory(third_party/musl_math)
 add_subdirectory(src)
 
 if(G2M_BUILD_TESTS)
   include(CTest)
   enable_testing()
+  add_subdirectory(tests/layer)
   add_subdirectory(tests/support)
   add_subdirectory(tests/unit)
   add_subdirectory(tests/golden)
