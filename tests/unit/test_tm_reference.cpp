@@ -3,7 +3,7 @@
 // (testdata/geodesy/*.txt, written by tools/refgen with an 80-bit long
 // double, 8th-order GeographicLib build). G0 acceptance (racing_game
 // PLAN.md section 12): forward/inverse < 1 um at 10,000 points including
-// the extended zone +-9 degrees; round trip < 1 nm.
+// the extended zone +-9 degrees; round trip <= 5 nm (ruling 2026-09-25).
 //
 // Every reference value is stored as hi + lo (hi = the double nearest the
 // long double result), so errors are measured below 1 ulp: err = (v - hi)
@@ -142,27 +142,16 @@ TEST_CASE("TM vs GeographicLib, WGS84", "[geo]") {
     CHECK(s.rev_pos < 1e-6);
 }
 
-// Round trip, both directions, g2m only. PLAN target: < 1 nm. NOT MET in
-// double precision, and not by GeographicLib's own double build either
-// (measured on these points with GEOGRAPHICLIB_PRECISION=2: 3.17 nm
-// geo->grid->geo, 1.95 nm grid->geo->grid, 599 / 526 of 10,000 points
-// over 1 nm). The floor is representation, not the series: near 84 N the
-// northing's ulp is 1.86 nm, xi (~1.47 rad) carries 2.2e-16 rad = 1.4 nm
-// of rounding before it is scaled by A k0, and det::atan2/sin each add up
-// to ~1 ulp. Reaching < 1 nm would need double-double arithmetic on the
-// critical path. The achievable bound is asserted here; the plan's 1 nm is
-// kept as a [!mayfail] case so it stays visible until the coordinator
-// decides (see the G0 report).
-TEST_CASE("TM round trip within the double-precision floor", "[geo]") {
+// Round trip, both directions, g2m only. Acceptance (ruling 2026-09-25,
+// PLAN.md 4.9): <= 5 nm. Measured 3.16 nm geo->grid->geo. GeographicLib's
+// own double build (GEOGRAPHICLIB_PRECISION=2) reaches 3.17 nm on these
+// points, so the floor is representation, not the series: near 84 N the
+// northing's ulp is 1.86 nm, and xi (~1.47 rad) carries 2.2e-16 rad =
+// 1.4 nm of rounding before it is scaled by A k0.
+TEST_CASE("TM round trip <= 5 nm", "[geo]") {
     const TmStats s = run_tm("tm_grs80.txt", kGRS80);
-    CHECK(s.rt_geo < 5e-9);
-    CHECK(s.rt_grid < 5e-9);
-}
-
-TEST_CASE("TM round trip < 1 nm (plan target, not met in double)", "[geo][!mayfail]") {
-    const TmStats s = run_tm("tm_grs80.txt", kGRS80);
-    CHECK(s.rt_geo < 1e-9);
-    CHECK(s.rt_grid < 1e-9);
+    REQUIRE(s.rt_geo <= 5e-9);
+    REQUIRE(s.rt_grid <= 5e-9);
 }
 
 TEST_CASE("ECEF vs GeographicLib", "[geo]") {
