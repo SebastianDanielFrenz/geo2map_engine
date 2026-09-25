@@ -57,7 +57,7 @@ LayerDesc make_raw_osm_layer() {
     d.encoding = static_cast<std::uint16_t>(LayerEncoding::SrcOsm);
     d.encoding_version = 1;
     d.levels = level_bit(kRawTileLevel);
-    d.content = "OSM nodes/ways/relations clipped per 1 km tile with a halo; ids, tags, relation membership";
+    d.content = "OSM nodes/ways/relations clipped per 1024 m tile with a halo; ids, tags, relation membership";
     return d;
 }
 

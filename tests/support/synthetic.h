@@ -13,6 +13,7 @@
 #include "g2m/layer/src_elev.h"
 #include "g2m/layer/src_landcover.h"
 
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -35,6 +36,17 @@ inline std::uint64_t below(SplitMix64& r, std::uint64_t n) { return r.next() % n
 // nodata_permille of the samples (in random runs) are kHeightNoData.
 inline g2m::ElevTile make_elev_tile(std::uint64_t seed, const g2m::TileKey& key, int side = 1024,
                                     int nodata_permille = 5) {
+    // g2m::tile_georef returns std::nullopt (rather than throwing) whenever
+    // `side` does not evenly divide the tile's size in mm - e.g. a level-2
+    // (1024 m = 1,024,000 mm) tile accepts side=1024 or side=256 (this
+    // file's own two callers) but not side=17 (G2M-004's own "gotcha": 25
+    // divides 1,024,000 evenly, 17 does not). Any caller here that ever
+    // picks a `side` outside that contract would otherwise dereference an
+    // empty optional straight into ElevTile::georef - UB, not a clean
+    // failure - so assert the precondition explicitly before relying on
+    // the dereference below.
+    assert((static_cast<std::int64_t>(key.size_m()) * 1000) % side == 0 &&
+           "make_elev_tile: side must evenly divide the tile size in mm (g2m::tile_georef's own contract)");
     SplitMix64 r(seed);
     g2m::ElevTile t;
     t.georef = *g2m::tile_georef(key, side, g2m::SampleRegistration::Cell);
