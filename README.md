@@ -10,3 +10,9 @@ sidecar, or hosted, all behind one protocol.
 - Licence: MIT (see `LICENSE`). Data derived from OpenStreetMap is ODbL 1.0,
   "(c) OpenStreetMap contributors". Other data sources carry their own
   licences (PLAN.md section 5).
+
+## Building
+
+Toolchain: `tools\setup_dev_env.ps1 -CheckOnly`. Build, test and CI commands
+are in `CLAUDE.md` ("Building and testing", "CI"); the full CI is
+`tools\ci.ps1`. Third-party code and licences: `THIRD_PARTY_NOTICES.md`.
