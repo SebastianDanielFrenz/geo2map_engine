@@ -15,8 +15,11 @@
   under /mnt/s): linux-release, linux-asan-ubsan, linux-tsan.
 
   Per leg: cmake configure, build, ctest (every test), then
-  g2m_golden_dump. The golden compare fails unless every leg's dump equals
-  testdata/golden/g0_golden.txt byte for byte (comments stripped).
+  g2m_golden_dump for each golden set (g0, g1). The golden compare fails
+  unless every leg's dump of a set equals testdata/golden/<set>_golden.txt
+  byte for byte (comments stripped). On the WSL legs listed in $FuzzLegs,
+  the libFuzzer targets (tests/fuzz_formats) are built and run briefly as
+  CTest tests labelled `fuzz`; a `fuzz` result line counts them.
   The grep fails if include/ or src/ call a platform-libm transcendental
   (det_math.h/.cpp and third_party/musl_math are exempt); it runs a
   self-test of its own pattern first.
@@ -53,6 +56,8 @@ foreach ($name in $Only) {
 
 $script:Results = New-Object System.Collections.Generic.List[object]
 $script:GoldenDumps = New-Object System.Collections.Generic.List[object]
+$script:GoldenSets = @('g0', 'g1')              # testdata/golden/<set>_golden.txt
+$script:FuzzLegs = @('linux-release', 'linux-asan-ubsan')  # G2M_BUILD_FUZZERS=ON (CMakePresets.json)
 
 function Add-Result {
     param([string]$Leg, [string]$Stage, [bool]$Pass, [string]$Detail = '', [double]$Seconds = 0)
@@ -117,11 +122,14 @@ function Invoke-WindowsLeg([string]$Preset) {
         if (-not $ok) { Show-LogTail $ctestLog 60 }
 
         $dump = Join-Path $repoRoot "out\build\$Preset\tests\golden\g2m_golden_dump.exe"
-        $out = Join-Path $goldenDir "$Preset.txt"
-        & $dump $out
-        $ok = ($LASTEXITCODE -eq 0) -and (Test-Path $out)
-        Add-Result $Preset 'golden' $ok 'dump written'
-        if ($ok) { $script:GoldenDumps.Add([pscustomobject]@{ Leg = $Preset; Path = $out }) }
+        foreach ($set in $script:GoldenSets) {
+            $out = Join-Path $goldenDir "$Preset.$set.txt"
+            if (Test-Path $out) { Remove-Item -LiteralPath $out }
+            & $dump $set $out
+            $ok = ($LASTEXITCODE -eq 0) -and (Test-Path $out)
+            Add-Result $Preset "golden-$set" $ok 'dump written'
+            if ($ok) { $script:GoldenDumps.Add([pscustomobject]@{ Leg = $Preset; Set = $set; Path = $out }) }
+        }
     } finally {
         Pop-Location
     }
@@ -157,13 +165,25 @@ function Invoke-WslLeg([string]$Preset) {
     Add-Result $Preset 'ctest' ($script:rc -eq 0) (Get-CtestSummary $ctestLog) $t.TotalSeconds
     if ($script:rc -ne 0) { Show-LogTail $ctestLog 60 }
 
-    $out = Join-Path $goldenDir "$Preset.txt"
-    if (Test-Path $out) { Remove-Item -LiteralPath $out }
-    $outWsl = "$wslRoot/out/ci_golden/$Preset.txt"
-    $script:rc = Invoke-Wsl "`$HOME/build/geo2map_engine/$Preset/tests/golden/g2m_golden_dump '$outWsl'" $log
-    $ok = ($script:rc -eq 0) -and (Test-Path $out)
-    Add-Result $Preset 'golden' $ok 'dump written'
-    if ($ok) { $script:GoldenDumps.Add([pscustomobject]@{ Leg = $Preset; Path = $out }) }
+    if ($script:FuzzLegs -contains $Preset) {
+        # Short libFuzzer runs (PLAN.md 2.4: WSL clang legs only). They are
+        # CTest tests labelled `fuzz`, so the ctest above already ran them;
+        # this line makes their presence visible - zero means the fuzzers
+        # were not built.
+        $n = @(Select-String -LiteralPath $ctestLog -Pattern 'Test +#\d+: fuzz_\S+ \.+ +Passed' -ErrorAction SilentlyContinue).Count
+        $nAll = @(Select-String -LiteralPath $ctestLog -Pattern 'Test +#\d+: fuzz_\S+ ' -ErrorAction SilentlyContinue).Count
+        Add-Result $Preset 'fuzz' (($n -gt 0) -and ($n -eq $nAll)) "$n of $nAll libFuzzer runs passed"
+    }
+
+    foreach ($set in $script:GoldenSets) {
+        $out = Join-Path $goldenDir "$Preset.$set.txt"
+        if (Test-Path $out) { Remove-Item -LiteralPath $out }
+        $outWsl = "$wslRoot/out/ci_golden/$Preset.$set.txt"
+        $script:rc = Invoke-Wsl "`$HOME/build/geo2map_engine/$Preset/tests/golden/g2m_golden_dump $set '$outWsl'" $log
+        $ok = ($script:rc -eq 0) -and (Test-Path $out)
+        Add-Result $Preset "golden-$set" $ok 'dump written'
+        if ($ok) { $script:GoldenDumps.Add([pscustomobject]@{ Leg = $Preset; Set = $set; Path = $out }) }
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -235,21 +255,26 @@ function Invoke-GoldenCompare {
         Add-Result 'golden' 'compare' $false 'no leg produced a dump'
         return
     }
-    $expected = Get-GoldenBody (Join-Path $repoRoot 'testdata\golden\g0_golden.txt')
-    $bad = @()
-    foreach ($d in $script:GoldenDumps) {
-        if ((Get-GoldenBody $d.Path) -ne $expected) { $bad += $d.Leg }
-    }
-    $legs = ($script:GoldenDumps | ForEach-Object { $_.Leg }) -join ', '
-    if ($bad.Count -eq 0) {
-        $all = ($expected -split "`n" | Where-Object { $_.StartsWith('all ') })
-        Add-Result 'golden' 'compare' $true "identical on $($script:GoldenDumps.Count) legs ($legs): $all"
-    } else {
-        Add-Result 'golden' 'compare' $false "differs from testdata/golden/g0_golden.txt: $($bad -join ', ')"
-        foreach ($leg in $bad) {
-            Write-Host "  --- $leg vs committed ---" -ForegroundColor Red
-            Compare-Object ($expected -split "`n") ((Get-GoldenBody (Join-Path $goldenDir "$leg.txt")) -split "`n") |
-                ForEach-Object { Write-Host "    $($_.SideIndicator) $($_.InputObject)" }
+    foreach ($set in $script:GoldenSets) {
+        $file = "testdata/golden/$($set)_golden.txt"
+        $expected = Get-GoldenBody (Join-Path $repoRoot $file)
+        $dumps = @($script:GoldenDumps | Where-Object { $_.Set -eq $set })
+        if ($dumps.Count -eq 0) {
+            Add-Result 'golden' "compare-$set" $false 'no leg produced a dump'
+            continue
+        }
+        $bad = @($dumps | Where-Object { (Get-GoldenBody $_.Path) -ne $expected })
+        $legs = ($dumps | ForEach-Object { $_.Leg }) -join ', '
+        if ($bad.Count -eq 0) {
+            $all = ($expected -split "`n" | Where-Object { $_.StartsWith('all ') })
+            Add-Result 'golden' "compare-$set" $true "identical on $($dumps.Count) legs ($legs): $all"
+        } else {
+            Add-Result 'golden' "compare-$set" $false "differs from $($file): $(($bad | ForEach-Object { $_.Leg }) -join ', ')"
+            foreach ($d in $bad) {
+                Write-Host "  --- $($d.Leg) vs committed $file ---" -ForegroundColor Red
+                Compare-Object ($expected -split "`n") ((Get-GoldenBody $d.Path) -split "`n") |
+                    ForEach-Object { Write-Host "    $($_.SideIndicator) $($_.InputObject)" }
+            }
         }
     }
 }

@@ -1,9 +1,9 @@
-// tests/golden/golden.h - G0 golden hashes (PLAN.md 2.4).
+// tests/golden/golden.h - G0 and G1 golden hashes (PLAN.md 2.4).
 //
 // Each entry hashes (FNV-1a 64, g2m::Fnv1a64) the bit patterns of one
 // function family's outputs over a fixed SplitMix64 input set. The same
 // build must give the same hashes on every leg (clang-cl, cl, Linux clang,
-// with or without sanitizers); testdata/golden/g0_golden.txt records them,
+// with or without sanitizers); testdata/golden/g{0,1}_golden.txt record them,
 // tests/golden/test_golden.cpp checks against it, and tools/ci.ps1 compares
 // g2m_golden_dump's output across legs.
 #pragma once
@@ -21,6 +21,11 @@ struct Entry {
 };
 
 std::vector<Entry> compute_g0();
+// G1 (golden_g1.cpp): the encoded bytes of every G1 format (tile container,
+// src.elev with both predictors, src.landcover, src.osm incl. its clip,
+// release id + manifest JSON, pack, protocol strings) from synthetic
+// inputs; testdata/golden/g1_golden.txt.
+std::vector<Entry> compute_g1();
 
 // "name count hash\n" per entry, the golden file's line format.
 std::string format(const std::vector<Entry>& entries);
