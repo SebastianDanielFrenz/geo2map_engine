@@ -168,7 +168,7 @@
     {
       "name": "linux-tsan", "configurePreset": "linux-tsan", "output": { "outputOnFailure": true },
       "environment": {
-        "TSAN_OPTIONS": "$penv{TSAN_OPTIONS} external_symbolizer_path=/usr/bin/addr2line"
+        "TSAN_OPTIONS": "$penv{TSAN_OPTIONS} suppressions=${sourceDir}/tools/tsan_suppressions.txt external_symbolizer_path=/usr/bin/addr2line"
       }
     }
   ]

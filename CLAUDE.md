@@ -104,6 +104,7 @@ geo2map_engine/
   tools/
     ci.ps1                            CI (below)
     setup_dev_env.ps1                 verify (-CheckOnly) or install the toolchain
+    tsan_suppressions.txt             TSan suppressions, loaded only by the linux-tsan test preset (SQLite wal-index header reads)
     refgen/                           g2m_refgen: GeographicLib reference-value generator (G2M_BUILD_REFGEN=ON only)
 ```
 
@@ -190,7 +191,8 @@ end of `CMakeLists.txt`):
 - WSL (clang + lld):
   - `linux-release`, `linux-asan-ubsan`, `linux-tsan`;
   - build dirs are `~/build/geo2map_engine/<preset>`, never under `/mnt/s`;
-  - `linux-tsan` symbolizes with `/usr/bin/addr2line`.
+  - `linux-tsan` symbolizes with `/usr/bin/addr2line` and loads
+    `tools/tsan_suppressions.txt`.
 
 ## Conventions (what the code does)
 

@@ -1,0 +1,12 @@
+# ThreadSanitizer suppressions, loaded only by the linux-tsan TEST preset's
+# TSAN_OPTIONS (CMakePresets.json). Keep every entry narrow and justified.
+#
+# SQLite WAL-index header (sqlite3.c, amalgamation 3.53.4). Two connections
+# to the same database (two g2m::TileStore objects, or two processes) share
+# the memory-mapped -shm file. A writer updates the wal-index header with
+# plain memcpy (walIndexWriteHdr). Readers copy it lock-free and accept it
+# only when two copies agree and the checksum matches (walIndexTryHdr,
+# walTryBeginRead), with walShmBarrier between. This seqlock-style race is
+# SQLite's design, not a g2m bug. TSan cannot see the barrier protocol.
+race:walIndexWriteHdr
+race:walIndexTryHdr
