@@ -106,3 +106,103 @@ DEALINGS IN THE SOFTWARE.
 Fetched by CMake `FetchContent` (tag `v3.16.0`) for the test executables.
 Not vendored, never linked into `g2m_core`. Licence: BSL-1.0, at its upstream
 repository.
+
+## zstd - linked into `g2m_layers`
+
+Zstandard compression for tile-container sections
+(`docs/formats/tile_container.md`). It is fetched by CMake `FetchContent`
+from the release tarball
+`https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz`
+(SHA-256 `eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3`;
+tag `v1.5.7`, commit `f8745da6ff1ad1e7bab384bd1f9d742439278e99`). It is
+compiled as our own static target `g2m_dep_zstd` (`cmake/deps_core.cmake`).
+The version is pinned exactly: `src/layer/zstd_codec.cpp` static-asserts
+1.5.7, because another version may compress to different bytes. Not
+vendored. Licence: BSD-3-Clause (zstd is dual-licensed BSD/GPLv2; g2m uses
+it under BSD):
+
+```
+BSD License
+
+For Zstandard software
+
+Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+ * Neither the name Facebook, nor Meta, nor the names of its contributors may
+   be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+## SQLite - linked into `g2m_server`
+
+The tile stores (`docs/formats/cache_db.md`). The amalgamation
+**3.53.4** is fetched by CMake `FetchContent` from
+`https://sqlite.org/2026/sqlite-amalgamation-3530400.zip` (SHA3-256
+`628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e`) and
+compiled as our own static target `g2m_dep_sqlite3`. Not vendored.
+Licence: **public domain**. The SQLite authors disclaim copyright; the
+source carries this blessing in place of a licence:
+
+```
+The author disclaims copyright to this source code.  In place of
+a legal notice, here is a blessing:
+
+   May you do good and not evil.
+   May you find forgiveness for yourself and forgive others.
+   May you share freely, never taking more than you give.
+```
+
+## nlohmann/json - linked into `g2m_layers` and `g2m_server` (header-only)
+
+Release- and server-manifest JSON (`docs/formats/release_manifest.md`,
+`protocol.md`). The single-header release **v3.12.0** is fetched by CMake
+`FetchContent` from
+`https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz`
+(SHA-256 `42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa`),
+interface target `g2m_dep_json`, included PRIVATE only (no JSON type
+appears in a public header). Not vendored. Licence: MIT:
+
+```
+MIT License
+
+Copyright (c) 2013-2025 Niels Lohmann
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

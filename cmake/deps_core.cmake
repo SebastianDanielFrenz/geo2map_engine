@@ -7,7 +7,7 @@
 # |---------------|-------------------------|----------------|-----------------|----------------------------|
 # | zstd          | v1.5.7                  | BSD-3-Clause   | g2m_dep_zstd    | g2m_layers (PRIVATE)       |
 # | SQLite        | 3.53.4 (amalgamation)   | public domain  | g2m_dep_sqlite3 | g2m_server (PRIVATE)       |
-# | nlohmann_json | v3.12.0                 | MIT            | g2m_dep_json    | g2m_layers (PRIVATE)       |
+# | nlohmann_json | v3.12.0                 | MIT            | g2m_dep_json    | g2m_layers, g2m_server (PRIVATE) |
 #
 # zstd and SQLite are C, compiled here as our own static targets from the
 # upstream sources (their own build systems pull in programs, tests, shared

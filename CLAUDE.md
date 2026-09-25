@@ -7,6 +7,11 @@ This file only maps what exists and how to build, test and run it.
   for the milestones).
 - Milestone state: **G0 done**. G0 covers the library skeleton, deterministic
   math, geodesy, tile keys, rasters, hashes and golden infrastructure.
+  **G1a done**: the layer model, the tile formats, releases, the SQLite tile
+  stores, the in-process server and the client cache. G1b (decoders:
+  `include/g2m/decode/`, `src/decode/`, `cmake/deps_decoders.cmake`,
+  `tests/fuzz`) is being built in a separate worktree. G1c (tiler plus
+  import) comes later.
 
 C++20, namespace `g2m`, MIT. g2m never includes or links anything from
 physics_sim.
@@ -17,7 +22,11 @@ physics_sim.
 geo2map_engine/
   CMakeLists.txt, CMakePresets.json   top-level build (presets below)
   CLAUDE.md, README.md, PLAN.md, LICENSE, THIRD_PARTY_NOTICES.md
+  cmake/deps_core.cmake               FetchContent for zstd / SQLite / nlohmann_json (G1a; pins in its header table)
   include/g2m/core/                   public API of g2m_core (no third-party types)
+    result.h                          Result<T> / Result<void>, Error{code, message}, ErrorCode, make_error (no exceptions)
+    bytes.h                           ByteWriter / ByteReader: little-endian, canonical LEB128 varint/svarint, zigzag;
+                                      the reader is bounds-checked with a sticky failure flag (fuzz-safe)
     det_math.h                        g2m::det: sin cos sincos tan asin acos atan atan2 exp expm1 log log1p pow
                                       sinh cosh tanh asinh atanh hypot (musl port), sqrt (std, IEEE-exact)
     version.h                         g2m::version_string() (= CMake PROJECT_VERSION)
@@ -37,35 +46,76 @@ geo2map_engine/
     geo/ecef.h                        geodetic_to_ecef, EnuFrame/enu_frame
     geo/session_frame.h               SessionFrame (UTM zone + integer-km origin): geodetic/grid <-> LocalXY,
                                       tm_at, tile_at, tile_origin; SessionFrame::around(lat, lon)
+  include/g2m/layer/                  public API of g2m_layers (PLAN.md 2.5, 3.2; formats: docs/formats/)
+    layer_id.h                        layer names (is_valid_layer_name), LayerId, LayerKind, LayerEncoding, LevelMask,
+                                      LayerDesc, make_raw_{elev,osm,landcover}_layer (g2m.src.elev.<source>, g2m.src.osm,
+                                      g2m.src.landcover; level 2)
+    layer_registry.h                  LayerRegistry (sorted; builtin() = the three raw layers, elev as dgm1)
+    deriver.h                         IDeriver + InputTileRef/InputTile/DeriveRequest/DeriveResult (declarations; no built-ins)
+    classifier.h                      IClassifier, LandClass, SurfaceKind, ClassifierFacts (declarations)
+    tile_container.h                  g2m.tile/1: TileHeader, TileBody/Section/SectionCodec, VerticalDatum, content_hash,
+                                      encode/decode_header, encode/decode_body, assemble_container, parse_container
+    src_elev.h                        ElevTile, ElevPredictor {Left, Gradient}, encode/decode_src_elev
+    src_landcover.h                   LandcoverTile, encode/decode_src_landcover
+    osm_data.h                        osm::OsmData (canonical model: sorted strings/ids, pooled tags/refs/members), OsmBuilder
+    src_osm.h                         OsmTile, encode/decode_src_osm
+    osm_clip.h                        clip_osm (per-tile selection with halo), segment_touches_box
+    release.h                         ReleaseInputs -> compute_release_id, Coverage, ReleaseManifest + to_json/from_json,
+                                      to_hex / content_hash_from_hex
+    pack.h                            PackDirectory/PackEntry/PackTileState, pack_of/pack_tile, encode/decode_pack
+  include/g2m/server/                 public API of g2m_server (PLAN.md 3.1-3.4)
+    tile_store.h                      TileStore (SQLite + blob files; CONCURRENCY CONTRACT in the header), TileStoreConfig,
+                                      TileAddress, StoredTile, stats/check_consistency
+    protocol.h                        protocol v1 request/response objects, Status, ResponseMeta, ServerManifest JSON,
+                                      to_path / parse_path
+    transport.h                       ITransport
+    fetcher.h                         IFetcher (the only way to the network; absent = offline by construction)
+    upstream.h                        IUpstream, UpstreamContext/UpstreamReply, LocalSourceUpstream (a source TileStore)
+    server.h                          Server (router + resolver, per-layer policy chain Cache -> Derive -> Upstream),
+                                      ServerConfig, LayerPolicy, make_local_release
+  include/g2m/client/                 public API of g2m_client
+    cache.h                           ClientCache (TileStore named "cache": dedup, blobs > 256 KiB, LRU cap, pinning,
+                                      integrity check on read)
+    in_process_transport.h            InProcessTransport (ITransport -> Server::handle)
   src/core/                           implementation (mirrors include/); det_math.cpp forwards g2m::det -> g2m::musl
+  src/layer/                          g2m_layers implementation; zstd_codec.h/.cpp (INTERNAL: pinned zstd), georef_io.h
+                                      (INTERNAL: georef block)
+  src/server/                         g2m_server: tile_store.cpp, protocol.cpp, server.cpp
+  src/client/                         g2m_client: cache.cpp
+  docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
+                                      src_landcover, src_osm, pack, release_manifest, protocol, cache_db
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)
   tests/
-    support/                          test-only: headless_env (Windows CRT dialogs off), catch_main, splitmix64.h
+    support/                          test-only: headless_env (Windows CRT dialogs off), catch_main, splitmix64.h,
+                                      synthetic.h (SplitMix64 elev/landcover tiles and OSM sets for tests and the g1 golden)
+    layer/                            g2m_layer_tests: test_container, test_raster_encodings, test_osm, test_release, test_pack
+    server/                           g2m_server_tests: test_tile_store, test_protocol, test_server, test_client_cache
+                                      (server_test_util.h: TempDir, make_body/make_header)
+    fuzz_formats/                     fuzz target bodies (fuzz_run.cpp) + seeds (fuzz_seeds.cpp); g2m_fuzz_smoke_tests
+                                      (every leg); fuzz_<name> libFuzzer executables + g2m_fuzz_seeds (G2M_BUILD_FUZZERS)
     unit/                             g2m_unit_tests: test_det_math, test_tm_reference, test_geo_frames,
                                       test_tile_raster_hash
-    golden/                           golden.h/.cpp (g2m_golden), dump_main.cpp (g2m_golden_dump),
+    golden/                           golden.h/.cpp + golden_g1.cpp (g2m_golden), dump_main.cpp (g2m_golden_dump [g0|g1]),
                                       test_golden.cpp (g2m_golden_tests)
   testdata/
     geodesy/                          GeographicLib reference values (written by tools/refgen; see below)
     golden/g0_golden.txt              committed G0 golden hashes
+    golden/g1_golden.txt              committed G1 golden hashes (encoded bytes of every G1 format)
   tools/
     ci.ps1                            CI (below)
     setup_dev_env.ps1                 verify (-CheckOnly) or install the toolchain
     refgen/                           g2m_refgen: GeographicLib reference-value generator (G2M_BUILD_REFGEN=ON only)
-  docs/                               empty until later milestones (PLAN.md 2.2)
 ```
 
 Not built yet. These are placeholders only (PLAN.md 2.2/2.3; a comment at the
 end of `CMakeLists.txt`):
-- the other core headers `polyline.h`, `layer/`, `server/`, `client/`,
-  `graph/`, `mesh/`;
+- the other core headers `polyline.h`, `graph/`, `mesh/`;
 - `include/g2m_c/`;
 - `apps/` (`g2m_server`, `g2m_tiler`, `g2m_cli`);
 - `bridges/physics_sim/`;
 - `adapters/`;
-- `tests/{determinism,protocol,fuzz,bench}`;
-- the targets `g2m_layers`, `g2m_server`, `g2m_client`, `g2m_c`, `g2m_http`,
-  `g2m_ps_bridge` and `g2m_godot`.
+- `tests/{determinism,protocol,bench}`;
+- the targets `g2m_c`, `g2m_http`, `g2m_ps_bridge` and `g2m_godot`.
 
 ## Targets
 
@@ -74,6 +124,15 @@ end of `CMakeLists.txt`):
   - No third-party dependency.
 - `g2m_musl_math` (OBJECT): `third_party/musl_math/*.cpp`, used only through
   `$<TARGET_OBJECTS:...>` in `g2m_core`.
+- `g2m_layers` (STATIC): `src/layer/*.cpp`; PUBLIC `g2m_core`, PRIVATE
+  `g2m_dep_zstd`, `g2m_dep_json`. Its source list is the cache variable
+  `G2M_LAYERS_SOURCES` (the fuzz build compiles it again, instrumented).
+- `g2m_server` (STATIC): `src/server/*.cpp`; PUBLIC `g2m_layers`, PRIVATE
+  `g2m_dep_sqlite3`, `g2m_dep_json`.
+- `g2m_client` (STATIC): `src/client/*.cpp`; PUBLIC `g2m_server`.
+- Third-party (`cmake/deps_core.cmake`, compiled as our own targets, no
+  g2m_warnings/options): `g2m_dep_zstd` (STATIC, C), `g2m_dep_sqlite3`
+  (STATIC, C), `g2m_dep_json` (INTERFACE, header-only).
 - `g2m_warnings` (INTERFACE): `/W4 /WX`, or `-Wall -Wextra -Wpedantic -Werror`.
   Linked into our own targets only, never into third-party ones.
 - `g2m_options` (INTERFACE): FMA contraction is off everywhere. No fast-math.
@@ -84,9 +143,18 @@ end of `CMakeLists.txt`):
   `project()`, the same as physics_sim.
 - Test-only targets:
   - `g2m_headless_env`, `g2m_test_catch_main` (tests/support);
-  - `g2m_unit_tests`, `g2m_golden_tests` (Catch2; tags become CTest labels
-    through `ADD_TAGS_AS_LABELS`);
-  - `g2m_golden` (STATIC) and `g2m_golden_dump` (exe).
+  - `g2m_unit_tests`, `g2m_layer_tests`, `g2m_server_tests`,
+    `g2m_fuzz_smoke_tests`, `g2m_golden_tests` (Catch2; tags become CTest
+    labels through `ADD_TAGS_AS_LABELS`);
+  - `g2m_golden` (STATIC, links g2m_layers + g2m_server) and
+    `g2m_golden_dump` (exe);
+  - `g2m_fuzz_run`, `g2m_fuzz_seeds_lib` (STATIC);
+  - with `G2M_BUILD_FUZZERS`: `g2m_fuzz_instrumented` (OBJECT:
+    `G2M_LAYERS_SOURCES` + `src/server/protocol.cpp` + `fuzz_run.cpp`,
+    `-fsanitize=fuzzer-no-link`), `fuzz_{container,elev,landcover,osm,pack,manifest,path}`
+    (`-fsanitize=fuzzer`), `g2m_fuzz_seeds` (writes the corpus; CTest
+    fixture). The CTest tests `fuzz_<name>` run 10 s each
+    (`G2M_FUZZ_SECONDS`, `-seed=1`), label `fuzz`.
 - `g2m_refgen` (exe, `G2M_BUILD_REFGEN=ON` only): links GeographicLib.
 
 ## CMake options
@@ -97,6 +165,8 @@ end of `CMakeLists.txt`):
   - Only on Linux x86-64, because it needs an 80-bit long double.
 - `G2M_SANITIZER_BUILD` (OFF): set ON by the `asan`, `linux-asan-ubsan` and
   `linux-tsan` presets.
+- `G2M_BUILD_FUZZERS` (OFF): clang only; set ON by the `linux-release` and
+  `linux-asan-ubsan` presets.
 - Configure fails on purpose if an optimised build type has no `-O`/`/O` flag
   (a stale cache). Fix it with `cmake --preset <name> --fresh`.
 
@@ -106,9 +176,13 @@ end of `CMakeLists.txt`):
 |---|---|---|
 | Catch2 | `v3.16.0` | tests only; `/EHsc` on its targets under MSVC, `-mllvm -asan-stack=0` under clang-cl ASan |
 | GeographicLib | `v2.7` | `tools/refgen` only; never linked into g2m_core or a test |
+| zstd | `v1.5.7` (release tarball, SHA-256) | g2m_layers; static-asserted version; level 12, every parameter pinned |
+| SQLite | `3.53.4` amalgamation (SHA3-256) | g2m_server tile stores |
+| nlohmann_json | `v3.12.0` (release tarball, SHA-256) | g2m_layers / g2m_server, PRIVATE only |
 
 ## Presets
 
+- Every preset sets `CMAKE_C_COMPILER` too (zstd and SQLite are C).
 - Windows (Ninja, from a VS 2022 Build Tools environment):
   - `debug`, `release`, `relwithdebinfo`, `asan` (clang-cl);
   - `msvc-debug`, `msvc-release` (cl);
@@ -162,6 +236,12 @@ end of `CMakeLists.txt`):
     every sample of b lies on a's lattice (copy without resampling), and is
     empty otherwise.
 - **Heights**: int32 in 1/256 m units, `kHeightNoData = INT32_MIN`.
+- **Errors**: library code returns `Result<T>` and never throws; JSON is
+  parsed with exceptions off.
+- **Formats**: little-endian, canonical varints, pinned zstd; decoders of
+  untrusted bytes are bounds-checked and fuzzed (`docs/formats/`).
+- **Offline**: `ServerConfig::offline` drops the fetcher, so no network
+  call is reachable.
 - **Test inputs**: from `g2m_test::SplitMix64`, never `std::`
   distributions. Draw one value per statement, because argument evaluation
   order differs between ABIs.
@@ -199,10 +279,14 @@ result stored as hi + lo:
 - `ecef_grs80.txt`: 1,000 points;
 - `utm_zone.txt`: 4,000 points.
 
-Golden hashes are in `testdata/golden/g0_golden.txt`, one line per entry:
-`name count fnv64`, where `all` covers every entry. Regenerate them only
-after an intended output change: run `g2m_golden_dump <file>`, then re-add
-the header comment.
+Golden hashes are in `testdata/golden/g0_golden.txt` and `g1_golden.txt`,
+one line per entry: `name count fnv64`, where `all` covers every entry of
+the set. Regenerate them only after an intended output change: run
+`g2m_golden_dump <g0|g1> <file>`, then re-add the header comment.
+
+Fuzzers (WSL, `linux-release` or `linux-asan-ubsan` build dir):
+`ctest -L fuzz`, or run one by hand from `tests/fuzz_formats`:
+`./fuzz_osm -max_total_time=60 corpus/work/osm corpus/seeds/osm`.
 
 ## CI
 
@@ -217,10 +301,13 @@ tools\ci.ps1 -Only release,linux-release   # named legs only
   `linux-release`, `linux-asan-ubsan`, `linux-tsan` (WSL). The legs run one
   after another.
 - **Per leg:** configure, build, `ctest` (every test), then
-  `g2m_golden_dump` into `out/ci_golden/<leg>.txt`.
+  `g2m_golden_dump <set>` into `out/ci_golden/<leg>.<set>.txt` for each set
+  (g0, g1). On `linux-release` and `linux-asan-ubsan` the ctest run includes
+  the libFuzzer runs (label `fuzz`), and a `fuzz` result line counts them.
 - **Checks:**
   - libm grep over `include/` and `src/`, with a pattern self-test;
-  - golden compare: every leg's dump must equal `g0_golden.txt`.
+  - golden compare: every leg's dump of each set must equal
+    `testdata/golden/<set>_golden.txt`.
 - **Output:** logs go to `out/ci_logs/`, and the summary prints PASS/FAIL per
   leg and stage. The exit code is non-zero on any failure.
 

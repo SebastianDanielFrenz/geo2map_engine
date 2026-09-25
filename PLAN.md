@@ -446,6 +446,60 @@ GET /releases/{rid}/hashes/{layer}/{scheme}/{level}/{x}/{y}
 - **Mapterhorn:** per-source licences in its `attribution.json`.
 - **Custom endpoints** are responsible for their own data. The client simply displays whatever attributions their manifest lists.
 
+
+### 3.10 G1a as built: deviations from 2.2, 3.2, 3.4 and 7.2 (2026-09-25)
+
+The normative byte formats are in `docs/formats/`. The design records are
+in the vault.
+
+- **Raw tile keys.** All three raw layers use level-2 keys (1024 m) on the
+  g2m UTM grid, not the source's own tiling (3.2 said "DGM1 1 km tiles").
+  Each `src.elev` tile carries the source's sample lattice in its georef
+  block, so DGM1 stays a 1 m cell-registered raster. The G1c tiler cuts
+  sources into these keys, and the data is never resampled.
+- **`src.elev` encoding.** Instead of 3.2's plain "row delta", each sample is
+  predicted from its neighbours (`Gradient`, planar
+  `west + north - northwest`, is the default; `Left` = row delta). The
+  residual is zigzag-coded, byte-plane shuffled, then zstd. NoData goes in a
+  separate bitmap section.
+- **Protocol statuses (in-process).** Besides 404/410/503, the server also
+  answers:
+  - 304 (If-None-Match equal to the body hash);
+  - 400 (malformed request);
+  - 500 (store I/O or deriver error).
+
+  Offline without a cached tile gives 503 with `degraded` set and no
+  Retry-After. G1 derives on-demand tiles inline, inside the request, so a
+  503 with Retry-After only means a transient failure. The queued "503 +
+  Retry-After = derivation queued" of 3.4 arrives with the hosted server.
+  Packs answer 200 / 404 / 503, with a state per entry (NotFound, Present,
+  Unavailable, Degraded).
+- **Tile rid.** A tile response's container always carries the requested
+  release's rid, even when the body came from the cache or an upstream
+  under another release. Bodies are shared, headers are per release.
+- **Header locations.** `IFetcher` is in `include/g2m/server/fetcher.h`,
+  not `client/`: the server's network upstreams use it, and the client will
+  too. `ServerConfig` is in `server.h`; there is no `config.h`. The protocol
+  objects are in `server/protocol.h`. The protocol paths and statuses are
+  documented in `docs/formats/protocol.md`; the full spec
+  (`docs/protocol/`) comes with G6.
+- **Cache schema (7.2).** One schema serves the client cache and the
+  server's stores:
+  - `tiles(scope, layer, key, hash, header, last_used, pinned)`, where
+    `key` is `TileKey::packed()` and the scope is the rid in hex for the
+    cache and derived store, or the snapshot name for the source store;
+  - `bodies(hash, size, refs, data)`, which holds each body once
+    (deduplicated), in the database or, over 256 KiB, in a blob file;
+  - the `sources` column is gone, because a tile's provenance is its
+    header's input hashes;
+  - the LRU clock is a counter in the database, not wall time.
+
+  A damaged body drops every entry that shares it.
+- **Fuzzing directory.** The fuzz targets for these formats are in
+  `tests/fuzz_formats/`, because `tests/fuzz/` belongs to G1b's decoders.
+  They run on the `linux-release` and `linux-asan-ubsan` legs, not on
+  `linux-tsan`.
+
 ---
 
 ## 4. Geodesy, frames, floating origin
