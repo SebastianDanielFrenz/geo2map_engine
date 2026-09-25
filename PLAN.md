@@ -246,7 +246,7 @@ Every piece of served data is a tile of a named, versioned layer:
 | `g2m.elev.base` | baked | L0 1 m ... L6 64 m, 256-cell tiles | int32 1/256 m, zstd | blended multi-source DEM on the g2m grid, before roads |
 | `g2m.roads.graph` | baked | 1 km tiles + coarse hierarchy (motorway/trunk/primary) | own format, zstd | nodes, edges (reference line), attributes, lanes, restrictions, junction topology (6.2) |
 | `g2m.roads.geom` | baked | 1 km tiles | own format | per-edge vertical profile and superelevation, junction polygons and heights, bridge decks (6.3) |
-| `g2m.terrain.height` | baked | L0 1 m ... L6, 256-cell tiles (257² samples, shared borders) | int32 1/256 m relative to tile datum, zstd | `elev.base` + road carving |
+| `g2m.terrain.height` | baked | L0 1 m ... L6, 256-cell tiles (256² cell-centre samples, no shared borders; 4.9) | int32 1/256 m relative to tile datum, zstd | `elev.base` + road carving |
 | `g2m.terrain.class` | baked | L0 1 m, L3 8 m | uint8 LandClass + uint8 SurfaceKind, zstd | per-cell classes |
 | `g2m.features` | baked | 1 km tiles | own format | building footprints + heights + roof shape, water polygons, land-use polygons, point features (trees, signals) |
 
