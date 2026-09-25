@@ -1,0 +1,33 @@
+# G0 golden hashes (tests/golden/golden.h): name, values hashed, FNV-1a 64.
+# Identical on every build leg. Regenerate ONLY for an intended output change:
+#   g2m_golden_dump testdata/golden/g0_golden.txt  (then re-add this header)
+det.sin 20017 0cbdbc1ef7630868
+det.cos 20017 90b4569b80118e2f
+det.sincos 40034 a91d32ef569ae52c
+det.tan 20017 ac9feab08cbdb3e7
+det.asin 20017 9895d18204f767d2
+det.acos 20017 eed370ddc376b9b1
+det.atan 20017 2fa93b5a1c0885b4
+det.atan2 20289 dc030bd25274d111
+det.exp 20017 911314dd9bc53343
+det.expm1 20017 d8c9fd40cf0cd1e9
+det.log 20017 dd4484a1469445a7
+det.log1p 20017 da1d496aecc37558
+det.pow 20289 48a6db86a4e0ccf6
+det.sinh 20017 c285f6393a79e71c
+det.cosh 20017 d8939b354d01732b
+det.tanh 20017 4f900d8820375bfc
+det.asinh 20017 f47ccda567730efb
+det.atanh 20017 45e4c51d8300efa9
+det.hypot 20289 c9fe8eabc206bf0d
+det.sqrt 20017 eddfabb769c3c55f
+tm.forward 20000 6b0d4cd4082a471c
+tm.reverse 20000 0faf5bceaf95be23
+geo.ecef_enu 24000 513e32dec68c83e9
+utm.zone_band 10000 2cd61301b171b97f
+tile.keys 37767 3189f9bcad03dbe7
+session.frame 54012 9a4dc7abb5621e36
+raster.quantise 38989 0b23961fd73a98f8
+raster.georef 53823 ed9379a3d75cde19
+hash.sha256 202 5badb4795cc0ecca
+all 679966 6b33b94a52c392af
