@@ -1,0 +1,957 @@
+# geo2map_engine: implementation plan
+
+- **Owner:** Sebastian.
+- **Written:** 2026-09-25 by the planning session (Opus 5.5).
+- **How:** read-only research against:
+  - `S:\claude_code\physics_sim` at `be36545`. The other session's uncommitted drivetrain work was not read.
+  - the knowledge vault: PHYS-003, -008, -009, -011, -021, -025, -026, -032, -035, -042 and TOOL-023.
+  - the web: three research agents; their sources are listed under References.
+- **Nothing was built, installed, downloaded or created.** Only this file was written.
+- **Markers:**
+  - **[unverified]**: not confirmed against code or a primary source.
+  - **[estimate]**: my own arithmetic, to be replaced by a measurement at the milestone named next to it.
+
+Three repositories:
+
+| Repo | Role | Depends on |
+|---|---|---|
+| `S:\claude_code\physics_sim` (exists) | vehicle and rigid-body physics (`ps_core`) | Jolt, nlohmann/json |
+| `S:\claude_code\geo2map_engine` (new) | geography to game map: library + map server. C++ namespace `g2m`, target prefix `g2m_` | third-party libs only; never physics_sim, never a game |
+| `S:\claude_code\racing_game` (new) | the game: Godot project + engine-neutral game logic | pins both repos above |
+
+A future farming simulator is a fourth repo that pins the same two libraries.
+
+---
+
+> **Split note.** This file holds the library and server parts (sections 2-8, plus the dependency list from 13) of the joint plan written on 2026-09-25. The cross-repo schedule (milestones G0-G8 and R0-R10), the risks, the owner decisions and the game-side sections (1, 9-15) live in `S:\claude_codeacing_game\PLAN.md`. Section numbers are kept identical in both files, so a reference such as "(11.7)" or "D12" points there.
+
+## 0. Key decisions (details in the sections named)
+
+1. **geo2map_engine is a standalone engine-neutral C++20 library plus a map server built from the same code (sections 2 and 3).**
+   - It has no dependency on physics_sim or on any game.
+   - It exposes generic typed map data plus extension points; games add their meaning through those.
+2. **Map data is served by a map server, with one protocol and three deployments (section 3):**
+   - the owner's hosted default server, which the game ships pointing at;
+   - a custom endpoint set in config;
+   - an integrated server: the same server code in-process, or as a local sidecar, for offline play and development.
+   - The protocol is HTTP GET on immutable, release-pinned tile URLs, with a manifest endpoint.
+3. **Served data: baked (derived) generic layers by default. Raw source layers are also on the protocol, and every layer can be derived on the client as a fallback (section 3.3; owner decision D2).**
+   - Baked tiles cost about the same bandwidth as raw data.
+   - They save client CPU, are identical for every player by construction, and cache across players on a CDN.
+   - Render meshes, vegetation instances and physics tiles are never served. The client builds them cheaply from the served layers.
+4. **Geodata acquisition (section 5.5):**
+   - Bulk downloads converted by our own offline tiler: HVBG DGM1, Geofabrik OSM extracts.
+   - Range-read cloud-optimised files from public open-data buckets: Copernicus GLO-30, ESA WorldCover.
+   - Never live queries against OSM services.
+5. **Grid and frame: UTM (section 4).**
+   - Tiles are keyed by (UTM zone, level, easting index, northing index).
+   - The session frame is the UTM grid minus an integer-kilometre origin; z is orthometric height.
+   - Hessen DGM1 is published natively on integer UTM32 metres, so the home region needs no resampling.
+6. **Physics gets terrain and roads through the heightfield (section 8).**
+   - Roads are carved into a 1 m height raster with per-cell surface ids.
+   - Only bridges (later also tunnels and buildings) are streamed static mesh bodies.
+   - The glue is `g2m_ps_bridge`, an opt-in target in the geo2map_engine repo. It is built only when the consumer already provides `ps_core`.
+7. **physics_sim needs a few additive changes (section 9).**
+   - Blocker R1: pool heightfields clamp heights to about ±200 m, and the home region spans roughly 90–880 m [unverified: typical Taunus/Main elevations].
+8. **The game builds one GDExtension DLL (`rg_godot`, section 10).**
+   - It contains `ps_core`, `g2m`, the bridge, and the game's own engine-neutral `rg_core`.
+   - Both libraries are pinned as git submodules at explicit commits. Pinning a sibling path is not an option: it would build against another session's uncommitted work.
+9. **Milestones interleave library (G) and game (R) steps (section 12).**
+   - Everything up to real roads uses the integrated in-process server only.
+   - The HTTP transport and sidecar follow once the layer set is stable. The hosted default server comes after that.
+
+---
+
+## 2. geo2map_engine: library
+
+### 2.1 Scope
+
+**In scope:**
+- fetching raw sources, and caching;
+- geodesy;
+- deterministic derivation of generic map layers;
+- the map server and its protocol;
+- the client (streaming, cache, mesh builders, routing);
+- the C API;
+- thin engine helpers.
+
+**Out of scope (game semantics):** what is drivable, grip values, races, farming fields, soil models, traffic policy.
+- The library exposes facts. Examples: a road with `surface=sett`, 2 lanes, maxspeed 50; a polygon tagged `landuse=farmland`; a cell classified `tree_cover`.
+- Games attach meaning through extension points (2.5).
+
+### 2.2 Repository layout (`S:\claude_code\geo2map_engine`)
+
+```
+geo2map_engine/
+  CMakeLists.txt, CMakePresets.json    same compiler/preset matrix as physics_sim (clang-cl, cl, WSL clang)
+  CLAUDE.md, README.md                 map only; rationale goes into the vault
+  docs/
+    api/                               C and C++ API guide (Doxygen from headers + hand-written guide)
+    protocol/                          map-server protocol v1 spec, examples, conformance rules
+    formats/                           g2m.tile/1, layer encodings, cache db schema, release manifest
+    licences.md                        per source: licence, attribution text, obligations
+  include/g2m/                         public C++ API (no third-party types)
+    core/      det_math.h, geo/ (ellipsoid, tm, utm, ecef), tile_key.h, raster.h, polyline.h, hash.h
+    layer/     layer_id.h, layer_registry.h, deriver.h (IDeriver), classifier.h (IClassifier), release.h
+    server/    server.h (g2m::Server), transport.h (ITransport), upstream.h (IUpstream), config.h
+    client/    client.h (g2m::Client), streamer.h (interest points), cache.h, fetcher.h (IFetcher)
+    graph/     road_graph.h, routing.h
+    mesh/      terrain_chunk.h, road_mesh.h, building_mesh.h, instances.h, map_geometry.h
+  include/g2m_c/g2m.h                  flat C API, stable ABI
+  src/                                 mirrors include/
+  third_party/musl_math/               deterministic libm port (2.4)
+  apps/
+    g2m_server/                        server binary: sidecar or hosted (HTTP transport)
+    g2m_tiler/                         OFFLINE importer: DGM GeoTIFF / OSM PBF / COGs -> raw source tiles
+    g2m_cli/                           derive/dump/hash tiles, run golden checks, pack/prebake a region, conformance client
+  bridges/physics_sim/                 g2m_ps_bridge (opt-in, 2.6)
+  adapters/godot/                      g2m_godot (static lib): IFetcher over HTTPClient, mesh/texture upload helpers
+  adapters/unreal/                     later: UE5 plugin skeleton over the C API
+  tests/       unit/ golden/ determinism/ protocol/ fuzz/ bench/
+  testdata/    small committed fixtures: a 2 x 2 km DGM1 cut + matching OSM cut, golden hashes
+  tools/       setup_dev_env.ps1, ci.ps1
+```
+
+### 2.3 Targets
+
+| Target | Contents | Third-party (all static) |
+|---|---|---|
+| `g2m_core` | deterministic math, geodesy, tile keys, rasters, geometry, hashing | none |
+| `g2m_layers` | layer registry, raw-source decoders, all built-in derivers | zstd, libdeflate, Clipper2, earcut.hpp |
+| `g2m_server` (lib) | `g2m::Server`: request router, resolver, source store, derived store, upstreams | SQLite |
+| `g2m_client` | `g2m::Client`: streamer, client cache, mesh builders, routing, in-process transport | SQLite |
+| `g2m_c` | C API over client + in-process server | — |
+| `g2m_http` | HTTP transport: server side (cpp-httplib) and a libcurl `IFetcher` for tools/server upstreams | cpp-httplib, libcurl |
+| `g2m_ps_bridge` | `ITerrainSource` + static-body feeder | consumer's `ps_core` |
+| `g2m_godot` | Godot helpers | consumer's godot-cpp |
+| apps | `g2m_server`, `g2m_tiler` (+ libosmium, protozero), `g2m_cli` | |
+
+- `g2m_warnings` and `g2m_options` mirror physics_sim's `ps_warnings`/`ps_options`: warnings as errors in own code, `/arch:AVX2`, `/fp:precise`, no FMA contraction.
+- Same static CRT as physics_sim, so one game DLL can link both.
+
+### 2.4 Determinism rules
+
+**Goal:** the same input bytes, library derivation version, layer configuration and seed give bit-identical layer tiles on every supported compiler and OS.
+
+This matters more than in physics_sim. The hosted server (Linux) and the integrated server inside a Windows client must produce the same bytes, or a client-derived tile differs from what peers download (3.6).
+
+Rules, adopted from physics_sim D7/D8 and vault PHYS-009/-026:
+- **No platform libm transcendentals in derivation code.**
+  - g2m carries its own musl-derived port (MIT).
+  - It adds `sinh`, `cosh`, `asinh`, `atanh` and `hypot`, which transverse Mercator needs.
+  - This deliberately duplicates physics_sim's `ps::math` port, because g2m must not depend on physics_sim.
+  - CI greps for `std::sin` and similar, as physics_sim does.
+- **Floating point:** `/fp:precise` with FMA contraction off. No `-ffast-math`, no SIMD reductions whose order depends on vector width.
+- **Integer geometry wherever topology matters:** Clipper2's Int64 paths at 1 mm resolution.
+- **No iteration over unordered containers in anything that decides output.** Sort keys before use (PHYS-026).
+- **Parallelism only across whole tiles.** A derivation's inputs are its own input tiles plus a fixed halo read from neighbouring *input* tiles. It never reads neighbouring *outputs*, so results never depend on load order.
+- **Randomness** (vegetation scatter, building variation) comes from a counter-based hash of (world seed, tile key, feature id, stream). There is no stateful generator.
+- **Quantised outputs** (6.1): heights are stored as integers at 1/256 m, so tiny FP differences cannot leak in via the least significant bits.
+- **Golden tiles:** every CI leg checks a committed hash per golden tile, and Windows and Linux hashes are compared.
+- **Fuzzing:** every decoder of server- or file-supplied bytes is fuzzed (libFuzzer on the clang legs), because a custom endpoint is untrusted input.
+
+### 2.5 Extension points
+
+- **`IClassifier`** maps source facts to class ids.
+  - The built-in default produces a generic `g2m::LandClass`: `paved_road, unpaved_road, rail, water, building, tree_cover, shrub, grassland, cropland, bare, built_up, wetland, ...`.
+  - It also produces a `g2m::SurfaceKind`: `asphalt, concrete, paving_stones, sett, cobblestone, gravel, compacted, dirt, grass, sand, ...`.
+  - Consumers supply tables or code for their own ids.
+- **`IDeriver`** declares a named, versioned layer as a pure function: `(input layer tiles + halo, config, seed) -> tile bytes`.
+  - It declares its inputs, tiling, levels and version.
+  - The same registration works in the server (baked) and in the client (local derivation). See 3.3 for where custom layers run.
+- **`IUpstream`** is a raw data source adapter: a local source store, a COG over HTTP, a PMTiles archive, or another g2m server. SoilGrids for the farming sim would be one more upstream.
+- **Style and material tables** for mesh builders and map geometry are data files, not code.
+
+Layer names are namespaced: `g2m.*` for built-ins, `<vendor>.*` for others (e.g. `rg.race_routes`, `fs.field_parcels`).
+
+### 2.6 Where the physics bridge lives
+
+`g2m_ps_bridge` lives in `geo2map_engine/bridges/physics_sim/` and is built only `if(TARGET ps_core)`.
+
+- geo2map_engine never pins or fetches physics_sim, so there is no diamond dependency. The bridge always compiles against the physics_sim commit the consuming game pinned.
+- Both games reuse it.
+- geo2map_engine's CI builds it against a pinned physics_sim commit, to catch API drift early.
+- It contains mechanism only:
+  - sampling the served terrain layer into `TileSample`;
+  - streaming bridge and building bodies;
+  - mapping class ids to `SurfaceId` through a consumer-supplied name table.
+- Which physics surface a class becomes is game data.
+
+Rejected alternatives:
+- **a copy per game:** it would drift between the racing and farming games;
+- **inside physics_sim as P11's `ps_geo`:** physics_sim would pin geo2map_engine while the game pins both, which is a real diamond. It would also put code into a repo another session owns.
+
+### 2.7 Relationship to PLAN.md P11 (owner decision D1)
+
+PLAN.md P11 plans a `ps_geo` target inside physics_sim, fed by an offline importer that bakes a bounding box. The owner's 2026-09-25 rules supersede it: an on-demand world, reusable across engines and projects, served by a map server.
+
+**Recommended reconciliation:** P11 becomes "physics_sim consumes geo2map_engine through `g2m_ps_bridge`".
+- **physics_sim keeps only physics:**
+  - `ITerrainSource` (exists);
+  - the per-tile height datum (R1) and prebuilt static shapes (R2);
+  - `IWorldShape` with the flat implementation, and later a WGS84 curved one;
+  - per-body gravity.
+- **P11's acceptance tests move to geo2map_engine and the bridge:** heights match the DEM; no steps at road/terrain seams; footprints within 0.1 m; a 50 km drive without hitches.
+- **The curved world shape stays a physics task.** g2m already provides the geodesy it needs: ECEF, ellipsoid normals, local ENU frames at any grid point.
+- **The offline bbox bake survives as `g2m_tiler`,** but only to fill the server's raw source store. The game never consumes a bake directly.
+
+---
+
+## 3. The map server
+
+### 3.1 Three deployments, one code path
+
+```
+                +---------------------------- g2m::Server (one implementation) ---------------------------+
+                |  router -> resolver: cache hit? -> derive from inputs (IDeriver)? -> ask upstream?       |
+                |  source store (raw, content-addressed)   derived store (baked tiles, content-addressed)  |
+                |  upstreams: local source store | public COG/PMTiles buckets | another g2m server        |
+                +-----------------------------------------------------------------------------------------+
+                      ^ in-process transport          ^ HTTP transport (g2m_http)
+                      |                               |
+  Integrated (in-process, default for dev/offline)    Sidecar (same binary on localhost)   Hosted default / custom endpoint
+  game DLL links g2m_server lib                       g2m_server.exe --cache dir --port 0  g2m_server behind reverse proxy + CDN
+```
+
+- **Integrated server.**
+  - A `g2m::Server` object created by the game (C API `g2m_server_create(config)`) with a local cache directory and an upstream list.
+  - The client talks to it through the in-process transport. Requests and responses are the same typed objects the HTTP transport serialises, minus the socket.
+  - Offline mode is simply the integrated server with network upstreams disabled: only cached or imported data is available.
+- **Sidecar.**
+  - The same `g2m_server` binary, started by the game or a tool on localhost with a random port that it reports on stdout.
+  - Useful when a Godot editor, the game and the tools share one cache, or to keep heavy I/O out of the game process.
+- **Hosted default.**
+  - The same binary on the owner's infrastructure, behind a reverse proxy and a CDN (3.7).
+  - The game build ships this URL.
+- **Custom endpoint.**
+  - Any server that speaks protocol v1: the reference binary run by a modder or studio, or their own implementation.
+  - Set via the game's settings file or command line (`--map-server <url>`).
+  - The client checks compatibility against the manifest (3.4) before use.
+
+**Upstream chaining is what makes the three deployments one design.**
+- An integrated server's upstream can be the hosted server: it fetches baked tiles, falls back to fetching raw layers and deriving locally, or goes fully offline.
+- The hosted server's upstreams are its own raw-data mirrors.
+- The per-layer policy (3.3) is simply the order in which the resolver tries these options.
+
+### 3.2 What is a "layer"
+
+Every piece of served data is a tile of a named, versioned layer:
+
+| Layer | Kind | Tiling / levels | Encoding | Content |
+|---|---|---|---|---|
+| `g2m.src.elev.<source>` | raw | the source's own tiling: DGM1 1 km UTM32 tiles; GLO-30 1° tiles re-chunked to 0.25° | int32 1/256 m, row delta, zstd | native DEM samples + datum id |
+| `g2m.src.osm` | raw | 1 km UTM tiles + halo membership | own columnar format, zstd | OSM nodes/ways/relations clipped per tile, with ids, tags and relation membership (topology preserved, unlike MVT) |
+| `g2m.src.landcover` | raw | 1 km UTM tiles | uint8 classes, zstd | WorldCover, reprojected nearest-neighbour |
+| `g2m.elev.base` | baked | L0 1 m ... L6 64 m, 256-cell tiles | int32 1/256 m, zstd | blended multi-source DEM on the g2m grid, before roads |
+| `g2m.roads.graph` | baked | 1 km tiles + coarse hierarchy (motorway/trunk/primary) | own format, zstd | nodes, edges (reference line), attributes, lanes, restrictions, junction topology (6.2) |
+| `g2m.roads.geom` | baked | 1 km tiles | own format | per-edge vertical profile and superelevation, junction polygons and heights, bridge decks (6.3) |
+| `g2m.terrain.height` | baked | L0 1 m ... L6, 256-cell tiles (257² samples, shared borders) | int32 1/256 m relative to tile datum, zstd | `elev.base` + road carving |
+| `g2m.terrain.class` | baked | L0 1 m, L3 8 m | uint8 LandClass + uint8 SurfaceKind, zstd | per-cell classes |
+| `g2m.features` | baked | 1 km tiles | own format | building footprints + heights + roof shape, water polygons, land-use polygons, point features (trees, signals) |
+
+**Never served; derived on the client from the layers above:**
+- render meshes (terrain chunks, road ribbons, buildings);
+- vegetation instances;
+- physics tiles (the bridge);
+- minimap and full-map geometry;
+- routing search state;
+- all game-specific layers, unless deployed as server plugins (3.3).
+
+### 3.3 Baked vs raw (owner decision D2: recommendation plus complexity)
+
+| Criterion | Serve baked generic layers | Serve raw source layers, derive on client |
+|---|---|---|
+| Bandwidth | ~same: carved heights compress like the raw DEM; the road graph and geometry are about OSM-sized [estimate, measured in G3] | ~same |
+| Client CPU | low: copy, mesh, scatter | high: road profile fitting, junction polygons and carving on the client, competing with 240 Hz physics on 12 cores |
+| Server CPU / storage | derivation (on demand or pre-baked) plus derived storage | raw storage only |
+| Determinism | identical bytes for all players by construction; the server is the authority | every client compiler must reproduce the server's bytes exactly (a larger CI matrix; any drift becomes a multiplayer desync) |
+| Versioning | one release id pins sources and pipeline | same release id, plus the client's own deriver version must match |
+| Cross-player cache hits | high: immutable URLs on a CDN | raw tiles cache equally well; derivation work is repeated per player |
+| Improving derivation | redeploy the server; clients get it on the next release | ship a new game build |
+| Game-specific layers | only via server plugins | natural: the client derives them |
+| Offline and custom endpoints | needs a server with the layer (or the integrated server) | a raw-only server suffices |
+
+**Recommendation:**
+- Default to **baked generic layers**, with **raw layers also on the protocol and every built-in layer derivable locally.**
+- **Per-layer resolver policy**, configurable per deployment:
+  - Hosted default: `baked`.
+  - Integrated server, online: `upstream-baked, else upstream-raw + local derive`.
+  - Integrated server, offline: `cache, else local derive from cached raw, else degraded`.
+  - Custom endpoint: whatever its manifest says it has.
+- **Game-specific layers are derived on the client** over the served generic layers, through `IDeriver` registrations linked into the game.
+  - If such a layer is expensive and identical for all players, the owner can deploy the same deriver as a server plugin (a static registration in a server build).
+  - The hosted server then serves it baked under its vendor namespace. It is the same code, because the server and client derivers are one library.
+
+**What supporting both costs:**
+- **Code: small.** The client already links the whole derivation pipeline, because the integrated server is in-process. The resolver's per-layer fallback chain is roughly a few hundred lines [estimate].
+- **Test matrix: the real cost.** Every compiler that ships a client (clang-cl, cl, Linux clang; later UE5's toolchains and consoles) must be hash-compared against the server's builds for every derived layer. That is CI time plus discipline (2.4).
+- **Hosting:** raw layers must be served as well. Raw storage is needed anyway to derive, so the only extra is egress when clients use raw mode.
+- **Licensing:** serving raw OSM-derived tiles is also publishing a Derivative Database under ODbL (3.9). This is the same obligation as for baked tiles, not an extra one.
+
+**Cheaper alternative, if the owner wants less:** remote servers serve baked layers only; raw layers exist only between the integrated server and its own upstreams.
+- Clients then never derive what a peer might download.
+- The integrated server still derives locally, for offline and dev.
+- Cost: no load shedding from the hosted server onto clients.
+
+### 3.4 Protocol v1
+
+This is plain HTTP GET, because it is engine-neutral, CDN-cacheable and trivial to implement for a custom server or a static bucket. Alternatives considered:
+- **gRPC:** not cacheable by CDNs, needs HTTP/2 end-to-end and code generation, and its streaming is not needed.
+- **WebSocket:** stateful, no caching.
+- **Plain MVT/PMTiles:** loses road topology and restrictions (research: MVT drops topology).
+
+Endpoints (all under `{base}/g2m/v1`):
+
+```
+GET /manifest
+    JSON, Cache-Control: max-age=300. Server id, protocol versions supported, default release id,
+    list of live releases, tile base URL (may point at a CDN host), auth mode, rate-limit policy, contact.
+GET /releases/{rid}/manifest
+    JSON, immutable. For the release:
+      - sources: id, snapshot date, licence, attribution text, share-alike flag, coverage
+      - layers: name, version, kind (raw|baked), tiling scheme, levels, encoding, inputs (for local derivation),
+                deriver version hash, availability (pre-baked coverage | on-demand | unavailable)
+      - coverage: per layer, a coarse bitmap per UTM zone (1 km tiles), or "global"
+GET /releases/{rid}/tiles/{layer}/{scheme}/{level}/{x}/{y}
+    One tile. Headers: ETag "<sha256 of body>", Cache-Control: public, max-age=31536000, immutable.
+    404 = outside coverage (definitive for this release), 503 + Retry-After = on-demand derivation queued.
+GET /releases/{rid}/packs/{layer}/{scheme}/{level}/{x}/{y}
+    A pack of 16 x 16 tiles (one request, one CDN object) with a directory of per-tile hashes;
+    used for region pinning/offline downloads and for pre-baked regions stored as static files.
+GET /releases/{rid}/hashes/{layer}/{scheme}/{level}/{x}/{y}
+    The per-tile hash list for one pack area (small), for verification without download (3.6).
+```
+
+- **Tile address.**
+  - `scheme` = `utm{zone}{n|s}`, e.g. `utm32n`.
+  - `x = floor(E / (256 m · 2^level))` and `y = floor(N / (256 m · 2^level))`, on the zone's false-easting grid (500 km E).
+  - Levels are shared by all raster layers. 1 km vector tiles use `level = 2` (1024 m).
+  - The client's cache key and the physics bridge use the same integers (4.4).
+- **Tile container `g2m.tile/1`:**
+  - header: magic, container version, layer name and version, release id, scheme/level/x/y, datum (heights), input content hashes, body hash;
+  - typed sections, zstd-compressed.
+  - Content-addressed: the ETag is the body hash.
+- **Compression:** tiles are already zstd-compressed, so HTTP compression is off.
+- **Compatibility:** a client accepts a release if it supports the container major version and each layer's encoding version. The manifest lists both.
+- **Transport-level extras:** HTTP/2 or HTTP/3 through the CDN, invisible to the protocol.
+
+### 3.5 Releases, pinning and versioning
+
+- **Release id** `rid` = hash over:
+  - the source snapshot index (each raw source tile's content hash);
+  - each layer's deriver version and config hash;
+  - the classifier tables;
+  - the world seed.
+- **A release is immutable.** A tile URL never changes content, which is what makes CDN caching and multiplayer sharing safe.
+- **Source snapshots are content-addressed.** A new OSM snapshot changes only the raw tiles that changed; unchanged tiles are shared between releases. The hosted server can therefore keep several releases live cheaply, and derive old-release tiles on demand as long as their raw snapshot is retained.
+- **The game pins a release per session.**
+  - Single player: the game build's default release, or "latest release compatible with my g2m version".
+  - Multiplayer: the host's release (3.6).
+  - The derivation pipeline version is part of `rid`, so a server-side derivation fix is a new release, never a silent change.
+- **Cadence:** see 5.5 and decision D11.
+- **Retention:** the hosted server keeps the last N releases live (recommend N = 3). Older ones return 410 with the newest compatible `rid`.
+- **Integrated server:** a local release id is computed the same way from whatever the user imported, so offline tiles are just as pinned.
+
+### 3.6 Multiplayer and verification
+
+- Peers agree on `rid` in the session handshake. Tiles from any server serving that `rid` are interchangeable, because they are content-addressed.
+- A peer that derived a tile locally (integrated or offline) can verify it against `/hashes` when online.
+- Recommended policy (decision D12): multiplayer uses server-baked or hash-verified tiles only. Unverified local derivations are single-player only. This removes the cross-compiler determinism risk from multiplayer.
+- Physics determinism across peers additionally needs identical physics_sim versions and identical vehicle setups. The game handshake already has to cover those.
+
+### 3.7 Hosted default server: architecture and operations
+
+- **Static layer: pre-baked packs** as files in object storage behind a CDN. There is no compute on the request path, so this is where almost all traffic lands.
+- **Dynamic layer:** `g2m_server` instances for on-demand derivation of areas not yet pre-baked.
+  - Results are written back into object storage, so the next request is static.
+  - A queue with priority: tiles near active players first, then prefetch along their heading.
+- **Raw mirrors:** the server holds its own data (5.5).
+  - Never proxy public OSM services: Overpass, tile.openstreetmap.org and Nominatim policies forbid game-client and bulk use (research, 5.2).
+- **Auth, rate limiting and abuse:**
+  - CDN-cached tile and pack reads: anonymous, with a per-IP rate limit at the CDN. Scraping baked tiles is acceptable; they are open data under ODbL anyway.
+  - On-demand derivation (a CDN miss that reaches `g2m_server`): per-client API key embedded in the game build, free and revocable, plus per-key and per-IP compute quotas. `User-Agent` carries game and version.
+  - Oversized, malformed or out-of-coverage requests are rejected before any derivation.
+  - The server publishes its policy in `/manifest`, so custom endpoints can advertise theirs.
+- **Privacy:** server logs contain IP addresses, and the owner is in Germany, so the GDPR applies. Needed: a privacy notice, short log retention (7 days recommended), no player-level analytics without consent (decision D15).
+- **Tech choice: C++, sharing the libraries.**
+  - `g2m_server` is `g2m_server` (lib) + `g2m_http` (cpp-httplib: MIT, header-only, thread-per-connection, adequate behind a reverse proxy).
+  - TLS, HTTP/2/3 and edge rate limiting come from a reverse proxy/CDN (Caddy or Cloudflare; decision D3).
+  - Rejected: a Go or Rust front end calling C++ through the C API. It would add a toolchain and a second language for little gain; the expensive part is derivation, which must be the shared C++ code anyway for bit-identical results.
+
+### 3.8 Hosting estimates [estimate, to be replaced by measurements in G3/G7]
+
+- **Baked layer size per km²:**
+
+  | Content | Size per km² |
+  |---|---|
+  | `terrain.height` L0 on lidar DEM (1 M samples at ~4–7 bits after delta+zstd) | 0.4–0.9 MB |
+  | Coarse levels | +0.1–0.3 MB |
+  | `terrain.class` | 0.02–0.06 MB |
+  | Roads and features | 0.02–0.1 MB (urban higher) |
+  | **Total, lidar areas** | **≈ 0.5–1.1 MB** |
+  | **Total, GLO-30-only areas** (upsampled, smooth, compresses far better) | **≈ 0.1–0.3 MB** |
+
+- **Per region:**
+
+  | Region | Area | Baked size |
+  |---|---|---|
+  | Home region (~1,000 km² incl. margin, 5.4) | ~1,000 km² | 0.5–1.1 GB |
+  | Hessen | ~21,100 km² | 11–23 GB |
+  | Germany | ~357,600 km² | 180–400 GB |
+  | Planet land at GLO-30 level | ~149 M km² | 15–45 TB (hence on-demand beyond pre-baked countries) |
+
+- **Raw mirrors:**
+  - German DGM1 as delivered: 1.2–2.7 MB/km² (NRW's float LZW tiles, research), about 0.4–1 TB; re-encoded as `g2m.src.elev`, 150–320 GB.
+  - OSM planet PBF: about 80–90 GB [unverified].
+  - WorldCover: 124 GB (research).
+  - Mapterhorn planet z0–12: about 120 GB (research).
+  - GLO-30: range-read from AWS rather than mirrored at first.
+- **Egress per player-hour.**
+  - Driving new roads at 60 km/h:
+    - L0 band ±1 km: 120 km²/h × 0.45–0.9 MB = 55–110 MB;
+    - far field at 8 m out to 20 km: about 20–35 MB;
+    - vectors ±3 km: about 10–35 MB;
+    - total ≈ **0.1–0.2 GB/h**.
+  - Motorway or hypercar speeds: ≈ 0.2–0.5 GB/h.
+  - Revisited areas: ≈ 0 (client cache).
+  - Requests: about 3–6 k tiles per new player-hour.
+- **Cost.**
+  - Cloudflare R2: $0.015 per GB-month, zero egress (research). Germany baked: about $3–6 per month in storage.
+  - Operations are billed per million reads [price unverified]; at ~5 k reads per player-hour, pennies per thousand player-hours.
+  - A classic CDN at about $0.08/GB [unverified] would cost roughly $0.01–0.04 per player-hour.
+- **Derivation CPU:** assume 0.5–3 CPU-seconds per km² (dominated by road profile fitting and carving).
+  - Pre-baking Germany: 50–300 CPU-hours, a few hours on one 32-core machine.
+  - Europe: 1.5–9 k CPU-hours.
+  - Planet: 20–125 k CPU-hours, hence on demand plus pre-baking popular regions.
+  - One core derives ≥ 1 km² per few seconds, while a hypercar needs about 3 km² per minute of new L0. A single on-demand VM therefore serves tens of simultaneous explorers in un-baked areas. Beyond that, the resolver sheds load to client-side derivation from raw layers (3.3).
+
+### 3.9 Licensing obligations of serving (the owner must act; this is my reading, not legal advice)
+
+- **OSM (ODbL 1.0).**
+  - Baked and raw OSM-derived tiles are a Derivative Database that is publicly used.
+  - The owner must:
+    - offer it under ODbL, or offer the alteration method (ODbL 4.6);
+    - attribute "© OpenStreetMap contributors" with a link to the licence.
+  - Rendered meshes and screenshots are likely Produced Works: attribution only (OSMF Produced Work guideline).
+  - Practical plan:
+    - publish each release's OSM-derived packs as a download under ODbL;
+    - keep `g2m_tiler` and the derivers reproducible;
+    - consider open-sourcing geo2map_engine, which is the simplest way to satisfy "method" (decision D7).
+  - ODbL covers the data, not the game code or art.
+- **Copernicus DEM:** attribution text for modified data ("produced using Copernicus WorldDEM-30 ..." per the licence; exact wording from the licence PDF [unverified: the PDF did not parse]).
+- **ESA WorldCover (CC BY 4.0):** attribution plus indication of changes.
+- **Hessen DGM1/LoD2 (dl-de/zero-2-0):** no conditions. If credited ("ATKIS-DGM1 © HVBG"), modifications must be marked.
+- **Other German states:** dl-de/by-2-0 or CC BY 4.0 require attribution. The manifest carries it per source.
+- **Mapterhorn:** per-source licences in its `attribution.json`.
+- **Custom endpoints** are responsible for their own data. The client simply displays whatever attributions their manifest lists.
+
+---
+
+## 4. Geodesy, frames, floating origin
+
+1. **Grid.** UTM on GRS80/WGS84; the metre-level ETRS89–WGS84 offset is ignored.
+   - Transverse Mercator via Krüger's 6th-order series (Karney 2011).
+   - Error ≤ 5 nm within 35° of the central meridian; do not use beyond ~75° (GeographicLib docs).
+   - Implemented in-house on the deterministic math, and cross-checked against GeographicLib reference values (test data only; GeographicLib itself calls platform libm, so it is not deterministic).
+2. **Session frame.**
+   - Chosen from the spawn point's zone. Home region: zone 32N (EPSG:25832).
+   - Physics x = grid E − E0; y = grid N − N0; z = orthometric height. E0/N0 are multiples of 1 km.
+   - The world is flat in this frame (PLAN.md P11's flat shape), with constant −z gravity.
+3. **Why UTM.**
+   - It is the official grid of all German geodata (DGM1, LoD2, ALKIS), so there is no resampling at home.
+   - Stable, cacheable tile keys.
+   - Costs:
+     - scale about 0.9996 near the central meridian (≈ 0.99962 in the region, about 0.5° west of 9° E [estimate]), i.e. about 3.8 m short per 10 km, invisible and self-consistent;
+     - grid north differs from true north by about 0.4° [estimate]; the compass and map correct for it.
+4. **Keys shared everywhere.**
+   - g2m tiles, the client cache, the server URLs and the bridge's `TileKey.packed` all derive from integer grid metres.
+   - Physics tiles (255 m, 256 samples, 1 m spacing, integer-metre origins) sample exactly on the g2m 1 m grid. `fill_tile` is therefore a copy from up to 4 g2m tiles, never an interpolation.
+5. **Zone boundaries.**
+   - A session keeps its zone. Tiles beyond the boundary are derived in the extended zone, where the series stays accurate far outside the 6° strip, and cached under that zone's key.
+   - Sessions more than about 1,500 km from their central meridian are out of scope; start a new session.
+6. **Curvature.**
+   - Ignored in the flat shape: about 196 m drop at 50 km is not represented.
+   - The WGS84 curved world shape (physics R8) can come later without changing keys; g2m already returns ECEF for any grid point.
+7. **Vertical datums.**
+   - DGM1 uses DHHN2016; Copernicus uses EGM2008.
+   - At coverage seams the base DEM removes the local median offset before blending (6.1).
+8. **Precision.**
+   - Physics uses double positions (Jolt `DOUBLE_PRECISION`).
+   - Rendering uses the existing origin rebasing (`origin_rebase.h`, 500 m threshold; 8.6 µm error at 50 km per PHYS-011).
+   - Every g2m client item carries a double origin, with float vertices relative to it.
+   - Official Godot builds are single precision, and double builds need a custom engine build (research), so floating origin is mandatory.
+
+---
+
+## 5. Data sources and acquisition
+
+### 5.1 Elevation
+
+| Source | Licence | Access | Resolution / CRS | Use |
+|---|---|---|---|---|
+| **Hessen DGM1** (HVBG) | dl-de/zero-2-0 (open since 1 Feb 2022); no attribution required | Download-Center gds.hessen.de, by Kreis/Gemeinde, ZIP of GeoTIFFs. JS portal; no WCS/ATOM found, so manual download. Tile size probably 1×1 km [unverified] | 1 m, float32 LZW, NoData −9999, EPSG:25832 + DHHN2016, ±0.3 m (95 %), 6-year update cycle | home region, primary |
+| Other German states' DGM1 | dl-de/zero (HE, NW, BE), dl-de/by-2-0 (BW, BB, HH, RP, SL, SN, ST, TH), CC BY 4.0 (BY, HB, MV, NI, SH) | varies. NRW: plain HTTPS directory of 1 km tiles (automatable); Bavaria open since 2023 | 1 m | Germany expansion (G8) |
+| **Copernicus GLO-30** | Copernicus DEM licence: free, attribution; commercial use believed allowed [unverified wording] | AWS `copernicus-dem-30m`, 1° COGs, no account, range reads; 2021 release, no planned updates; N50E008 covers most of the region | 1″, EPSG:4326 + EGM2008. **A DSM**: forests appear as 20–30 m plateaus | worldwide fallback, margins |
+| Mapterhorn | code BSD-3; data per source (553 sources incl. Hessen DGM1, all German states, GLO-30 elsewhere) | terrarium WebP 512 px; `tiles.mapterhorn.com`; PMTiles planet z0–12 ~120 GB, regional z13–17; volunteer service with no usage policy | Web Mercator | server-side mirror/extract option for worldwide DEM (decision D13); never hotlinked by clients |
+| AWS Terrain Tiles (Tilezen) | mixed attribution | terrarium PNG to z15 on S3 | effectively SRTM ~30 m in Germany | not used (Copernicus/Mapterhorn are better) |
+| EU-DEM | discontinued | — | — | not used |
+| FABDEM (bare-earth GLO-30) | non-commercial [unverified] | — | 30 m | not used unless the licence allows |
+| MapTiler terrain-rgb | proprietary, API key | — | — | not used |
+
+### 5.2 Vectors (OSM and others)
+
+- **OSM via Geofabrik extracts.** `hessen-latest.osm.pbf` is 329 MB, updated daily, ODbL.
+  - There is no Regierungsbezirk extract; the region is cut by the tiler.
+  - Geofabrik advises modest download volumes, so it suits the pipeline, not clients.
+- **Forbidden for game clients:** Overpass, tile.openstreetmap.org, Nominatim (OSMF policies).
+- **Overture Maps** (ODbL for transportation): explicit segment/connector topology, speed limits, prohibited transitions, surface, width, but no lanes. GeoParquet on S3, monthly releases.
+  - A candidate second input for the worldwide pipeline (G8).
+  - Parquet is converted offline by the tiler, never read at runtime.
+- **Protomaps / OpenMapTiles:** road layers lack lanes/maxspeed/surface, and MVT loses topology. Not used for the road graph; possibly for a far-field basemap later.
+
+### 5.3 Land cover and buildings
+
+- **ESA WorldCover 10 m** (CC BY 4.0).
+  - Bucket `esa-worldcover`: 3×3° COGs, about 47 MB each on average.
+  - Tile N48E006 covers the region.
+  - 11 classes (tree cover, shrubland, grassland, cropland, built-up, bare, snow, water, wetland, mangroves, moss).
+  - Versions: 2020 v100 and 2021 v200; static.
+- **Buildings:** OSM footprints.
+  - Hessen LoD2 CityGML 1.0 (dl-de/zero, EPSG:25832 + DHHN2016, standardised roofs, annual updates) is an optional later upstream for exact roofs in Hessen [size per Kreis unverified].
+
+### 5.4 Home region: area and first-download estimate
+
+- **Area.**
+  - Main-Taunus-Kreis ~222 km², Hochtaunuskreis ~482 km², Frankfurt-Höchst ~5 km² [unverified, from memory].
+  - With a 2 km margin: about **1,000 km²**. The bounding box is about 1,800 km².
+  - Höchst's DGM1 comes in the Frankfurt am Main package (~248 km² [unverified]).
+  - District boundaries come from OSM admin boundaries (`admin_level=6`) in the same extract, so no extra source is needed.
+- **Downloads (one-off, integrated server raw store):**
+  - DGM1 for MTK + HTK + Frankfurt: ~950 km² × 1.2–2.7 MB = **1.1–2.6 GB** as delivered (by NRW analogy). Re-encoded: 0.4–0.9 GB.
+  - Geofabrik Hessen PBF: 329 MB. Region cut: ~20–40 MB [estimate].
+  - GLO-30 N50E008 (+ N49E008 if the southern margin crosses 50° N): 25–40 MB each [unverified].
+  - WorldCover N48E006 v200 map: ~47 MB average [research estimate].
+- **Client cache for the pinned home region (baked):** 0.5–1.1 GB. The source cache adds 0.5–1 GB when running integrated.
+
+### 5.5 How each data type is obtained, per deployment
+
+Principles:
+- Bulk files are converted by our own offline tiler.
+- Cloud-optimised public files (COGs on AWS open data) are range-read directly.
+- No live queries against OSM services.
+- Every source enters a content-addressed raw store with its licence and attribution attached.
+
+**Elevation (licences: dl-de/zero for HE DGM1; Copernicus DEM licence; others per 5.1).**
+- **Development now:**
+  - HVBG DGM1: manual Kreis ZIP download (MTK, HTK, Frankfurt), then `g2m_tiler import-dem`.
+  - Margins: GLO-30 COG range reads from AWS.
+- **Integrated server (shipped game):** upstream order:
+  1. cache;
+  2. the hosted server (baked, else raw);
+  3. direct GLO-30 COG range reads;
+  4. anything the user imported with the tiler.
+- **Hosted server (later):**
+  - own mirror of national 1 m DGMs (NRW scripted over HTTPS; other states per portal);
+  - a Mapterhorn extract (D13);
+  - GLO-30.
+- **Cadence:** DGM1 on a 6-year cycle (check yearly); GLO-30 static (2021).
+
+**Roads and OSM vectors (licence: ODbL 1.0).**
+- **Development now:** Geofabrik `hessen-latest.osm.pbf` (329 MB), downloaded once. Then `g2m_tiler import-osm` cuts the districts + 2 km.
+- **Integrated server (shipped game):**
+  - from the hosted server (baked, or raw `src.osm`);
+  - offline or custom: the user imports a Geofabrik extract via `g2m_cli import`;
+  - never Overpass or the OSM API.
+- **Hosted server (later):**
+  - Geofabrik country extracts or planet PBF, converted by the tiler;
+  - optionally Overture GeoParquet converted offline.
+- **Cadence:** quarterly releases (D11). Geofabrik updates daily, but we do not need that.
+
+**Land cover (licence: CC BY 4.0).**
+- **Development now:** WorldCover N48E006 v200 by range read (~47 MB file), plus OSM landuse.
+- **Integrated server:** direct COG range reads, or via the hosted server.
+- **Hosted server:** COG range reads, or a mirror (124 GB).
+- **Cadence:** static (2021 v200).
+
+**Buildings (licences: ODbL; dl-de/zero for LoD2).**
+- **Development now:** OSM footprints, via the same extract as roads.
+- **Integrated server:** same as roads.
+- **Hosted server:** same as roads, plus optional Hessen LoD2 (manual) later.
+- **Cadence:** with the OSM releases; LoD2 annual.
+
+**Getting the first region into the cache (G1/R2):**
+1. The owner downloads the DGM1 ZIPs for Main-Taunus-Kreis, Hochtaunuskreis and Frankfurt am Main from the HVBG Download-Center. This is a manual step, because the portal is JavaScript-only and no automatable URL was found.
+2. `setup_dev_env.ps1 -FetchData` (after approval) downloads the Geofabrik Hessen PBF.
+3. `g2m_tiler import --region data/world/regions.json#home`:
+   - takes the district polygons from the extract's admin boundaries plus a 2 km margin;
+   - writes `g2m.src.elev.dgm1` and `g2m.src.osm` tiles into the integrated server's source store, marked pinned.
+4. On first derivation, GLO-30 and WorldCover are range-read for the region and cached as pinned raw tiles.
+5. `g2m_cli prebake --region home` derives all baked layers into the derived store (0.5–1.1 GB, pinned). The region is then fully offline-capable.
+
+Later, with the hosted server, the same result comes from the settings menu's "download region", which fetches packs.
+
+---
+
+## 6. Derivation pipeline
+
+Every layer is a pure function (2.4). Terms:
+- **L0:** 1 m cells in 256-cell tiles.
+- **Coarse levels:** box-filtered powers of two.
+- **Graph tiles:** 1 km.
+
+### 6.1 `g2m.elev.base`
+
+1. Assemble the tile plus a 16 m halo from the best available source. Priority: DGM1 > other national 1 m DGMs > GLO-30.
+   - DGM1 in UTM32 needs no resampling.
+   - GLO-30 is resampled bicubically in fixed evaluation order.
+2. **Coverage seams:** remove the median vertical offset over the seam band, then blend over 200 m with smoothstep.
+3. **DSM correction (GLO-30 only):**
+   - Where WorldCover says tree cover or built-up, replace heights by an inpainting from surrounding non-canopy cells (harmonic fill, fixed iteration count).
+   - This is imperfect, because GLO-30 canopy error under forest is ~13 m median (research).
+4. **Quantise** to 1/256 m.
+5. **Coarse levels** are box-filtered from L0 where L0 exists, so all LODs agree.
+
+### 6.2 `g2m.roads.graph`
+
+Built from `g2m.src.osm`.
+
+- **Nodes:** junction nodes, i.e. way endpoints and nodes shared by at least two road ways. They keep their OSM node id; shape points go into edge polylines.
+- **Edges:** one per way segment between junction nodes, stored as a smoothed **reference line** (6.3 step 1). Attributes:
+  - `highway` class; `oneway` (incl. `-1`, roundabouts);
+  - `lanes`, `lanes:forward/backward`, `turn:lanes`, `width`;
+  - `maxspeed` (+ `:forward/:backward`, parsed units, implicit defaults per country as data);
+  - `surface`, `smoothness`, `bridge`/`tunnel`/`layer`;
+  - `access`/`motor_vehicle`, `name`, `ref`, `junction`, `lit`.
+  - Missing values get documented defaults from tables (e.g. German lane width 3.25 m), each flagged "inferred".
+- **Restrictions:** `type=restriction` relations (via node or via way), stored as `TurnRestriction{from_edge, via, to_edge, kind}`.
+- **Junctions:**
+  - Clusters of junction nodes within ~25 m belonging to one intersection (dual carriageways crossing) form one `Junction`, with ordered edge ends.
+  - A roundabout forms one junction ring.
+  - This consolidation is the A/B Street mitigation for bow-tie junction polygons (research).
+- **Tiling:**
+  - Each edge is owned by the tile containing its lower-id end node.
+  - Edges crossing tiles reference far nodes by global OSM id, so tiles stitch without a global pass.
+  - A coarse hierarchy for major classes supports long routes (Valhalla-like levels).
+- **Stable ids:**
+  - `NodeId` = OSM node id; `EdgeId` = hash(way id, segment index). Stable within a release.
+  - Saved routes store coordinates and are re-matched across releases.
+- **Representation** mirrors OpenDRIVE concepts: reference line, elevation polynomial in arc length s, superelevation. An OpenDRIVE export for external tools stays possible later.
+
+### 6.3 `g2m.roads.geom` and carving into `g2m.terrain.height`
+
+Order matters for determinism and continuity. Each step is a pure function of a canonical scope, never of the requesting tile.
+
+1. **Reference line (per edge).**
+   - Resample the OSM polyline at 0.5 m.
+   - Smooth it, with the curvature limited per class. Keep the original vertices within 0.5 m for major roads.
+   - Fit a G1 chain of lines, arcs and clothoids (Bertolazzi–Frego approach; implemented in-house on the deterministic math, since the `Clothoids` library's licence is [unverified]).
+2. **Junction heights (per junction).** A robust median of `elev.base` over the junction footprint, depending only on the junction's own position and the DEM.
+3. **Vertical profile (per edge).**
+   - Sample `elev.base` along the reference line: median across a cross-section window, to reject vehicles and vegetation returns.
+   - Fit cubic segments in s by constrained least squares:
+     - endpoints fixed to the two junction heights;
+     - max grade per class (motorway 6 %, others 12–20 %; tagged `incline` respected);
+     - minimum vertical-curve radius.
+   - Bridge spans (`bridge=yes`) are excluded from the DEM fit and interpolated between abutments.
+4. **Cross-section.**
+   - Width = lanes × lane width, or `width`.
+   - Crown 2.5 % on undivided roads; superelevation from curvature, capped at 4 %.
+   - Shoulder 1.5 m.
+   - Then a class-dependent **domain of influence** (3–15 m) blending to the untouched terrain, with a maximum cut/fill slope of 1:1.5 (the BeamNG Road Architect model).
+5. **Junction surfaces.**
+   - Offset the incoming edge boundaries (Clipper2, miter with bevel fallback), intersect adjacent offsets, and trim edges back to the collision points (A/B Street's algorithm).
+   - The junction polygon's height is a least-squares plane through the incoming edge ends.
+   - Triangulate with earcut after Clipper cleanup (earcut needs non-self-intersecting rings).
+6. **Carving (per `terrain.height` tile, reading every edge and junction touching the tile plus halo).**
+   - Rasterise road surfaces (inside the footprint the road wins), then shoulders, then the blend band.
+   - Where two roads' influence overlaps, the lowest road wins (BeamNG), producing embankments that a bridge then spans.
+   - Write `SurfaceKind` per cell.
+   - Order: road class, then `EdgeId`.
+7. **Bridges.**
+   - The deck follows the fitted profile between the abutments. The terrain beneath is not carved (DGM1 is bare earth).
+   - Deck plus parapets become a render mesh and a static collision mesh.
+   - Deck ends overlap the carved approach by 1 m and sit 2 cm below it, so a wheel rolls on without a step.
+8. **Tunnels:** v1 renders the road through, with the terrain above kept and the tunnel not drivable. Later: heightfield holes at the portals plus a tunnel mesh. How many tunnels the region has on through routes is [unverified]; the tiler reports statistics in G3.
+9. **Markings (client-side render only):** lane, edge and stop lines from lanes/oneway/turn:lanes; patterns by class from German marking rules as data.
+
+On lidar data this mostly removes noise. On GLO-30 it is what makes a road drivable at all.
+
+### 6.4 `g2m.terrain.class` and `g2m.features`
+
+- **Land class:**
+  - OSM `landuse`/`natural`/`leisure` polygons first; WorldCover where OSM has nothing; water and buildings from OSM.
+  - 1 m near roads, 8 m elsewhere.
+- **Buildings:**
+  - Footprints with `height`; else `building:levels × 3 m` + roof; else a per-type default with deterministic variation.
+  - `roof:shape` for simple footprints; base height = minimum terrain under the footprint.
+- **Water:** polygons with a surface height = minimum shoreline height.
+
+### 6.5 Client-side derivations (never served)
+
+- **Terrain render chunks:**
+  - quadtree LOD, 64×64 quads per chunk at every level, skirts;
+  - normals, and 4 material weights from land class;
+  - L0 only within ~150–250 m, coarser outward to 20 km.
+  - They use the same `terrain.height` samples physics uses ("no second height source").
+- **Road ribbons** per edge and junction: u across, v in metres along; material by surface; marking decal mesh.
+- **Buildings:** merged mesh per 256 m tile, 3 LODs.
+- **Vegetation:** blue-noise scatter from `terrain.class` plus `natural=tree`/`tree_row`, with a seeded hash. Output: instance lists (position, yaw, scale, species).
+- **Map geometry:** simplified polylines by road class with widths and names, land-class polygons, water, building outlines at high zoom, label anchors.
+- **Physics tiles:** in the bridge (8.1).
+
+---
+
+## 7. Client: streaming, cache, budgets
+
+### 7.1 Interest points and radii (initial values; tuned in R9)
+
+| Product | Source layer(s) | Radius per interest point |
+|---|---|---|
+| Physics heightfield (bridge) | `terrain.height` L0, `terrain.class` | 400 m per vehicle (derived data kept to 600 m, plus look-ahead along velocity) |
+| Bridge and building collision | `roads.geom`, `features` | 300 m per vehicle |
+| Road graph | `roads.graph` | 3 km, plus on-demand along an active route |
+| Terrain render | `terrain.height` L0–L6 | L0 ≤ 250 m ... L6 to 20 km |
+| Road meshes | `roads.graph`, `roads.geom` | 2 km |
+| Buildings | `features` | 3 km (3 LODs) |
+| Vegetation | `terrain.class`, `features` | 1.5 km, plus an impostor band |
+| Minimap / full map | graph, class, features | 2 km / on demand |
+
+- The game sets one interest point per vehicle and one for the camera.
+- Vehicle points are also forwarded to `World::set_terrain_interest_point` (the adapter already does this per vehicle).
+
+### 7.2 Client cache
+
+- **One SQLite database** (public domain, single file, crash-safe) with table `tiles(rid, layer, scheme, level, x, y, hash, bytes|blob_ref, last_used, pinned, sources)`.
+  - Blobs over 256 KB go to a content-addressed file store next to it (`ab/cd/<hash>`).
+- **Dedup:** tiles unchanged between releases share their blob by hash.
+- **Eviction:** LRU with a size cap (default 5 GB, set in settings). Pinned regions (e.g. home, downloaded via packs from the settings menu) are never evicted.
+- **Integrity:** the hash is checked on every read. A mismatch drops the entry and refetches.
+- **The integrated server has its own stores** (raw source store and derived store) in the same cache directory, with their own caps (default 20 GB for sources).
+- **Offline or degraded:** if a tile is unavailable, fall back to the next coarser level of the same layer, or to `elev.base` without roads. The item is flagged `degraded` for the UI.
+  - Physics never receives a guessed tile (8.2).
+
+### 7.3 Threading and budgets on the Ryzen 9 5900X (12 cores / 24 threads)
+
+- **physics_sim:** its pool defaults to physical cores − 2 = 10 workers, plus the sim thread.
+- **Godot:** main thread plus render thread.
+- **g2m:** its own pool of 3 low-priority workers for network I/O completion, decoding, local derivation and mesh building.
+  - physics_sim's job system has no priorities or background jobs (PLAN.md D9), and multi-millisecond derivation jobs would delay 240 Hz ticks.
+- **Main thread:**
+  - GPU uploads through `RenderingServer` (Godot's thread-safety rules; multithreaded mesh calls have known deadlocks, research);
+  - capped at ~1 ms per frame, measured as a telemetry channel next to the adapter's own frame time;
+  - PLAN.md's adapter budget is < 1 ms of its own work.
+- **Physics:**
+  - `max_tile_fills_per_tick` of 1–2 for 256² tiles; the `SetHeights` cost for 256² is unmeasured (the existing bench uses smaller tiles).
+  - At most 1 prebuilt static body add per tick (R2).
+  - A hypercar at ~100 m/s crosses a 255 m tile every 2.5 s: ~2 new tiles/s on the front of a 400 m radius, far within 240 fills/s.
+- **Fixed material set,** plus Godot ≥ 4.4 ubershaders and background pipeline compilation, to avoid first-draw stutter.
+
+### 7.4 Loading and teleports
+
+- A session start or teleport waits until three things are resident:
+  - physics tiles under every vehicle;
+  - the road graph tile;
+  - L0–L2 render chunks around the camera.
+- The loading screen shows progress per layer and the attribution for the area.
+
+### 7.5 C API boundary (for UE5 and other engines)
+
+- **ABI.**
+  - Plain C (`g2m_c/g2m.h`), opaque handles, POD structs.
+  - Every struct starts with a `size` field and is append-only; new fields never break old plugins.
+  - `g2m_version()` returns semver.
+- **Lifecycle.**
+  - `g2m_server_create(config_json)` gives an in-process server.
+  - `g2m_client_create(config_json, transport)`, where the transport is in-process (a server handle) or HTTP (a base URL + host fetcher).
+- **Host fetcher.**
+  - Remote servers are reached through callbacks the host provides: `fetch(url, headers, ticket)`, completed later via `g2m_fetch_complete(ticket, status, headers, bytes, len)`.
+  - Godot implements it with `HTTPClient`, Unreal with `FHttpModule`, and tools with the bundled libcurl.
+  - The library needs no TLS stack in the game.
+- **Threading.**
+  - The library's own pool does all work. Host callbacks are never invoked on worker threads.
+  - The host calls `g2m_client_poll(max_items, budget_us)` from one thread and receives completed items there, in deterministic order: product, then level, then key.
+  - All other calls are thread-safe.
+- **Memory.**
+  - Every produced item (terrain chunk, road mesh, instance list, map geometry, graph tile) is immutable, refcounted and owned by the library.
+  - `g2m_item_view()` returns pointers plus counts, plus a `double origin[3]` in session-frame metres, valid until `g2m_item_release()`.
+  - The host copies into GPU buffers and releases. No allocator is imposed.
+- **Errors.** Only setup calls fail with an error code plus message. Streaming reports per-item status; no exception ever crosses the C boundary.
+- **Async requests.**
+  - `g2m_client_set_interest(id, xyz, radii_by_product)` and `g2m_client_request(layer, key) -> ticket` (the latter for tools and the bridge).
+  - `g2m_client_cancel(ticket)`.
+
+---
+
+## 8. Physics bridge and the collision decision
+
+### 8.1 `G2mTerrainSource : ps::terrain::ITerrainSource`
+
+- `tile_size_m() = 255`, `samples_per_tile() = 256`.
+- `TileKey.packed` = (ix, iy) of the session 255 m grid; the zone is fixed per session.
+- `fill_tile`:
+  - copies samples from the resident immutable `terrain.height` tiles (up to 4 g2m tiles per physics tile);
+  - writes heights relative to the tile's datum, with `tile_origin_xy.z` = datum (needs R1);
+  - maps `SurfaceKind`/`LandClass` to `SurfaceId` by name through the game's table.
+- `TerrainConfig`:
+  - `suppress_terrain_under_static_geometry = false`;
+  - `max_resident_tiles` sized from the radius (~40 at 400 m);
+  - `max_tile_fills_per_tick` from the G2 measurement.
+
+### 8.2 Guarantees
+
+- **A vehicle only runs where its physics tiles are filled.** If a tile is late (network, derivation queue), the game freezes the session clock and shows "streaming" instead of letting the car fall. Tile availability then never changes physics results, only when the session advances.
+- **Streamed static bodies** (bridge decks, building shells) are added and removed between ticks on the sim thread, in sorted key order, at ticks decided by vehicle position (deterministic).
+
+### 8.3 Roads in the heightfield vs static road meshes (decision)
+
+| | Carve into heightfield (chosen) | Static road mesh bodies |
+|---|---|---|
+| Geometry | 1 m cells; crown and banking fine; kerbs not representable | exact ribbon, kerbs possible |
+| Seams | none added | road/terrain coincident surfaces: the PHYS-021 flicker class; suppression only works at z = 0 today |
+| Streaming cost | none beyond terrain tiles | mesh bodies per tile; Jolt BVH build on the sim thread (until R2); broadphase churn; whole-cache suppression wipe per add |
+| Surface ids | per 1 m cell (stair-stepped at road edges) | per triangle |
+| Physics changes | R1 | R1, R2, plus non-zero-height suppression |
+
+The carve-in wins for v1 because it adds no new seam or streaming risk. Bridges stay meshes because they lie above other surfaces, and they are rare. Revisit for a track mode that needs kerbs.
+
+### 8.4 Surfaces
+
+- The game ships its own surfaces file, a superset of physics_sim's names. It adds `cobblestone`, `concrete`, `gravel` and `paving_stones`, with sourced λµ/crr values.
+- It also ships a `g2m SurfaceKind/LandClass -> surface name` table.
+- Ids are resolved by name at load. The haptics surface table is name-keyed too (PHYS-042), so new surfaces only need rows.
+
+---
+
+## 13. Downloads and installs for owner approval
+
+Nothing below has been downloaded or installed. The setup scripts will install or fetch only items on an approved list. Sizes are approximate; [unverified] where no primary figure was found.
+
+**Already installed (verified this session): no action.** VS 2022 Build Tools (clang-cl, cl), CMake, Ninja, Git 2.54, Python (`py`), `curl.exe`, Godot 4.7.2 (winget), WSL with clang/lld.
+
+**Source dependencies (FetchContent at configure time; pinned tags):**
+
+| Item | Licence | Approx. size | Used by |
+|---|---|---|---|
+| godot-cpp branch 4.5 | MIT | ~30 MB source [unverified] | game extension (physics_sim already fetches it) |
+| SQLite amalgamation 3.x | public domain | ~3 MB zip [unverified] | client cache, server stores |
+| zstd | BSD (dual BSD/GPLv2; use BSD) | ~2.5 MB [unverified] | tile compression |
+| libdeflate | MIT | ~0.5 MB [unverified] | DEFLATE in TIFF/COG |
+| Clipper2 | BSL-1.0 | ~1 MB [unverified] | road offsets, junctions |
+| earcut.hpp | ISC | < 0.1 MB | polygon triangulation |
+| cpp-httplib | MIT | ~0.5 MB, one header | HTTP server (sidecar/hosted) |
+| libcurl (Schannel on Windows, OpenSSL on Linux) | curl (MIT-like) | ~4 MB source [unverified] | tools, server upstream fetches (not in the game) |
+| libosmium + protozero | BSL-1.0 / BSD-2 | ~2 MB [unverified] | `g2m_tiler` only |
+| zlib-ng | zlib | ~1 MB | libosmium PBF (tiler only) |
+| GeographicLib (test data generation only) | MIT | ~2 MB [unverified] | G0 reference values |
+| later, only if needed: libwebp (decode) | BSD-3 | ~4 MB [unverified] | Mapterhorn WebP (G8) |
+| later: vtzero + protozero | BSD-2 | < 1 MB | MVT/PMTiles basemaps, if ever |
+
+**Datasets (dev machine, integrated server; 5.4/5.5):**
+
+| Item | Licence | Approx. size | How |
+|---|---|---|---|
+| Hessen DGM1: Main-Taunus-Kreis, Hochtaunuskreis, Frankfurt am Main | dl-de/zero-2-0 | 1.1–2.6 GB [estimate] | manual download from gds.hessen.de (JS portal, no automatable URL found) |
+| Geofabrik `hessen-latest.osm.pbf` | ODbL 1.0 | 329 MB | setup script, once (Geofabrik fair use) |
+| Copernicus GLO-30 N50E008 (+ N49E008 if needed) | Copernicus DEM licence | 25–40 MB each [unverified] | range reads (or one download) from AWS open data |
+| ESA WorldCover v200 N48E006 map | CC BY 4.0 | ~47 MB average [estimate] | range reads (or one download) from AWS open data |
+| CC0 dev textures (13 sets, 2K) from ambientCG / Poly Haven | CC0 1.0 | 150–400 MB [estimate] | setup script, listed per asset |
+| Hessen LoD2 for the region (optional, G5+) | dl-de/zero-2-0 | unknown [unverified] | manual |
+
+**Later (hosted server, G7/G8; each approved separately at that time):**
+- Germany DGM1, all states: 0.4–1 TB as delivered [estimate].
+- Geofabrik Germany extract (~4 GB [unverified]) or the OSM planet (~80–90 GB [unverified]).
+- WorldCover global: 124 GB.
+- Mapterhorn planet PMTiles z0–12: ~120 GB.
+- GLO-30 global mirror (size [unverified]).
+- Accounts/services: object storage + CDN, compute VM(s), domain + TLS. Choice per D3.
+
+---
+
+## References
+
+**physics_sim (read-only):**
+- `PLAN.md`: sections 1, 3 (D1–D10), 6 seams, P2 front-end targets, M1, P4 HUD, P8 seam spike, P9 budgets, P11, section 8.
+- `core/include/ps/terrain/terrain_source.h`, `terrain_config.h`
+- `core/src/terrain/tile_manager.{h,cpp}`
+- `core/src/backend/jolt/jolt_backend.cpp`
+- `core/include/ps/backend/shape_desc.h`
+- `core/include/ps/world/world.h`
+- `core/src/io/vehicle_io.cpp`
+- `adapters/godot/{CMakeLists.txt, src/*, demo/*}`
+- `data/models/car_hyper/car_hyper.rig.json`, `data/vehicles/car_sedan.json`, `data/surfaces/surfaces.json`
+- Vault: PHYS-003, -008, -009, -011, -021, -025, -026, -032, -035, -042; TOOL-023.
+
+**OSM and vector data:**
+- https://wiki.openstreetmap.org/wiki/Overpass_API
+- https://operations.osmfoundation.org/policies/tiles/
+- https://operations.osmfoundation.org/policies/nominatim/
+- https://opendatacommons.org/licenses/odbl/1-0/
+- https://osmfoundation.org/wiki/Licence/Community_Guidelines/Produced_Work_-_Guideline
+- https://osmfoundation.org/wiki/Licence/Attribution_Guidelines
+- https://download.geofabrik.de/europe/germany/hessen.html
+- https://download.geofabrik.de/technical.html
+- https://docs.overturemaps.org/guides/transportation/
+- https://docs.overturemaps.org/schema/reference/transportation/segment/
+- https://docs.overturemaps.org/attribution/
+- https://docs.protomaps.com/basemaps/downloads
+- https://docs.protomaps.com/basemaps/layers
+- https://github.com/mapbox/vector-tile-spec
+- https://openmaptiles.org/schema/
+- https://valhalla.github.io/valhalla/concepts/tiles/
+- https://developers.cloudflare.com/r2/pricing/
+
+**Elevation and land cover:**
+- https://hvbg.hessen.de/landesvermessung/geotopographie/3d-daten/digitale-gelaendemodelle
+- https://hvbg.hessen.de/geoinformation/open-data
+- https://metaver.de/trefferanzeige?docuuid=dbf48a95-b44d-48b3-a5b4-981e4c1bd8e6
+- https://hvbg.hessen.de/landesvermessung/geotopographie/3d-daten/3d-gebaeudemodelle
+- https://gds.hessen.de/INTERSHOP/web/WFS/HLBG-Geodaten-Site/de_DE/-/EUR/ViewDownloadcenter-Start
+- https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/dgm1_tiff/
+- https://geodaten.bayern.de/opengeodata/OpenDataDetail.html?pn=dgm1
+- https://registry.opendata.aws/copernicus-dem/
+- https://copernicus-dem-30m.s3.amazonaws.com/readme.html
+- https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM
+- https://registry.opendata.aws/terrain-tiles/
+- https://github.com/tilezen/joerd/blob/master/docs/formats.md
+- https://mapterhorn.com/data-access/
+- https://download.mapterhorn.com/attribution.json
+- https://protomaps.com/blog/mapterhorn-terrain/
+- https://registry.opendata.aws/esa-worldcover-vito/
+- https://esa-worldcover.s3.eu-central-1.amazonaws.com/readme.html
+- https://land.copernicus.eu/en/products/products-that-are-no-longer-disseminated-on-the-clms-website
+- https://meetingorganizer.copernicus.org/EGU22/EGU22-8994.html
+
+**Libraries:**
+- https://geographiclib.sourceforge.io/C++/doc/classGeographicLib_1_1TransverseMercator.html (Karney, J. Geodesy 85(8), 2011)
+- https://proj.org/en/stable/install.html
+- https://github.com/AngusJohnson/Clipper2
+- https://github.com/mapbox/earcut.hpp
+- https://github.com/mapbox/vtzero
+- https://github.com/mapbox/protozero
+- https://github.com/ebiggers/libdeflate
+- https://github.com/randy408/libspng
+- https://github.com/webmproject/libwebp
+- https://gdal.org/en/stable/drivers/raster/cog.html
+- https://github.com/yhirose/cpp-httplib
+- https://github.com/curl/curl/blob/master/docs/INSTALL-CMAKE.md
+- https://github.com/facebook/zstd
+
+**Road geometry:**
+- https://a-b-street.github.io/docs/tech/map/geometry/index.html
+- https://documentation.beamng.com/world_editor/tools/road_architect/terraforming/
+- https://publications.pages.asam.net/standards/ASAM_OpenDRIVE/ASAM_OpenDRIVE_Specification/latest/specification/10_roads/10_05_elevation.html
+- https://github.com/ebertolazzi/Clothoids
+- https://arxiv.org/pdf/1209.0910
+- https://github.com/tordanik/OSM2World/pull/176
+- https://carla.readthedocs.io/en/0.9.11/tuto_G_openstreetmap/
+
+**Godot and textures:**
+- https://docs.godotengine.org/en/4.4/tutorials/physics/large_world_coordinates.html
+- https://docs.godotengine.org/en/latest/tutorials/performance/thread_safe_apis.html
+- https://github.com/godotengine/godot/issues/90461
+- https://docs.godotengine.org/en/stable/tutorials/performance/pipeline_compilations.html
+- https://github.com/TokisanGames/Terrain3D
+- https://docs.godotengine.org/en/4.4/classes/class_httpclient.html
+- https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/HTTP/FHttpModule
+- https://docs.ambientcg.com/license/
+- https://polyhaven.com/license
