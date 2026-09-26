@@ -474,6 +474,8 @@ in the vault.
   Retry-After = derivation queued" of 3.4 arrives with the hosted server.
   Packs answer 200 / 404 / 503, with a state per entry (NotFound, Present,
   Unavailable, Degraded).
+  (See 3.11 for G1c's `g2m_tiler`/`g2m_import`, which populate the source
+  store this section's resolver reads from.)
 - **Tile rid.** A tile response's container always carries the requested
   release's rid, even when the body came from the cache or an upstream
   under another release. Bodies are shared, headers are per release.
@@ -499,6 +501,203 @@ in the vault.
   `tests/fuzz_formats/`, because `tests/fuzz/` belongs to G1b's decoders.
   They run on the `linux-release` and `linux-asan-ubsan` legs, not on
   `linux-tsan`.
+
+### 3.11 G1c as built: deviations from 2.2, 5.4 and 5.5 (2026-09-26)
+
+Seven increments (I1-I7): exact polygon geometry and the region format
+(I1); the `g2m_import` library skeleton, `apps/g2m_tiler` and the region
+resolver (I2); nested-zip access, the DGM1 catalogue and the DEM importer
+(I3); `OsmClipIndex` and the OSM importer (I4); the WorldCover importer
+(I5); the G1c golden, fuzz seeds and end-to-end docs (I6); the real home
+region import, this section, and marking 5.5 done (I7). The design
+records (D1-D24) are in the vault (G2M-005); this section is deviations
+and measured numbers only.
+
+- **Repository layout.** `g2m_import` (`include/g2m/import/`,
+  `src/import/`) is a new library 2.2/2.3 did not anticipate - region
+  resolution, the tile-write seam (`ITileSink`/`StoreSink`/`MemorySink`),
+  the ordered-parallel driver and the three importers (dem/osm/landcover),
+  kept out of `g2m_layers`/`g2m_server` on purpose (D22) so importers never
+  pull in server/decode-thread concerns. `include/g2m/core/geom/` (exact
+  integer predicates, ring assembly) and `include/g2m/layer/region.h` are
+  likewise new. Of 2.2's planned `apps/`, only `apps/g2m_tiler` is built;
+  `g2m_server` and `g2m_cli` remain unbuilt placeholders - everything 2.3
+  assigned to `g2m_cli` ("derive/dump/hash tiles, run golden checks,
+  pack/prebake a region") that G1c needed lives in `g2m_tiler`'s own
+  subcommands instead (`stats`, `index-hash`).
+- **Geometry (D1, D2).** Polygon assembly, point-in-polygon and
+  tile/segment/distance tests are our own exact-integer code
+  (`core/geom/exact.h`, `ring_set.h`, `ring_assembly.h`), not Clipper2
+  (double/int64, missing predicates), Boost.Geometry (heavy) or osmium's
+  area assembler (heavy, version-dependent) - it only needed the handful
+  of predicates `osm_clip.cpp` already had, generalised. Ring nesting is
+  even-odd depth, not trusted OSM member roles (D2): robust to real role
+  errors, which are reported (`role_mismatches`) rather than trusted. The
+  three real home relations resolve with `role_mismatches == 0` (a hard
+  CHECK since I3), but the mismatch-tolerant path is what fixture tests
+  exercise.
+- **Region identity and Höchst (D6, D7).** `g2m.regions/1` identifies an
+  `osm_admin` part by relation id, with `expect_name`/`expect_admin_level`
+  as a drift check, not a name lookup; unknown JSON keys are rejected
+  (D5, a hand-written config). Frankfurt-Höchst is the Stadtteil relation
+  4209939 (admin_level 10, ~5 km², matching 5.4's "~5 km²" estimate), not
+  the Ortsbezirk 6 "West" relation 11042428 (admin_level 9, ~30 km²,
+  covering nine Stadtteile) - the Stadtteil adds only 56 tiles with the
+  2 km halo.
+- **`regions.json`'s location.** 5.5 step 3 names a repo-local
+  `data/world/regions.json`; geo2map_engine has no such directory for
+  game-world content, and the coordinator owns `racing_game` too, so I7
+  commits `S:\claude_code\racing_game\data\world\regions.json` there
+  instead (`racing_game/CLAUDE.md` gained one Layout line for it).
+- **CLI shape (deviation from 5.5 step 3's literal command).** The step-3
+  text `g2m_tiler import --region data/world/regions.json#home` does not
+  match the CLI as built: the region selector is a positional `PATH#NAME`
+  argument, there is no `--region` flag, and there is no `$G2M_DATA_DIR`-
+  style default data directory - every source path is explicit. I7's
+  actual invocation (paths shortened):
+  ```
+  g2m_tiler import "racing_game/data/world/regions.json#home" \
+    --pbf ".../hessen-latest.osm.pbf" --store ".../geo2map_cache/home" \
+    --scope home-2026-09 --dem-data ".../dgm1" --tif ".../ESA_WorldCover_...tif" \
+    --jobs 12 --pin
+  ```
+  This also means `g2m_tiler import` writes all three raw layers
+  (elevation, OSM, landcover) in one pinned pass; 5.5's own text has
+  landcover arrive later, lazily, via range-read derivation (step 4) -
+  G1c's offline tiler eagerly imports a local WorldCover COG instead,
+  since the hosted/integrated server's range-read path does not exist yet.
+- **Pin flag (I2-I6 said "add when needed").** I2-I6 hardcoded
+  `StoreSink`'s `pin` to `false`. I7 adds a `--pin` boolean CLI switch
+  (default off) to `import`/`import-dem`/`import-osm`/`import-landcover`,
+  plumbed straight to the existing `StoreSink(store, scope, pin)`
+  constructor from I6. The argv parser moved out of `main.cpp` into a new
+  header-only `apps/g2m_tiler/cli_args.h` (so `tests/unit/
+  test_tiler_cli_args.cpp` can include it directly, no second CMake
+  target) and gained an opt-in `bool_flags` list, making a named flag a
+  presence-only switch instead of consuming the next token as its value;
+  every pre-existing value-flag's behaviour is unchanged (regression-
+  tested). Two more I7 additions: `g2m_tiler stats` now also runs and
+  reports `check_consistency` (previously a separate, unexposed call);
+  a new `index-hash --store DIR --scope SCOPE` subcommand prints a
+  per-layer and overall FNV-1a64 over the store's `(layer, key,
+  body_hash)` index in its own sorted order, for the `--jobs`-independence
+  check below.
+- **Quantisation (Q3, unresolved).** Both quantisers are kept: the
+  pre-existing `quantise_height` (`llround`, ties away from zero) is
+  untouched everywhere else; the DGM1 importer uses the new half-even
+  `quantise_height_half_even` (ties to even, rounding-mode independent).
+  Unifying the two was explicitly deferred to a later increment - **open
+  item**, not attempted in G1c.
+- **OSM (D13, D14, D15).** `extract_region_set` builds its own sorted
+  structure-of-arrays node-location index (16 B/node, ~0.6 GB for all of
+  Hessen) instead of osmium's `NodeLocationsForWays` - deterministic and
+  measurable, but does not scale to all of Germany (revisit in G8).
+  `OsmClipIndex` is a precomputed per-tile-clip index equivalence-tested
+  byte-for-byte against `clip_osm` (kept as the oracle), roughly 1000x
+  less work than calling `clip_osm` per tile. Incomplete ways (an
+  unresolvable node ref) are dropped and counted (`ways_incomplete`),
+  never repaired.
+- **Landcover fixtures.** Two committed WorldCover fixture TIFFs, not one
+  (`worldcover/fixture_N50E008_hoechst.tif`, `..._bbox.tif`) - the fixture
+  region's two disjoint shapes (a Höchst-relation polygon and a separate
+  `utm_bbox` part, ~11 km apart) do not both fit inside one realistically
+  sized ESA WorldCover crop.
+- **Fixtures and fuzz seeds (D19-D21).** Real, small, committed cuts (a
+  test-only `g2m_fixture_cut` tool, never shipped) rather than synthetic
+  data alone: 6 fixture files, 7,855,376 bytes, under the 8 MiB test
+  budget; committed fuzz seed corpora for zip/tiff/pbf
+  (`testdata/fuzz_seeds/`).
+- **G1c golden.** `tests/golden/golden_g1c.cpp` /
+  `testdata/golden/g1c_golden.txt`: `all 122 e7947b8adb8e5b47`, identical
+  on all 7 CI legs since I6.
+
+**I7 measured numbers** (home region: Main-Taunus-Kreis + Hochtaunuskreis
++ Frankfurt-Höchst, halo 2000 m; release build, `--jobs 12`, real data
+under `S:\claude_code\geo2map_data` (read-only), store
+`S:\claude_code\geo2map_cache\home`, scope `home-2026-09`):
+
+| Measurement | Expected (I7 plan) | Measured | Note |
+|---|---|---|---|
+| Tile count | 1085 ± 15 | **1085** | exact |
+| Interior tiles | >= 520 | **533** (51 interior runs) | matches I2/I3's own dress-rehearsal figure exactly |
+| DEM full / partial / no-coverage | ~900 / ~100 / ~85 | **850 / 150 / 85** | no-coverage exact; full/partial split off by 50 tiles each (~4.6%) - see below |
+| DEM NoData in interior tiles | 0 | **0** | `tiles_skipped_allnodata=0`; interior tiles all have full km-tile coverage (plan's own measured input) |
+| DEM duplicate keys / needed km tiles | ~412 keys | **412 keys**, `km_decoded=1176` | both match the plan's measured inputs exactly (412 needed keys duplicated; home needs 1176 km tiles) |
+| DEM dup_copies / dup_identical / dup_differing | "~1490 copies", dup_differing reported | **490 extra copies** (902 total copies over the 412 dup keys), **396 identical**, **16 differing** | differing copies are logged by name (PKT source + inner-zip entry); see Deviations below for the "1490" reconciliation |
+| OSM ways_incomplete | 0 | **0** | matches I4 exactly |
+| OSM nodes/ways/relations | (I4 baseline) | 31,958,253 total / 2,310,058 in / 439,145 ways / 8,448 relations | bit-for-bit same as I4's dress rehearsal |
+| Landcover tiles written | ~1085 | **1085** | `tiles_skipped_allzero=0` |
+| Peak RSS (every importer) | < 4 GB | **1873 MiB** combined run; 1433 MiB (DEM alone), 1864 MiB (OSM alone) | well under bound |
+| Wall time (jobs 12, total) | < 5 min | **126.96 s** (~2.1 min) | resolve 10.7 s, dem 58.3 s, osm 55.1 s, landcover 2.9 s |
+| Store size: DEM / OSM / landcover | 0.5-1.1 GB / 30-100 MB / 5-30 MB | **689.6 MB / 80.2 MB / 1.42 MB** | DEM and OSM in range; **landcover below range** - see below |
+| `check_consistency` | OK | **OK** | |
+| All tiles pinned | yes | **yes** (`pinned_tiles=3170 == tiles=3170`) | |
+| `--jobs 1` vs `--jobs 12` index-hash | identical | **identical** (all layers and the overall `all` hash) | see `index-hash` below |
+
+Two measurements needed a short investigation (not threshold-tuning):
+
+- **DEM full/partial split (850/150 vs "~900/~100").** The combined
+  covered count (1000) and the no-coverage count (85) both match the plan
+  exactly; only the split between "every km tile present" (full) and
+  "some km tiles missing" (partial) shifted by 50 tiles either way. The
+  home region resolves against real, irregular admin-boundary geometry
+  (not a synthetic bounding box), which puts more L2 tiles astride the
+  2 km-halo edge - where a km tile is more likely to be missing from the
+  DGM1 catalogue's coverage - than the plan's estimate assumed. Not
+  investigated further: both halves of Q2's ruling (accept the halo gaps
+  until GLO-30 fills them in G2) already cover this range either way.
+- **Landcover store size (1.42 MB vs the planned 5-30 MB).** Every
+  landcover tile got its own body (`bodies=1085` for `tiles=1085` - no
+  cross-tile deduplication happened), so the small size is compression,
+  not dedup. A level-2 tile is 1024 m at WorldCover's 10 m pixel size, so
+  roughly 100x100 = 10,000 one-byte class cells (~10 KB raw) per tile,
+  ~11 MB raw for 1085 tiles - in the planned range. The real Rhein-Main
+  landscape (large homogeneous farmland/forest/built-up patches) is
+  evidently compressing at roughly 8x under the store's generic body
+  compression, landing well under the plan's estimate. Not a bug, and not
+  investigated further - a data-dependent compression ratio, consistent
+  with DEM (continuous, less compressible terrain data landing at the
+  upper part of its own range) and OSM (near the upper end of its range
+  too) behaving as expected.
+- Reconciling "~1490 copies": the plan's own shorthand almost certainly
+  meant "1000 available km keys, realized as 1490 total copies when
+  duplicates are summed" (1000 + 490 extra = 1490) rather than
+  `dup_copies` alone (490, the count of *extra* copies beyond the first);
+  `dup_keys=412` matches either reading exactly. Not chased further since
+  neither reading changes any pass/fail outcome.
+
+**`index-hash` determinism check (Step 3).** A second import, same
+inputs, `--jobs 1` (473.9 s wall, vs. 127.0 s at `--jobs 12` - single-
+threaded DEM decode dominates), into a scratch store under
+`geo2map_engine/out/scratch_home_jobs1` (deleted immediately after this
+comparison; store stats identical too: `tiles=3170 body_bytes=771279516
+pinned_tiles=3170`, `check_consistency OK`):
+
+```
+                     jobs=12 and jobs=1 (identical):
+g2m.src.elev.dgm1 1000 ac05f9dc40e9c159
+g2m.src.landcover 1085 358b31f4156733cd
+g2m.src.osm       1085 788472aac3d7543d
+all               3170 3c62cd447a6082e1
+```
+
+Every layer hash and the overall `all` hash matched exactly between the
+two runs - the importer's output is `--jobs`-independent, as designed
+(`ordered_for`, D12).
+
+**Open items.**
+- Unify (or formally keep) the two height quantisers (Q3) - undecided.
+- The DGM1 halo gaps (85 no-coverage L2 tiles, ~150 partial, all in the
+  2 km halo; interior tiles have full coverage) are accepted until GLO-30
+  fills them in G2 (Q2) - not fixed here.
+- 5.5 steps 4-5 (GLO-30/WorldCover on-demand derivation via range-reads,
+  `g2m_cli prebake`) and `apps/g2m_server`/`apps/g2m_cli` themselves remain
+  unbuilt; only step 3 (the tiler import) is done - see the 5.5 annotation
+  below.
+- `g2m_fixture_cut` (a maintainer-only tool, never CTest-run) still
+  catches an exception by reference and calls `.what()` on it (TOOL-019
+  hazard) - inert because it never runs under ASan in CI, left as-is per
+  I6's own notes.
 
 ---
 
@@ -647,6 +846,12 @@ Principles:
 3. `g2m_tiler import --region data/world/regions.json#home`:
    - takes the district polygons from the extract's admin boundaries plus a 2 km margin;
    - writes `g2m.src.elev.dgm1` and `g2m.src.osm` tiles into the integrated server's source store, marked pinned.
+   - **Done (G1c I7, 2026-09-26): see 3.11.** The actual command differs
+     from this literal text (positional region selector, no `--region`
+     flag, explicit source paths, `racing_game/data/world/regions.json`
+     instead of a repo-local path) and also imports landcover in the same
+     pass rather than deferring it to step 4 - see 3.11's CLI-shape and
+     landcover-timing deviations. Steps 4-5 below are NOT done.
 4. On first derivation, GLO-30 and WorldCover are range-read for the region and cached as pinned raw tiles.
 5. `g2m_cli prebake --region home` derives all baked layers into the derived store (0.5–1.1 GB, pinned). The region is then fully offline-capable.
 

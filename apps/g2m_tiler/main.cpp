@@ -12,13 +12,22 @@
 //   import PATH#NAME --pbf PATH --store DIR --scope SCOPE
 //          (--pkt PATH [--pkt PATH ...] | --dem-data DIR)
 //          (--tif PATH [--tif PATH ...] | --wc-data DIR)
-//          [--jobs N] [--km-cache N]
+//          [--jobs N] [--km-cache N] [--pin]
 //          (I5: resolve -> import-dem -> import-osm -> import-landcover in
 //          one call, writing <store>/regions/<name>.resolved.json and
-//          <store>/import_report_<scope>.json)
+//          <store>/import_report_<scope>.json. I7: --pin forwards to every
+//          StoreSink::put this run makes, so nothing it writes is ever
+//          evicted - see sink.h's own StoreSink pin parameter, G1c I6 item E)
 //   stats --store DIR [--scope SCOPE]
+//         (also runs TileStore::check_consistency and prints its result)
+//   index-hash --store DIR --scope SCOPE
+//          (G1c I7: per-layer FNV-1a64 over the store's (key, body_hash)
+//          index in TileStore::index's own (layer, key) order - a
+//          --jobs-independent, filesystem-enumeration-independent
+//          fingerprint for comparing two stores built from the same import)
 //
 // Exit codes: 0 success, 1 usage/runtime error, 2 "not implemented yet".
+#include "cli_args.h"
 #include "rss.h"
 
 #include "g2m/decode/dgm1.h"
@@ -27,6 +36,7 @@
 #include "g2m/import/osm.h"
 #include "g2m/import/region_resolve.h"
 #include "g2m/layer/region.h"
+#include "g2m/core/hash.h"
 #include "g2m/server/tile_store.h"
 
 #include <algorithm>
@@ -44,38 +54,7 @@
 
 namespace {
 
-struct Args {
-    std::vector<std::string> positional;
-    std::vector<std::pair<std::string, std::string>> flags; // --key value
-
-    std::optional<std::string> get(const std::string& key) const {
-        for (const auto& [k, v] : flags) {
-            if (k == key) return v;
-        }
-        return std::nullopt;
-    }
-};
-
-// Parses argv[from..] as "--flag value" pairs interspersed with positional
-// arguments (a flag always consumes exactly one following value - none of
-// this CLI's flags are boolean switches).
-Args parse_args(int argc, char** argv, int from) {
-    Args out;
-    for (int i = from; i < argc; ++i) {
-        const std::string arg = argv[i];
-        if (arg.size() > 2 && arg[0] == '-' && arg[1] == '-') {
-            const std::string key = arg.substr(2);
-            if (i + 1 >= argc) {
-                out.flags.emplace_back(key, "");
-                continue;
-            }
-            out.flags.emplace_back(key, argv[++i]);
-        } else {
-            out.positional.push_back(arg);
-        }
-    }
-    return out;
-}
+using g2m_tiler::Args;
 
 std::optional<std::string> read_file(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
@@ -150,15 +129,16 @@ int usage() {
                  "  resolve PATH#NAME --pbf PATH --out PATH\n"
                  "  import-dem --resolved PATH --store DIR --scope SCOPE\n"
                  "             (--pkt PATH [--pkt PATH ...] | --data DIR)\n"
-                 "             [--jobs N] [--km-cache N]\n"
-                 "  import-osm --pbf PATH --resolved PATH --store DIR --scope SCOPE [--jobs N]\n"
+                 "             [--jobs N] [--km-cache N] [--pin]\n"
+                 "  import-osm --pbf PATH --resolved PATH --store DIR --scope SCOPE [--jobs N] [--pin]\n"
                  "  import-landcover --resolved PATH --store DIR --scope SCOPE\n"
-                 "                   (--tif PATH [--tif ...] | --data DIR) [--jobs N]\n"
+                 "                   (--tif PATH [--tif ...] | --data DIR) [--jobs N] [--pin]\n"
                  "  import PATH#NAME --pbf PATH --store DIR --scope SCOPE\n"
                  "         (--pkt PATH [--pkt ...] | --dem-data DIR)\n"
                  "         (--tif PATH [--tif ...] | --wc-data DIR)\n"
-                 "         [--jobs N] [--km-cache N]\n"
-                 "  stats --store DIR [--scope SCOPE]\n";
+                 "         [--jobs N] [--km-cache N] [--pin]\n"
+                 "  stats --store DIR [--scope SCOPE]\n"
+                 "  index-hash --store DIR --scope SCOPE\n";
     return 1;
 }
 
@@ -319,7 +299,7 @@ int cmd_import_dem(const Args& args) {
         return 1;
     }
 
-    g2m::import::StoreSink sink(**store, *scope);
+    g2m::import::StoreSink sink(**store, *scope, args.flag("pin"));
     g2m::import::DemImportOptions options;
     if (const auto jobs = args.get("jobs")) {
         try {
@@ -399,7 +379,7 @@ int cmd_import_osm(const Args& args) {
         return 1;
     }
 
-    g2m::import::StoreSink sink(**store, *scope);
+    g2m::import::StoreSink sink(**store, *scope, args.flag("pin"));
     g2m::import::OsmImportOptions options;
     if (const auto jobs = args.get("jobs")) {
         try {
@@ -488,7 +468,7 @@ int cmd_import_landcover(const Args& args) {
         return 1;
     }
 
-    g2m::import::StoreSink sink(**store, *scope);
+    g2m::import::StoreSink sink(**store, *scope, args.flag("pin"));
     g2m::import::LandcoverImportOptions options;
     if (const auto jobs = args.get("jobs")) {
         try {
@@ -658,7 +638,7 @@ int cmd_import(const Args& args) {
         return 1;
     }
 
-    g2m::import::StoreSink sink(**store, *scope);
+    g2m::import::StoreSink sink(**store, *scope, args.flag("pin"));
 
     g2m::import::DemImportOptions dem_options;
     if (const auto jobs = args.get("jobs")) {
@@ -781,6 +761,75 @@ int cmd_stats(const Args& args) {
     }
     std::cout << "tiles=" << stats->tiles << " bodies=" << stats->bodies << " blob_files=" << stats->blob_files
               << " body_bytes=" << stats->body_bytes << " pinned_tiles=" << stats->pinned_tiles << "\n";
+
+    // G1c I7: check_consistency (reference counts, size total, every blob
+    // file present with the right size - tile_store.h's own doc comment) is
+    // cheap enough to run on every `stats` call, and this is the one place a
+    // maintainer would look for it after an import.
+    const auto consistency = (*store)->check_consistency();
+    if (!consistency) {
+        std::cout << "check_consistency FAILED: " << consistency.error().message << "\n";
+        return 1;
+    }
+    std::cout << "check_consistency OK\n";
+    return 0;
+}
+
+// index-hash --store DIR --scope SCOPE (G1c I7): per-layer FNV-1a64 over the
+// store's (key, body_hash) index, for comparing two stores built from the
+// same import (e.g. at different --jobs) without a byte-for-byte diff of the
+// whole store (blob-file layout/SQLite page order are not part of the
+// contract; the logical (layer, key) -> body_hash mapping is).
+// TileStore::index() already returns its entries sorted by (layer, key)
+// (tile_store.h's own doc comment), so hashing them in that order needs no
+// extra sort here and is independent of --jobs and of filesystem/PKT/tif
+// enumeration order.
+int cmd_index_hash(const Args& args) {
+    const auto store_dir = args.get("store");
+    const auto scope = args.get("scope");
+    if (!store_dir || !scope) {
+        std::cerr << "g2m_tiler index-hash: --store and --scope are required\n";
+        return 1;
+    }
+    g2m::TileStoreConfig config;
+    config.dir = *store_dir;
+    auto store = g2m::TileStore::open(config);
+    if (!store) {
+        std::cerr << "g2m_tiler index-hash: " << store.error().message << "\n";
+        return 1;
+    }
+    const auto index = (*store)->index(*scope);
+    if (!index) {
+        std::cerr << "g2m_tiler index-hash: " << index.error().message << "\n";
+        return 1;
+    }
+
+    g2m::Fnv1a64 all_hasher;
+    std::uint64_t all_count = 0;
+    std::string current_layer;
+    bool have_layer = false;
+    g2m::Fnv1a64 layer_hasher;
+    std::uint64_t layer_count = 0;
+    auto flush_layer = [&]() {
+        std::cout << current_layer << " " << layer_count << " " << g2m::to_hex(layer_hasher.value()) << "\n";
+    };
+    for (const auto& entry : *index) {
+        if (!have_layer || entry.layer != current_layer) {
+            if (have_layer) flush_layer();
+            current_layer = entry.layer;
+            have_layer = true;
+            layer_hasher = g2m::Fnv1a64{};
+            layer_count = 0;
+        }
+        layer_hasher.u64(entry.key.packed());
+        layer_hasher.bytes(entry.body_hash.data(), entry.body_hash.size());
+        ++layer_count;
+        all_hasher.u64(entry.key.packed());
+        all_hasher.bytes(entry.body_hash.data(), entry.body_hash.size());
+        ++all_count;
+    }
+    if (have_layer) flush_layer();
+    std::cout << "all " << all_count << " " << g2m::to_hex(all_hasher.value()) << "\n";
     return 0;
 }
 
@@ -789,7 +838,7 @@ int cmd_stats(const Args& args) {
 int main(int argc, char** argv) {
     if (argc < 2) return usage();
     const std::string command = argv[1];
-    const Args args = parse_args(argc, argv, 2);
+    const Args args = g2m_tiler::parse_args(argc, argv, 2, {"pin"});
 
     if (command == "find-admin") return cmd_find_admin(args);
     if (command == "resolve") return cmd_resolve(args);
@@ -798,6 +847,7 @@ int main(int argc, char** argv) {
     if (command == "import-landcover") return cmd_import_landcover(args);
     if (command == "import") return cmd_import(args);
     if (command == "stats") return cmd_stats(args);
+    if (command == "index-hash") return cmd_index_hash(args);
     if (command == "--help" || command == "-h" || command == "help") return usage(), 0;
     std::cerr << "g2m_tiler: unknown command '" << command << "'\n";
     return usage();

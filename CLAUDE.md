@@ -10,8 +10,12 @@ This file only maps what exists and how to build, test and run it.
   **G1a done**: the layer model, the tile formats, releases, the SQLite tile
   stores, the in-process server and the client cache. **G1b done**: pure,
   bounds-checked decoders for the source formats (ZIP, TIFF/GeoTIFF/BigTIFF/
-  COG, Hessen DGM1, OSM PBF) - see `g2m_decode` below. G1c (tiler plus
-  import) comes next.
+  COG, Hessen DGM1, OSM PBF) - see `g2m_decode` below. **G1c done**: exact
+  polygon geometry (`g2m::geom`), region definitions and resolution
+  (`g2m/layer/region.h`, `g2m_import`'s `region_resolve`), the DGM1/OSM/
+  WorldCover importers, the offline tiler CLI (`apps/g2m_tiler`), and the
+  real home-region import into the integrated server's source store
+  (PLAN.md 3.11, 5.5 step 3) - see `g2m_import`/`g2m_tiler` below.
 
 C++20, namespace `g2m`, MIT. g2m never includes or links anything from
 physics_sim.
@@ -105,6 +109,47 @@ geo2map_engine/
     tiff/lzw.h+.cpp                   TIFF-flavored LZW decoder (ClearCode/EOI, early-change code-width growth)
     tiff/predictor.h+.cpp             Predictor 2 (horizontal differencing) / 3 (floating-point byte-plane) undo
     tiff/packbits.h+.cpp              PackBits decoder
+  include/g2m/core/geom/               exact integer polygon geometry (milestone G1c I1), part of g2m_core
+    exact.h                           point-in-polygon/segment/box/distance predicates, 128-bit-intermediate exact
+    project.h                         OSM fixed-point lat/lon -> integer-mm UTM (shared by osm_clip.cpp and ring assembly)
+    ring_set.h                        a set of closed rings + point-in-polygon / tile-vs-boundary tests
+    ring_assembly.h                   assembles OSM-relation way members into simple rings (chain/split/even-odd nesting)
+  src/core/geom/                       implementation (exact.cpp, ring_set.cpp, ring_assembly.cpp; project.h is header-only);
+                                       compiled into g2m_core, listed in src/CMakeLists.txt
+  include/g2m/layer/region.h           g2m.regions/1 (OsmAdminPart/UtmBboxPart RegionSpec) and g2m.resolved_region/1
+                                       (ResolvedRegion: tile_count/interior runs/parts/geometry_hash) - milestone G1c I1/I2
+  src/layer/osm_clip_index.cpp         OsmClipIndex (milestone G1c I4): per-tile OSM selection index ~1000x cheaper
+                                       than calling clip_osm() (osm_clip.cpp, unchanged, kept as the byte-for-byte oracle)
+  include/g2m/import/                  public API of g2m_import (milestone G1c I2-I6); importers stay free of
+                                       server/decode/thread dependencies (layers-only + g2m_decode's readers)
+    region_resolve.h                  resolve_region(spec, pbf_path): RegionSpec -> ResolvedRegion via ring assembly
+    sink.h                            ITileSink, StoreSink(TileStore&, scope, pin=false) (G1c I7: --pin plumbed from
+                                       g2m_tiler), MemorySink (std::map<{layer,key},Entry>, no SQLite needed for tests)
+    report.h                          ImportReport{layer, tiles_written, tiles_skipped, warnings, wall_seconds, messages}
+    ordered_parallel.h                ordered_for: fan produce(i) over up to `jobs` worker threads, deliver to
+                                       consume(i, ...) in ascending index order - importer output is --jobs-independent
+    dem.h                             DGM1 -> g2m.src.elev.dgm1 (I3): DemImportReport incl. tiles_written/partial/
+                                       skipped_nocov/skipped_allnodata and dup_keys/dup_copies/dup_identical/dup_differing
+    osm.h                             PBF -> g2m.src.osm (I4): two-stage extract (own sorted-SoA node-location index,
+                                       D13) + per-tile clip (OsmClipIndex), OsmExtractReport (nodes/ways/ways_incomplete)
+    landcover.h                       ESA WorldCover COG -> g2m.src.landcover (I5)
+  src/import/                          g2m_import implementation (mirrors include/g2m/import/); CMakeLists.txt
+                                       defines g2m_import (STATIC)
+  apps/g2m_tiler/                      offline importer CLI (milestone G1c I2-I7)
+    main.cpp                          subcommands: find-admin, resolve, import-dem, import-osm, import-landcover,
+                                       import (all three layers via one resolved region), stats (+ check_consistency,
+                                       G1c I7), index-hash (per-layer + "all" FNV-1a64 over the store index, G1c I7)
+    cli_args.h                        header-only argv parser (Args/parse_args) - extracted in I7 so a unit test can
+                                       include it directly; `bool_flags` makes a flag (e.g. --pin) a presence-only switch
+    rss.h+.cpp                        peak resident-set-size sampling for each subcommand's own diagnostic summary line
+  testdata/fixtures/                   committed small REAL cuts for import tests (milestone G1c I6, D19): dgm1/
+                                       (PKT_fixture.zip), osm/ (frankfurt_hoechst.osm.pbf relation-closure cut,
+                                       unsorted_nodes.osm.pbf), worldcover/ (two fixture TIFFs - a home-region tiepoint-
+                                       aligned crop and a bbox crop, I5 deviation: one WorldCover source tile could not
+                                       cover both test shapes), regions.json (the g2m.regions/1 fixture, incl. one
+                                       utm_bbox part), README.md
+  testdata/fuzz_seeds/                 committed corpora (D21): pbf/, tiff/, zip/ - seed inputs for the G1c decoders'
+                                       fuzz targets (tests/fuzz_formats, tests/fuzz)
   tests/
     support/                          test-only: headless_env (Windows CRT dialogs off), catch_main, splitmix64.h,
                                       synthetic.h (SplitMix64 elev/landcover tiles and OSM sets for tests and the g1 golden)
@@ -116,8 +161,8 @@ geo2map_engine/
     unit/                             g2m_unit_tests: test_det_math, test_tm_reference, test_geo_frames,
                                       test_tile_raster_hash, test_decode_zip, test_decode_tiff, test_decode_osm,
                                       test_decode_real_data (gated on env var G2M_DATA_DIR, SKIP when unset)
-    golden/                           golden.h/.cpp + golden_g1.cpp (g2m_golden), dump_main.cpp (g2m_golden_dump [g0|g1]),
-                                      test_golden.cpp (g2m_golden_tests)
+    golden/                           golden.h/.cpp + golden_g1.cpp + golden_g1c.cpp (g2m_golden, milestone G1c I6),
+                                      dump_main.cpp (g2m_golden_dump [g0|g1|g1c]), test_golden.cpp (g2m_golden_tests)
     fuzz/                             libFuzzer targets for g2m_decode (fuzz_zip, fuzz_tiff, fuzz_pbf) over a
                                       fuzz-instrumented copy of G2M_DECODE_SOURCES; same G2M_BUILD_FUZZERS gate and
                                       CTest `fuzz` label as fuzz_formats (WSL clang legs)
@@ -125,6 +170,7 @@ geo2map_engine/
     geodesy/                          GeographicLib reference values (written by tools/refgen; see below)
     golden/g0_golden.txt              committed G0 golden hashes
     golden/g1_golden.txt              committed G1 golden hashes (encoded bytes of every G1 format)
+    golden/g1c_golden.txt             committed G1c golden hashes (milestone G1c I6; `all 122 e7947b8adb8e5b47`)
   cmake/deps_decoders.cmake           FetchContent for g2m_decode's deps (libdeflate, zlib-ng, protozero, libosmium)
   tools/
     ci.ps1                            CI (below)
@@ -137,7 +183,7 @@ Not built yet. These are placeholders only (PLAN.md 2.2/2.3; a comment at the
 end of `CMakeLists.txt`):
 - the other core headers `polyline.h`, `graph/`, `mesh/`;
 - `include/g2m_c/`;
-- `apps/` (`g2m_server`, `g2m_tiler`, `g2m_cli`);
+- `apps/g2m_server`, `apps/g2m_cli` (`apps/g2m_tiler` is now built - G1c);
 - `bridges/physics_sim/`;
 - `adapters/`;
 - `tests/{determinism,protocol,bench}`;
@@ -189,6 +235,15 @@ end of `CMakeLists.txt`):
 - `tests/fuzz` (`G2M_BUILD_FUZZERS`, default OFF): libFuzzer targets for
   `g2m_decode`; clang only, not clang-cl (not exercised by the Windows
   presets).
+- `g2m_import` (STATIC, milestone G1c I2-I6): `src/import/*.cpp`
+  (region_resolve, sink, report, dem, osm, landcover -
+  `ordered_parallel.h` is header-only, no library code); PUBLIC `g2m_server`
+  (for `sink.h`'s `StoreSink`/`TileStore`), PRIVATE `g2m_decode` (D22 - no
+  osmium/protozero/TIFF type in any `g2m/import` public header).
+- `g2m_tiler` (executable, `apps/g2m_tiler/`, milestone G1c I2-I7): links
+  `g2m_import` only (+ its own `rss.cpp`); gated by `G2M_BUILD_APPS`
+  independently of `G2M_BUILD_TESTS`, so it never depends on
+  `tests/support`. See its own Layout entry above for subcommands.
 
 ## CMake options
 

@@ -26,11 +26,15 @@ add_executable(g2m_unit_tests
   test_import_landcover.cpp
   test_fixtures.cpp
   test_import_e2e.cpp
+  test_tiler_cli_args.cpp
 )
 target_link_libraries(g2m_unit_tests PRIVATE g2m_core g2m_decode g2m_import g2m_server g2m_client
                                               g2m_test_catch_main g2m_warnings g2m_options
                                               libdeflate::libdeflate_static)
 target_compile_definitions(g2m_unit_tests PRIVATE G2M_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+# test_tiler_cli_args.cpp includes apps/g2m_tiler/cli_args.h directly (it is
+# header-only precisely so this test needs no new library target, G1c I7).
+target_include_directories(g2m_unit_tests PRIVATE ${PROJECT_SOURCE_DIR}/apps/g2m_tiler)
 
 include(Catch)
 catch_discover_tests(g2m_unit_tests ADD_TAGS_AS_LABELS DISCOVERY_MODE PRE_TEST)
