@@ -174,19 +174,23 @@ TEST_CASE("OsmClipIndex: clip() is safe to call concurrently from 8 threads", "[
     std::vector<std::vector<std::uint8_t>> want(keys.size());
     for (std::size_t i = 0; i < keys.size(); ++i) want[i] = encode_oracle_clip(set, keys[i], kDefaultOsmHaloM);
 
-    // vector<char>, never vector<bool> (TOOL-019: bit-packed vector<bool> is
-    // not safe for concurrent writes to distinct elements).
-    std::vector<char> agree(keys.size(), 0);
+    // Worker threads only call clip(); encoding and every Catch2 assertion stay
+    // on the main thread - Catch2's assertion machinery is not thread-safe
+    // (a REQUIRE inside encode_bytes on a worker is a TSan data race in
+    // Catch::RunContext). Each thread writes only its own slots.
+    std::vector<OsmData> got(keys.size());
     constexpr int kThreads = 8;
     std::vector<std::thread> threads;
     threads.reserve(kThreads);
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&, t]() {
             for (std::size_t i = static_cast<std::size_t>(t); i < keys.size(); i += kThreads) {
-                agree[i] = (encode_index_clip(index, keys[i]) == want[i]) ? 1 : 0;
+                got[i] = index.clip(keys[i]);
             }
         });
     }
     for (std::thread& th : threads) th.join();
-    for (std::size_t i = 0; i < keys.size(); ++i) CHECK(agree[i] == 1);
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        CHECK(encode_bytes(OsmTile{index.halo_m(), std::move(got[i])}) == want[i]);
+    }
 }
