@@ -11,6 +11,7 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/osm_data.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src_osm.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/osm_clip.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/osm_clip_index.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/release.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/region.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/pack.cpp

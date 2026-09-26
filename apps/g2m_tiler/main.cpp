@@ -6,8 +6,9 @@
 //   resolve PATH#NAME --pbf PATH --out PATH
 //   import-dem --resolved PATH --store DIR --scope SCOPE
 //              (--pkt PATH [--pkt PATH ...] | --data DIR) [--jobs N] [--km-cache N]
-//   import-osm / import-landcover ...   (stubs until I4-I5)
-//   import ...                          (stub until I4-I5)
+//   import-osm --pbf PATH --resolved PATH --store DIR --scope SCOPE [--jobs N]
+//   import-landcover ...                 (stub until I5)
+//   import ...                           (stub until I5)
 //   stats --store DIR [--scope SCOPE]
 //
 // Exit codes: 0 success, 1 usage/runtime error, 2 "not implemented yet".
@@ -15,6 +16,7 @@
 
 #include "g2m/decode/dgm1.h"
 #include "g2m/import/dem.h"
+#include "g2m/import/osm.h"
 #include "g2m/import/region_resolve.h"
 #include "g2m/layer/region.h"
 #include "g2m/server/tile_store.h"
@@ -90,7 +92,7 @@ int usage() {
                  "  import-dem --resolved PATH --store DIR --scope SCOPE\n"
                  "             (--pkt PATH [--pkt PATH ...] | --data DIR)\n"
                  "             [--jobs N] [--km-cache N]\n"
-                 "  import-osm ...        (not implemented yet, I4)\n"
+                 "  import-osm --pbf PATH --resolved PATH --store DIR --scope SCOPE [--jobs N]\n"
                  "  import-landcover ...  (not implemented yet, I5)\n"
                  "  import ...            (not implemented yet, needs I3-I5)\n"
                  "  stats --store DIR [--scope SCOPE]\n";
@@ -301,6 +303,80 @@ int cmd_import_dem(const Args& args) {
     return 0;
 }
 
+int cmd_import_osm(const Args& args) {
+    const auto pbf = args.get("pbf");
+    const auto resolved_path = args.get("resolved");
+    const auto store_dir = args.get("store");
+    const auto scope = args.get("scope");
+    if (!pbf || !resolved_path || !store_dir || !scope) {
+        std::cerr << "g2m_tiler import-osm: --pbf, --resolved, --store and --scope are required\n";
+        return 1;
+    }
+
+    const auto resolved_text = read_file(*resolved_path);
+    if (!resolved_text) {
+        std::cerr << "g2m_tiler import-osm: cannot read " << *resolved_path << "\n";
+        return 1;
+    }
+    const auto resolved = g2m::parse_resolved_region(*resolved_text);
+    if (!resolved) {
+        std::cerr << "g2m_tiler import-osm: " << resolved.error().message << "\n";
+        return 1;
+    }
+
+    const auto t0 = std::chrono::steady_clock::now();
+    g2m::import::OsmExtractReport extract_report;
+    const auto region_set = g2m::import::extract_region_set(*pbf, *resolved, &extract_report);
+    if (!region_set) {
+        std::cerr << "g2m_tiler import-osm: " << region_set.error().message << "\n";
+        return 1;
+    }
+    const auto t_extract = std::chrono::steady_clock::now();
+
+    g2m::TileStoreConfig config;
+    config.dir = *store_dir;
+    auto store = g2m::TileStore::open(config);
+    if (!store) {
+        std::cerr << "g2m_tiler import-osm: " << store.error().message << "\n";
+        return 1;
+    }
+
+    g2m::import::StoreSink sink(**store, *scope);
+    g2m::import::OsmImportOptions options;
+    if (const auto jobs = args.get("jobs")) {
+        try {
+            options.jobs = static_cast<unsigned>(std::stoul(*jobs));
+        } catch (const std::exception&) {
+            std::cerr << "g2m_tiler import-osm: --jobs must be an integer\n";
+            return 1;
+        }
+    }
+
+    const auto report = g2m::import::import_osm(*resolved, *region_set, sink, *scope, options);
+    if (!report) {
+        std::cerr << "g2m_tiler import-osm: " << report.error().message << "\n";
+        return 1;
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+    const auto store_stats = (*store)->stats();
+    std::cerr << "g2m_tiler import-osm: nodes_total=" << extract_report.nodes_total
+              << " nodes_in=" << extract_report.nodes_in << " ways_in=" << extract_report.ways_in
+              << " ways_incomplete=" << extract_report.ways_incomplete
+              << " relations_in=" << extract_report.relations_in << " index_bytes=" << extract_report.index_bytes
+              << " (n1=" << extract_report.n1_ms << "ms w=" << extract_report.w_ms << "ms r=" << extract_report.r_ms
+              << "ms n2=" << extract_report.n2_ms << "ms, extract "
+              << std::chrono::duration<double>(t_extract - t0).count() << "s)\n";
+    std::cerr << "g2m_tiler import-osm: tiles_written=" << report->tiles_written
+              << " tiles_empty=" << report->tiles_empty << " wall=" << (report->wall_ms / 1000.0)
+              << "s total=" << std::chrono::duration<double>(t1 - t0).count() << "s peak RSS "
+              << (g2m_tiler::peak_rss_bytes() / (1024 * 1024)) << " MiB\n";
+    if (store_stats) {
+        std::cerr << "g2m_tiler import-osm: store body_bytes=" << store_stats->body_bytes
+                  << " bodies=" << store_stats->bodies << "\n";
+    }
+    return 0;
+}
+
 int cmd_stats(const Args& args) {
     const auto store_dir = args.get("store");
     if (!store_dir) {
@@ -334,7 +410,7 @@ int main(int argc, char** argv) {
     if (command == "find-admin") return cmd_find_admin(args);
     if (command == "resolve") return cmd_resolve(args);
     if (command == "import-dem") return cmd_import_dem(args);
-    if (command == "import-osm") return not_implemented("import-osm");
+    if (command == "import-osm") return cmd_import_osm(args);
     if (command == "import-landcover") return not_implemented("import-landcover");
     if (command == "import") return not_implemented("import");
     if (command == "stats") return cmd_stats(args);

@@ -48,6 +48,29 @@ Superseded fixture (G1c I2, relation-closure-only extraction, kept only for
 history - not committed, see git log): 615 nodes, 5 ways, 1 relation, 4163
 bytes, SHA-256 `b9e460b72d896c4ea95e4bbba8c87489d9f01b30a99761cc6ea7a2ae194b3e48`.
 
+## osm/unsorted_nodes.osm.pbf
+
+- **Source**: hand-built, not cut from real data - `g2m_fixture_cut
+  write-unsorted-nodes` (`tests/support/fixture_cut/main.cpp`, G1c I4):
+  a real, valid PBF file (osmium's own writer) with exactly 3 nodes whose
+  ids are deliberately NOT strictly increasing (20, then 10, then 30 - a
+  single out-of-order pair is enough), a case no real-world PBF writer ever
+  produces so it cannot be cut from real data. Coordinates (8.65/50.18E/N
+  area, +-0.001 deg per node) are arbitrary but inside Hessen's utm32n
+  zone, matching `regions.json`'s "fixture" region, so
+  `project_e7_to_mm` never returns "far" for them. `add_metadata=false`,
+  generator `"g2m_fixture_cut"`.
+- **Purpose**: exercises `g2m::import::extract_region_set`'s N1-pass
+  strict-ordering check (`test_import_osm.cpp`'s "reports Malformed on an
+  unsorted PBF" test) - `ErrorCode::Malformed`, message contains "PBF not
+  sorted".
+- **Cut with**:
+  ```
+  g2m_fixture_cut write-unsorted-nodes --out osm/unsorted_nodes.osm.pbf
+  ```
+- **Size**: 142 bytes.
+- **SHA-256**: `3431f2e25aefc19947999dd657949947441e47e432a8da664befe4a372a53f22`
+
 ## dgm1/PKT_fixture.zip
 
 - **Source**: Hessen DGM1 (1 m digital terrain model), staged read-only at

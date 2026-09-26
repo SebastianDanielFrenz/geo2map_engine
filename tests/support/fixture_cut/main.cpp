@@ -653,11 +653,70 @@ int cmd_repack_dgm1(const Args& args) {
     }
 }
 
+// write-unsorted-nodes (PLAN.md G1c I4): a tiny synthetic PBF whose node
+// ids are NOT strictly increasing (20, then 10, then 30 - a single
+// out-of-order pair is enough), for import::extract_region_set's own
+// "PBF not sorted" rejection test (test_import_osm.cpp) - a case
+// ordinary real-world extracts never exercise (osmium/every real PBF
+// writer emits nodes in ascending id order), so it has to be hand-built
+// rather than cut from real data. Coordinates are arbitrary but inside
+// Hessen's utm32n zone (matching testdata/fixtures/regions.json's
+// "fixture" region) so a project_e7_to_mm call on them never returns
+// nullopt ("far").
+int cmd_write_unsorted_nodes(const Args& args) {
+    const auto out_path = args.get("out");
+    if (!out_path) {
+        std::cerr << "g2m_fixture_cut write-unsorted-nodes: --out is required\n";
+        return 1;
+    }
+    try {
+        osmium::io::Header header;
+        header.set("generator", "g2m_fixture_cut");
+
+        osmium::io::File out_file{*out_path};
+        out_file.set("add_metadata", false);
+        out_file.set("pbf_dense_nodes", true);
+        out_file.set("pbf_compression", "zlib");
+
+        osmium::io::Writer writer{out_file, header, osmium::io::overwrite::allow};
+        osmium::memory::Buffer buffer{1024 * 1024, osmium::memory::Buffer::auto_grow::yes};
+
+        const struct {
+            std::int64_t id;
+            std::int32_t lon_1e7, lat_1e7;
+        } nodes[] = {
+            {20, 86500000, 501800000}, // 8.65E, 50.18N
+            {10, 86510000, 501810000}, // out of order: id 10 after id 20
+            {30, 86520000, 501820000},
+        };
+        for (const auto& n : nodes) {
+            {
+                osmium::builder::NodeBuilder builder{buffer};
+                builder.set_id(n.id);
+                builder.set_location(osmium::Location{n.lon_1e7, n.lat_1e7});
+            }
+            buffer.commit();
+        }
+        writer(std::move(buffer));
+        writer.close();
+
+        std::cerr << "g2m_fixture_cut write-unsorted-nodes: wrote 3 nodes (ids 20,10,30) to " << *out_path << "\n";
+        return 0;
+    } catch (const DecodeError& e) {
+        std::cerr << "g2m_fixture_cut write-unsorted-nodes: " << e.what() << "\n";
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "g2m_fixture_cut write-unsorted-nodes: " << e.what() << "\n";
+        return 1;
+    }
+}
+
 int usage() {
     std::cerr << "usage: g2m_fixture_cut <command> [options]\n"
                  "commands:\n"
                  "  cut-pbf --in PATH --relation ID [--relation ID...] [--bbox lon0,lat0,lon1,lat1] --out PATH\n"
-                 "  repack-dgm1 --out PATH --inner OUTER_ZIP#SUBSTRING [--inner ...] --key E,N [--key ...]\n";
+                 "  repack-dgm1 --out PATH --inner OUTER_ZIP#SUBSTRING [--inner ...] --key E,N [--key ...]\n"
+                 "  write-unsorted-nodes --out PATH\n";
     return 1;
 }
 
@@ -669,6 +728,7 @@ int main(int argc, char** argv) {
     const Args args = parse_args(argc, argv, 2);
     if (command == "cut-pbf") return cmd_cut_pbf(args);
     if (command == "repack-dgm1") return cmd_repack_dgm1(args);
+    if (command == "write-unsorted-nodes") return cmd_write_unsorted_nodes(args);
     std::cerr << "g2m_fixture_cut: unknown command '" << command << "'\n";
     return usage();
 }

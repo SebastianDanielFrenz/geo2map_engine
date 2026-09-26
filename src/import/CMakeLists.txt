@@ -9,6 +9,7 @@ add_library(g2m_import STATIC
   sink.cpp
   report.cpp
   dem.cpp
+  osm.cpp
 )
 target_include_directories(g2m_import PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(g2m_import
