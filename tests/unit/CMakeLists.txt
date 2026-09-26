@@ -15,6 +15,8 @@ add_executable(g2m_unit_tests
   test_ring_assembly.cpp
   test_import_resolve.cpp
   test_ordered_parallel.cpp
+  test_decode_nested_zip.cpp
+  test_import_dem.cpp
 )
 target_link_libraries(g2m_unit_tests PRIVATE g2m_core g2m_decode g2m_import g2m_test_catch_main g2m_warnings
                                               g2m_options libdeflate::libdeflate_static)

@@ -137,9 +137,9 @@ silently accept a typo).
   "level": 2,
   "halo_m": 2000,
   "parts": [
-    {"kind": "utm_bbox", "id": 0, "name": "", "vertices": 4, "geometry_hash": "<16 hex>"},
+    {"kind": "utm_bbox", "id": 0, "name": "", "vertices": 4, "geometry_hash": "<16 hex>", "role_mismatches": 0},
     {"kind": "osm_admin", "id": 62650, "name": "Frankfurt am Main", "admin_level": 6,
-     "vertices": 1842, "geometry_hash": "<16 hex>"}
+     "vertices": 1842, "geometry_hash": "<16 hex>", "role_mismatches": 0}
   ],
   "pbf_name": "hessen-latest.osm.pbf",
   "pbf_sha256": "<64 hex>",
@@ -162,6 +162,13 @@ Rules:
   an importer that needs the actual rings re-resolves them (deterministic,
   so re-resolution against the same PBF snapshot reproduces the same
   `geometry_hash`).
+- `role_mismatches` (`osm_admin` only, always `0` for `utm_bbox` - no OSM
+  roles involved): the number of member ways whose declared `outer`/`inner`
+  role (rule 9 above) disagreed with the ring's own geometric nesting
+  classification. The ring is still assembled and used correctly either
+  way (classification is by nesting depth, never by the declared role) -
+  this is purely a data-quality signal for the region author, surfacing
+  when the source relation's own tagging has drifted from its geometry.
 - `tiles` is the union of every part's own `tiles_near` result (Boundary
   or Interior tiles - the region's whole footprint), as level-2 row runs
   `[y, x0, x1]` (inclusive), the same run-length encoding

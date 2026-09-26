@@ -76,19 +76,28 @@ TEST_CASE("import: resolve_region against the committed fixture PBF", "[import][
     CHECK(resolved->name == "fixture");
     CHECK(resolved->scheme == "utm32n");
     CHECK(resolved->halo_m == 200);
-    REQUIRE(resolved->parts.size() == 1);
+    // Two parts (PLAN G1c pre-item a): the original Höchst osm_admin part,
+    // plus a utm_bbox part (474000/5560000 - 476000/5561000) added so the
+    // DEM fixture tests below have region tiles that actually overlap the
+    // DGM1 fixture (tiles 474/5560, 475/5560).
+    REQUIRE(resolved->parts.size() == 2);
     CHECK(resolved->parts[0].kind == ResolvedPartKind::OsmAdmin);
     CHECK(resolved->parts[0].id == 4209939);
     CHECK(resolved->parts[0].name == "H\xC3\xB6" "chst"); // "Höchst", UTF-8 (split to end the hex escape before 'c')
     REQUIRE(resolved->parts[0].admin_level.has_value());
     CHECK(*resolved->parts[0].admin_level == 10);
     CHECK(resolved->parts[0].vertices == 614);
+    CHECK(resolved->parts[0].role_mismatches == 0);
+
+    CHECK(resolved->parts[1].kind == ResolvedPartKind::UtmBbox);
+    CHECK(resolved->parts[1].vertices == 4);
+    CHECK(resolved->parts[1].role_mismatches == 0); // always 0 for utm_bbox - no OSM roles involved
 
     // Committed against the fixture PBF's actual content - a change here
     // means either the fixture or the resolve pipeline changed; re-cut or
     // investigate, don't just update the number.
-    CHECK(resolved->tile_count == 16);
-    CHECK(resolved->tiles.size() == 5); // 5 CoverageRuns at this footprint
+    CHECK(resolved->tile_count == 24);
+    CHECK(resolved->tiles.size() == 7); // 7 CoverageRuns at this footprint (union of both parts)
 
     // interior is a SUBSET of tiles (every interior tile is also in the
     // full footprint) - true even when, as here, the fixture's small halo
@@ -264,9 +273,17 @@ TEST_CASE("real-data: resolve_region against the full hessen-latest.osm.pbf for 
     std::uint64_t interior_tiles = 0;
     for (const auto& run : resolved->interior) interior_tiles += static_cast<std::uint64_t>(run.x1 - run.x0 + 1);
 
+    std::size_t total_role_mismatches = 0;
+    for (const auto& part : resolved->parts) total_role_mismatches += part.role_mismatches;
+
     std::cerr << "[real-data] home region resolve: tile_count=" << resolved->tile_count
-              << " interior_tiles=" << interior_tiles << " parts=" << resolved->parts.size() << " wall=" << wall_s
-              << "s\n";
+              << " interior_tiles=" << interior_tiles << " parts=" << resolved->parts.size()
+              << " role_mismatches=" << total_role_mismatches << " (";
+    for (std::size_t i = 0; i < resolved->parts.size(); ++i) {
+        if (i != 0) std::cerr << ",";
+        std::cerr << resolved->parts[i].role_mismatches;
+    }
+    std::cerr << ") wall=" << wall_s << "s\n";
 
     // task brief: ~1085 tiles, +-1%.
     CHECK(resolved->tile_count >= 1074);
@@ -275,4 +292,13 @@ TEST_CASE("real-data: resolve_region against the full hessen-latest.osm.pbf for 
     CHECK(interior_tiles >= 528);
     CHECK(interior_tiles <= 538);
     CHECK(resolved->parts.size() == 3);
+
+    // PLAN G1c pre-item (b): the real Hessen relations' member ways can carry
+    // OSM role tags (e.g. "outer"/"inner") that AssembledArea::role_mismatches
+    // disagrees with by ring-orientation - measured on real data (see
+    // std::cerr line above) before deciding whether 0 is a fact to assert or
+    // just a number to report. As measured against hessen-latest.osm.pbf for
+    // relations 62382/62566/4209939, every part's ring assembly agrees with
+    // its members' own role tags.
+    CHECK(total_role_mismatches == 0);
 }

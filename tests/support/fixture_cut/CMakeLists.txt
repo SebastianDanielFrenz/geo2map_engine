@@ -7,7 +7,10 @@
 # cmake/deps_decoders.cmake never declares) - g2m_decode itself only ever
 # reads PBF.
 add_executable(g2m_fixture_cut main.cpp)
-target_link_libraries(g2m_fixture_cut PRIVATE g2m_decode g2m_dep_libosmium g2m_warnings g2m_options)
+target_link_libraries(g2m_fixture_cut PRIVATE g2m_decode g2m_dep_libosmium g2m_warnings g2m_options
+                                               libdeflate::libdeflate_static)
+# repack-dgm1 (G1c I3) reuses tests/support/zip_builder.h (header-only).
+target_include_directories(g2m_fixture_cut PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 
 # clang-cl ASan stack instrumentation corrupts an optimised function's catch
 # parameter (physics_sim vault TOOL-019, see src/decode/CMakeLists.txt's own

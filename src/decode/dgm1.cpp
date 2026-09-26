@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <map>
 
 namespace g2m::decode::dgm1 {
 namespace {
@@ -172,6 +173,203 @@ DecodedTile decode_tile(std::shared_ptr<IByteSource> outer_zip_source, const Til
 
 DecodedTile decode_tile(const TileLocation& location) {
     return decode_tile(std::make_shared<FileByteSource>(location.outer_zip_path), location);
+}
+
+// ---- Catalog (PLAN.md G1c I3) ----
+
+namespace {
+// Generous safety caps for entry_source()'s DEFLATE branch - every real
+// Hessen delivery zip (outer and inner) is STORED (facts confirmed during
+// G1b/G1c), so these only matter for a hypothetical DEFLATE-compressed
+// input; they exist so a malformed/hostile zip cannot force an unbounded
+// allocation rather than because any real file is expected to hit them.
+constexpr std::uint64_t kMaxInnerZipInflateBytes = std::uint64_t{2} << 30; // 2 GiB
+constexpr std::uint64_t kMaxTifInflateBytes = std::uint64_t{64} << 20;     // 64 MiB (a tile is ~4 MB raw)
+} // namespace
+
+struct Catalog::Impl {
+    struct OuterZip {
+        std::string path;
+        std::shared_ptr<FileByteSource> source;
+        std::unique_ptr<ZipReader> reader;
+    };
+    struct InnerZip {
+        std::string entry_name; // the outer entry's own raw name (the municipality zip)
+        std::shared_ptr<IByteSource> source; // zero-copy SubrangeByteSource (or MemoryByteSource) over `source`
+        std::unique_ptr<ZipReader> reader;
+    };
+
+    std::vector<OuterZip> outers;
+    std::vector<std::vector<InnerZip>> inners; // inners[outer_idx][inner_idx]
+    std::map<TileKey, std::vector<CopyRef>> by_key;
+    std::size_t total_copies = 0;
+};
+
+Catalog::Catalog() = default;
+Catalog::Catalog(Catalog&&) noexcept = default;
+Catalog& Catalog::operator=(Catalog&&) noexcept = default;
+Catalog::~Catalog() = default;
+
+Result<Catalog> Catalog::open(std::vector<std::filesystem::path> outer_zips) {
+    std::sort(outer_zips.begin(), outer_zips.end(), [](const std::filesystem::path& a, const std::filesystem::path& b) {
+        return a.filename().string() < b.filename().string();
+    });
+
+    auto impl = std::make_unique<Impl>();
+    try {
+        for (const std::filesystem::path& path : outer_zips) {
+            Impl::OuterZip outer;
+            outer.path = path.string();
+            outer.source = std::make_shared<FileByteSource>(outer.path);
+            outer.reader = std::make_unique<ZipReader>(outer.source);
+            const auto outer_idx = static_cast<std::uint16_t>(impl->outers.size());
+
+            std::vector<Impl::InnerZip> inner_list;
+            for (const ZipEntry& outer_entry : outer.reader->entries()) {
+                if (outer_entry.is_directory || !is_zip_name(outer_entry.name)) continue;
+                Result<std::shared_ptr<IByteSource>> inner_src =
+                    outer.reader->entry_source(outer_entry, kMaxInnerZipInflateBytes);
+                if (!inner_src) {
+                    return make_error(inner_src.error().code, "dgm1::Catalog::open: inner zip '" +
+                                                                    to_lossy_display_name(outer_entry.name) +
+                                                                    "' in " + outer.path + ": " +
+                                                                    inner_src.error().message);
+                }
+
+                Impl::InnerZip inner;
+                inner.entry_name = outer_entry.name;
+                inner.source = std::move(inner_src.value());
+                inner.reader = std::make_unique<ZipReader>(inner.source);
+                const auto inner_idx = static_cast<std::uint16_t>(inner_list.size());
+
+                const std::vector<ZipEntry>& candidates = inner.reader->entries();
+                std::vector<CopyRef> inner_copies;
+                for (std::uint32_t entry_idx = 0; entry_idx < candidates.size(); ++entry_idx) {
+                    const ZipEntry& tif_entry = candidates[entry_idx];
+                    if (tif_entry.is_directory) continue;
+                    TileKey key;
+                    if (!try_parse_dgm1_name(tif_entry.name, key)) continue;
+                    CopyRef ref;
+                    ref.e_km = key.e_km;
+                    ref.n_km = key.n_km;
+                    ref.outer_idx = outer_idx;
+                    ref.inner_idx = inner_idx;
+                    ref.entry_idx = entry_idx;
+                    ref.tif_name = tif_entry.name;
+                    inner_copies.push_back(std::move(ref));
+                }
+                // Record each copy's sibling .tfw entry (same basename, case-
+                // insensitive), if this inner zip ships one - a second pass
+                // over the same directory listing (cheap: it is already fully
+                // parsed in memory, no I/O), matched by lower-cased basename
+                // stem so "dgm1_32_480_5545_1_he.tif" pairs with
+                // "DGM1_32_480_5545_1_he.tfw" regardless of case.
+                std::map<std::string, std::uint32_t> tfw_by_stem;
+                for (std::uint32_t entry_idx = 0; entry_idx < candidates.size(); ++entry_idx) {
+                    const ZipEntry& e = candidates[entry_idx];
+                    if (e.is_directory) continue;
+                    const std::string base = basename_of(e.name);
+                    const std::string lower = ascii_lower(base);
+                    if (!ends_with_ci(lower, ".tfw")) continue;
+                    const std::size_t dot = lower.find_last_of('.');
+                    tfw_by_stem[lower.substr(0, dot)] = entry_idx;
+                }
+                for (CopyRef& ref : inner_copies) {
+                    const std::string lower_stem = ascii_lower(basename_of(ref.tif_name));
+                    const std::size_t dot = lower_stem.find_last_of('.');
+                    const auto it = tfw_by_stem.find(dot == std::string::npos ? lower_stem : lower_stem.substr(0, dot));
+                    if (it != tfw_by_stem.end()) ref.tfw_entry_idx = it->second;
+                    impl->by_key[TileKey{ref.e_km, ref.n_km}].push_back(std::move(ref));
+                    ++impl->total_copies;
+                }
+                inner_list.push_back(std::move(inner));
+            }
+            impl->inners.push_back(std::move(inner_list));
+            impl->outers.push_back(std::move(outer));
+        }
+    } catch (const DecodeError& e) {
+        return make_error(ErrorCode::Malformed, std::string("dgm1::Catalog::open: ") + e.what());
+    }
+
+    Catalog cat;
+    cat.impl_ = std::move(impl);
+    return cat;
+}
+
+std::vector<CopyRef> Catalog::copies(int e_km, int n_km) const {
+    const auto it = impl_->by_key.find(TileKey{e_km, n_km});
+    if (it == impl_->by_key.end()) return {};
+    return it->second; // already in (outer basename, inner index, entry index) order - see open()
+}
+
+std::string Catalog::describe(const CopyRef& ref) const {
+    if (ref.outer_idx >= impl_->outers.size() || ref.inner_idx >= impl_->inners[ref.outer_idx].size()) {
+        return "<invalid copy ref>";
+    }
+    std::string s = std::filesystem::path(impl_->outers[ref.outer_idx].path).filename().string();
+    s += "!" + to_lossy_display_name(impl_->inners[ref.outer_idx][ref.inner_idx].entry_name);
+    s += "!" + to_lossy_display_name(ref.tif_name);
+    return s;
+}
+
+Result<std::vector<float>> Catalog::decode(const CopyRef& ref) const {
+    if (ref.outer_idx >= impl_->outers.size() || ref.inner_idx >= impl_->inners[ref.outer_idx].size()) {
+        return make_error(ErrorCode::InvalidArgument, "dgm1::Catalog::decode: copy ref out of range");
+    }
+    const Impl::InnerZip& inner = impl_->inners[ref.outer_idx][ref.inner_idx];
+    if (ref.entry_idx >= inner.reader->entries().size()) {
+        return make_error(ErrorCode::InvalidArgument, "dgm1::Catalog::decode: copy ref entry index out of range");
+    }
+    const ZipEntry& tif_entry = inner.reader->entries()[ref.entry_idx];
+    try {
+        Result<std::shared_ptr<IByteSource>> tif_src = inner.reader->entry_source(tif_entry, kMaxTifInflateBytes);
+        if (!tif_src) return tif_src.error();
+        tiff::TiffReader reader(tif_src.value());
+        if (reader.ifds().empty()) return make_error(ErrorCode::Malformed, "dgm1: tif has no IFDs");
+        const tiff::Ifd& ifd = reader.ifds().front();
+        if (ifd.width != 1000 || ifd.height != 1000) {
+            return make_error(ErrorCode::Malformed, "dgm1: expected a 1000x1000 tile, got " +
+                                                          std::to_string(ifd.width) + "x" +
+                                                          std::to_string(ifd.height));
+        }
+        Raster<float> r = reader.decode_window_f32(0, 0, 0, 1000, 1000);
+        const auto data = r.data();
+        return std::vector<float>(data.begin(), data.end());
+    } catch (const DecodeError& e) {
+        return make_error(ErrorCode::Malformed, std::string("dgm1::Catalog::decode: ") + e.what());
+    }
+}
+
+Result<std::string> Catalog::tfw_text(const CopyRef& ref) const {
+    if (ref.outer_idx >= impl_->outers.size() || ref.inner_idx >= impl_->inners[ref.outer_idx].size()) {
+        return make_error(ErrorCode::InvalidArgument, "dgm1::Catalog::tfw_text: copy ref out of range");
+    }
+    if (!ref.tfw_entry_idx) {
+        return make_error(ErrorCode::NotFound, "dgm1::Catalog::tfw_text: this copy has no .tfw sibling");
+    }
+    const Impl::InnerZip& inner = impl_->inners[ref.outer_idx][ref.inner_idx];
+    if (*ref.tfw_entry_idx >= inner.reader->entries().size()) {
+        return make_error(ErrorCode::InvalidArgument, "dgm1::Catalog::tfw_text: tfw entry index out of range");
+    }
+    try {
+        const std::vector<std::byte> bytes = inner.reader->read_entry(inner.reader->entries()[*ref.tfw_entry_idx]);
+        std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        return text;
+    } catch (const DecodeError& e) {
+        return make_error(ErrorCode::Malformed, std::string("dgm1::Catalog::tfw_text: ") + e.what());
+    }
+}
+
+CatalogStats Catalog::stats() const {
+    CatalogStats s;
+    s.outer = impl_->outers.size();
+    for (const auto& list : impl_->inners) s.inner += list.size();
+    s.copies = impl_->total_copies;
+    s.unique_keys = impl_->by_key.size();
+    for (const auto& [key, list] : impl_->by_key) {
+        if (list.size() > 1) ++s.duplicated_keys;
+    }
+    return s;
 }
 
 } // namespace g2m::decode::dgm1

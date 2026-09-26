@@ -265,6 +265,7 @@ Result<ResolvedPart> resolve_osm_admin_part(const OsmAdminPart& part, const std:
     out.rings = assembled->rings;
     out.vertices = assembled->vertex_count;
     out.geometry_hash = geometry_hash_of(out.rings);
+    out.role_mismatches = assembled->role_mismatches;
 
     if (part.expect_name && *part.expect_name != out.name) {
         return make_error(ErrorCode::InvalidArgument, "region: relation " + std::to_string(part.relation) +

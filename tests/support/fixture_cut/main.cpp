@@ -32,7 +32,11 @@
 // admin relations use nested relation members; recursing would need
 // unbounded-depth cycle detection for a case this tool never actually
 // hits).
+#include "g2m/decode/byte_source.h"
+#include "g2m/decode/dgm1.h"
 #include "g2m/decode/osm/pbf_reader.h"
+#include "g2m/decode/zip/zip_reader.h"
+#include "zip_builder.h"
 
 #include <osmium/builder/osm_object_builder.hpp>
 // Only the PBF writer, NOT <osmium/io/any_output.hpp> - the "any" header
@@ -48,8 +52,10 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -322,10 +328,188 @@ int cmd_cut_pbf(const Args& args) {
     }
 }
 
+// --- repack-dgm1 (PLAN.md G1c I3): copies a handful of REAL DGM1 tiles out
+// of the real (read-only) PKT_*.zip delivery into a small nested-STORED
+// fixture zip, byte-for-byte (no re-encoding of the .tif/.tfw content - only
+// the ZIP-level framing is rebuilt, via ZipBuilder, always STORED at every
+// level for this fixture regardless of the source's own compression choice
+// at either level). Reuses g2m::decode::dgm1::enumerate_tiles() to locate
+// each requested (e_km, n_km) tile inside a given outer zip's inner zip
+// (matched by a plain substring of its raw entry name, since municipality
+// names are not ASCII-safe to pass on argv) instead of re-deriving the
+// dgm1_<E>_<N> filename convention here.
+//
+// repack-dgm1 --out PATH --inner OUTER_ZIP#SUBSTRING [--inner ...] --key E,N
+//             [--key E,N ...]
+//
+// Each --inner becomes one inner-zip entry ("innerN.zip") in the output
+// fixture, containing every requested --key tile found inside it (+ its
+// sibling .tfw, if present) with its ORIGINAL tif/tfw entry name preserved
+// (dgm1::Catalog's own filename parsing depends on it) - only the
+// CONTAINING inner-zip's own name is normalised (municipality names are not
+// needed by anything that reads the fixture back).
+namespace dgm1 = g2m::decode::dgm1;
+
+struct RepackKey {
+    int e_km = 0;
+    int n_km = 0;
+};
+
+std::optional<RepackKey> parse_key(const std::string& s) {
+    const auto comma = s.find(',');
+    if (comma == std::string::npos) return std::nullopt;
+    try {
+        return RepackKey{std::stoi(s.substr(0, comma)), std::stoi(s.substr(comma + 1))};
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+int cmd_repack_dgm1(const Args& args) {
+    const auto out_path = args.get("out");
+    const auto inner_specs = args.get_all("inner");
+    const auto key_strs = args.get_all("key");
+    if (!out_path || inner_specs.empty() || key_strs.empty()) {
+        std::cerr << "g2m_fixture_cut repack-dgm1: --out, at least one --inner OUTER_ZIP#SUBSTRING and at least one "
+                     "--key E,N are required\n";
+        return 1;
+    }
+    std::vector<RepackKey> keys;
+    for (const auto& s : key_strs) {
+        const auto k = parse_key(s);
+        if (!k) {
+            std::cerr << "g2m_fixture_cut repack-dgm1: --key '" << s << "' must be 'E,N'\n";
+            return 1;
+        }
+        keys.push_back(*k);
+    }
+
+    try {
+        g2m::test_support::ZipBuilder outer_builder;
+        std::size_t total_tif_bytes = 0;
+        std::size_t total_tfw_bytes = 0;
+        int inner_idx = 0;
+
+        for (const auto& spec : inner_specs) {
+            const auto hash = spec.find('#');
+            if (hash == std::string::npos) {
+                std::cerr << "g2m_fixture_cut repack-dgm1: --inner '" << spec << "' must be 'OUTER_ZIP#SUBSTRING'\n";
+                return 1;
+            }
+            const std::string outer_path = spec.substr(0, hash);
+            const std::string substring = spec.substr(hash + 1);
+
+            // enumerate_tiles parses every inner zip's tif filenames using
+            // the exact same rule dgm1::Catalog will later use to read this
+            // fixture back - reusing it here means the fixture is
+            // guaranteed self-consistent with the reader, not hand-derived.
+            const auto located = dgm1::enumerate_tiles({outer_path});
+
+            std::optional<std::string> inner_entry_name;
+            std::vector<dgm1::TileLocation> wanted_locations;
+            for (const auto& [key, loc] : located) {
+                if (loc.inner_zip_entry_name.find(substring) == std::string::npos) continue;
+                const bool wanted =
+                    std::any_of(keys.begin(), keys.end(),
+                                [&](const RepackKey& k) { return k.e_km == key.e_km && k.n_km == key.n_km; });
+                if (!wanted) continue;
+                if (!inner_entry_name) inner_entry_name = loc.inner_zip_entry_name;
+                wanted_locations.push_back(loc);
+            }
+            if (wanted_locations.empty()) {
+                std::cerr << "g2m_fixture_cut repack-dgm1: no requested --key found in " << outer_path
+                          << " inner entry matching '" << substring << "'\n";
+                return 1;
+            }
+
+            auto outer_src = std::make_shared<g2m::decode::FileByteSource>(outer_path);
+            g2m::decode::ZipReader outer_reader(outer_src);
+            const g2m::decode::ZipEntry* inner_entry = nullptr;
+            for (const auto& e : outer_reader.entries()) {
+                if (e.name == *inner_entry_name) {
+                    inner_entry = &e;
+                    break;
+                }
+            }
+            if (inner_entry == nullptr) {
+                std::cerr << "g2m_fixture_cut repack-dgm1: inner entry '" << *inner_entry_name << "' vanished from "
+                          << outer_path << "\n";
+                return 1;
+            }
+            // Generous cap: this is a one-off maintainer tool, not the
+            // real importer's bounded-RSS path - the real DGM1 delivery's
+            // outer-to-inner entries are STORED anyway (D8), so this never
+            // actually inflates.
+            constexpr std::uint64_t kMaxInflate = std::uint64_t{4} << 30;
+            const auto inner_src = outer_reader.entry_source(*inner_entry, kMaxInflate);
+            if (!inner_src) {
+                std::cerr << "g2m_fixture_cut repack-dgm1: " << inner_src.error().message << "\n";
+                return 1;
+            }
+            g2m::decode::ZipReader inner_reader(*inner_src);
+
+            g2m::test_support::ZipBuilder inner_builder;
+            for (const auto& loc : wanted_locations) {
+                const g2m::decode::ZipEntry* tif_entry = nullptr;
+                for (const auto& e : inner_reader.entries()) {
+                    if (e.name == loc.tif_entry_name) {
+                        tif_entry = &e;
+                        break;
+                    }
+                }
+                if (tif_entry == nullptr) {
+                    std::cerr << "g2m_fixture_cut repack-dgm1: tif entry '" << loc.tif_entry_name << "' vanished\n";
+                    return 1;
+                }
+                const auto tif_bytes = inner_reader.read_entry(*tif_entry);
+                inner_builder.add(g2m::test_support::ZipBuilder::Item{tif_entry->name, tif_bytes, /*deflate=*/false});
+                total_tif_bytes += tif_bytes.size();
+
+                const auto dot = tif_entry->name.find_last_of('.');
+                const std::string tif_base = dot == std::string::npos ? tif_entry->name : tif_entry->name.substr(0, dot);
+                for (const auto& e : inner_reader.entries()) {
+                    if (e.name.size() <= 4 || e.name.compare(e.name.size() - 4, 4, ".tfw") != 0) continue;
+                    if (e.name.compare(0, tif_base.size(), tif_base) != 0) continue;
+                    const auto tfw_bytes = inner_reader.read_entry(e);
+                    inner_builder.add(g2m::test_support::ZipBuilder::Item{e.name, tfw_bytes, /*deflate=*/false});
+                    total_tfw_bytes += tfw_bytes.size();
+                    break;
+                }
+            }
+
+            const auto inner_zip_bytes = inner_builder.build();
+            const std::string out_inner_name = "inner" + std::to_string(inner_idx++) + ".zip";
+            std::cerr << "g2m_fixture_cut repack-dgm1: " << out_inner_name << " <- " << outer_path << "#"
+                      << *inner_entry_name << " (" << wanted_locations.size() << " tile(s), " << inner_zip_bytes.size()
+                      << " bytes)\n";
+            outer_builder.add(g2m::test_support::ZipBuilder::Item{out_inner_name, inner_zip_bytes, /*deflate=*/false});
+        }
+
+        const auto outer_bytes = outer_builder.build();
+        std::ofstream out(*out_path, std::ios::binary);
+        if (!out) {
+            std::cerr << "g2m_fixture_cut repack-dgm1: cannot write " << *out_path << "\n";
+            return 1;
+        }
+        out.write(reinterpret_cast<const char*>(outer_bytes.data()), static_cast<std::streamsize>(outer_bytes.size()));
+        out.close();
+        std::cerr << "g2m_fixture_cut repack-dgm1: wrote " << *out_path << " (" << outer_bytes.size()
+                  << " bytes total, " << total_tif_bytes << " tif bytes, " << total_tfw_bytes << " tfw bytes)\n";
+        return 0;
+    } catch (const DecodeError& e) {
+        std::cerr << "g2m_fixture_cut repack-dgm1: " << e.what() << "\n";
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "g2m_fixture_cut repack-dgm1: " << e.what() << "\n";
+        return 1;
+    }
+}
+
 int usage() {
     std::cerr << "usage: g2m_fixture_cut <command> [options]\n"
                  "commands:\n"
-                 "  cut-pbf --in PATH --relation ID [--relation ID...] [--bbox lon0,lat0,lon1,lat1] --out PATH\n";
+                 "  cut-pbf --in PATH --relation ID [--relation ID...] [--bbox lon0,lat0,lon1,lat1] --out PATH\n"
+                 "  repack-dgm1 --out PATH --inner OUTER_ZIP#SUBSTRING [--inner ...] --key E,N [--key ...]\n";
     return 1;
 }
 
@@ -336,6 +520,7 @@ int main(int argc, char** argv) {
     const std::string command = argv[1];
     const Args args = parse_args(argc, argv, 2);
     if (command == "cut-pbf") return cmd_cut_pbf(args);
+    if (command == "repack-dgm1") return cmd_repack_dgm1(args);
     std::cerr << "g2m_fixture_cut: unknown command '" << command << "'\n";
     return usage();
 }

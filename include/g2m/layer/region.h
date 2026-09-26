@@ -110,6 +110,13 @@ struct ResolvedPart {
     geom::RingSet rings;            // in-memory only, see above
     std::uint64_t vertices = 0;
     std::uint64_t geometry_hash = 0;
+    // Count of outer/inner ring-role mismatches assemble_rings() had to
+    // resolve by winding direction (g2m::geom::AssembledArea::role_mismatches,
+    // PLAN G1c pre-item b) - 0 for a UtmBbox part (no OSM roles involved).
+    // Surfaced so a region author can see when the source relation's own
+    // outer/inner tagging disagreed with its geometry, rather than that
+    // information being silently dropped at resolve time.
+    std::uint32_t role_mismatches = 0;
 
     friend bool operator==(const ResolvedPart&, const ResolvedPart&) = default;
 };

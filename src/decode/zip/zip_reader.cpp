@@ -256,4 +256,58 @@ std::shared_ptr<MemoryByteSource> ZipReader::read_entry_as_source(const ZipEntry
     return std::make_shared<MemoryByteSource>(read_entry(entry));
 }
 
+Result<std::shared_ptr<IByteSource>> ZipReader::entry_source(const ZipEntry& entry,
+                                                               std::uint64_t max_inflate_bytes) const {
+    if (entry.is_directory || entry.uncompressed_size == 0) {
+        return std::shared_ptr<IByteSource>(std::make_shared<MemoryByteSource>(std::vector<std::byte>{}));
+    }
+
+    if (entry.method == ZipMethod::Deflate) {
+        if (entry.uncompressed_size > max_inflate_bytes) {
+            return make_error(ErrorCode::LimitExceeded,
+                               "zip: entry '" + to_lossy_display_name(entry.name) + "' would inflate to " +
+                                   std::to_string(entry.uncompressed_size) + " bytes, exceeding the " +
+                                   std::to_string(max_inflate_bytes) + "-byte cap");
+        }
+        return std::shared_ptr<IByteSource>(std::make_shared<MemoryByteSource>(read_entry(entry)));
+    }
+    if (entry.method != ZipMethod::Stored) {
+        throw DecodeError("zip: unsupported compression method for entry_source '" +
+                           to_lossy_display_name(entry.name) + "'");
+    }
+    if (entry.compressed_size != entry.uncompressed_size) {
+        throw DecodeError("zip: stored entry size mismatch");
+    }
+
+    // Locate the actual compressed-data offset via the local header - same
+    // reasoning as read_entry() above (the central directory's own name/
+    // extra field lengths can differ from the local header's).
+    const auto lhdr = source_->read(entry.local_header_offset, 30);
+    if (rd_u32(&lhdr[0]) != kLocalHeaderSig) throw DecodeError("zip: malformed local file header");
+    const std::uint16_t name_len = rd_u16(&lhdr[26]);
+    const std::uint16_t extra_len = rd_u16(&lhdr[28]);
+    const std::uint64_t data_off = entry.local_header_offset + 30 + name_len + extra_len;
+
+    // Verify the CRC-32 once here, streaming 1 MiB chunks straight from the
+    // archive's own byte source rather than materialising the whole entry
+    // (PLAN.md D8: bounded memory even for a several-hundred-MB inner zip).
+    // A STORED entry's compressed bytes ARE its uncompressed bytes, so this
+    // reads exactly what the returned SubrangeByteSource will ever expose.
+    constexpr std::uint64_t kChunk = std::uint64_t{1} << 20; // 1 MiB
+    std::uint32_t crc = 0;
+    std::vector<std::byte> chunk;
+    for (std::uint64_t off = 0; off < entry.uncompressed_size;) {
+        const std::uint64_t len = std::min(kChunk, entry.uncompressed_size - off);
+        source_->read(data_off + off, len, chunk);
+        crc = libdeflate_crc32(crc, chunk.data(), chunk.size());
+        off += len;
+    }
+    if (crc != entry.crc32) {
+        throw DecodeError("zip: CRC-32 mismatch for '" + to_lossy_display_name(entry.name) + "'");
+    }
+
+    return std::shared_ptr<IByteSource>(
+        std::make_shared<SubrangeByteSource>(source_, data_off, entry.uncompressed_size));
+}
+
 } // namespace g2m::decode

@@ -67,6 +67,13 @@ void FileByteSource::read(std::uint64_t offset, std::uint64_t len, std::vector<s
     if (offset > size_ || len > size_ - offset) {
         throw DecodeError("FileByteSource::read: out of range");
     }
+    // One FILE* has one implicit read position, so the seek+read pair must
+    // be atomic w.r.t. any other thread's seek+read on the same object (see
+    // this class's header comment) - a plain mutex, not an atomic/lock-free
+    // scheme: correctness matters here, not scaling reads across cores (the
+    // DGM1 importer's own parallelism is across DIFFERENT outer zips /
+    // FileByteSource objects, not many threads hammering one).
+    std::lock_guard<std::mutex> lock(mutex_);
     if (G2M_FSEEK(impl_->fp, static_cast<g2m_off_t>(offset), SEEK_SET) != 0) {
         throw DecodeError("FileByteSource::read: seek failed");
     }
@@ -87,6 +94,25 @@ void MemoryByteSource::read(std::uint64_t offset, std::uint64_t len, std::vector
     }
     out.resize(len);
     std::memcpy(out.data(), data_.data() + offset, static_cast<std::size_t>(len));
+}
+
+SubrangeByteSource::SubrangeByteSource(std::shared_ptr<IByteSource> base, std::uint64_t offset, std::uint64_t size)
+    : base_(std::move(base)), offset_(offset), size_(size) {
+    if (!base_) throw DecodeError("SubrangeByteSource: null base");
+    if (offset_ > base_->size() || size_ > base_->size() - offset_) {
+        throw DecodeError("SubrangeByteSource: range exceeds base source");
+    }
+}
+
+void SubrangeByteSource::read(std::uint64_t offset, std::uint64_t len, std::vector<std::byte>& out) const {
+    if (len == 0) {
+        out.clear();
+        return;
+    }
+    if (offset > size_ || len > size_ - offset) {
+        throw DecodeError("SubrangeByteSource::read: out of range");
+    }
+    base_->read(offset_ + offset, len, out);
 }
 
 } // namespace g2m::decode

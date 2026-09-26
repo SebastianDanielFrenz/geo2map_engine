@@ -254,6 +254,7 @@ std::string to_json(const ResolvedRegion& r) {
         if (p.admin_level) pj["admin_level"] = *p.admin_level;
         pj["vertices"] = p.vertices;
         pj["geometry_hash"] = to_hex(p.geometry_hash);
+        pj["role_mismatches"] = p.role_mismatches;
         parts.push_back(std::move(pj));
     }
     j["parts"] = std::move(parts);
@@ -303,16 +304,21 @@ Result<ResolvedRegion> parse_resolved_region(std::string_view text) {
     const json* parts = rd.array(j, "parts");
     if (!parts) return fail();
     for (const json& pj : *parts) {
-        if (!rd.no_unknown_keys(pj, {"kind", "id", "name", "admin_level", "vertices", "geometry_hash"})) return fail();
+        if (!rd.no_unknown_keys(pj, {"kind", "id", "name", "admin_level", "vertices", "geometry_hash",
+                                      "role_mismatches"})) {
+            return fail();
+        }
         ResolvedPart p;
         std::string kind;
-        std::uint64_t vertices = 0;
+        std::uint64_t vertices = 0, role_mismatches = 0;
         if (!rd.str(pj, "kind", kind) || !rd.integer(pj, "id", INT64_MIN, INT64_MAX, p.id) ||
             !rd.str(pj, "name", p.name) || !rd.opt_int(pj, "admin_level", INT32_MIN, INT32_MAX, p.admin_level) ||
-            !rd.uint(pj, "vertices", UINT64_MAX, vertices) || !rd.hash64(pj, "geometry_hash", p.geometry_hash)) {
+            !rd.uint(pj, "vertices", UINT64_MAX, vertices) || !rd.hash64(pj, "geometry_hash", p.geometry_hash) ||
+            !rd.uint(pj, "role_mismatches", UINT32_MAX, role_mismatches)) {
             return fail();
         }
         p.vertices = vertices;
+        p.role_mismatches = static_cast<std::uint32_t>(role_mismatches);
         if (kind == "osm_admin") {
             p.kind = ResolvedPartKind::OsmAdmin;
         } else if (kind == "utm_bbox") {

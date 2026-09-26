@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <vector>
@@ -62,6 +63,13 @@ public:
 // offsets: _fseeki64 on the MSVC CRT, plain 64-bit off_t elsewhere - see
 // byte_source.cpp). Read-only; never memory-maps (works the same for a
 // 3.64 GB DGM1 delivery ZIP as for a 300 MB PBF).
+//
+// Thread-safe: read() is safe to call concurrently from any number of
+// threads (a std::mutex serialises the underlying fseek+fread pair, since
+// one FILE* has exactly one implicit read position - PLAN.md G1c I3, needed
+// once several importer worker threads decode different DGM1 km tiles from
+// the same outer PKT_*.zip's FileByteSource at once). Concurrent calls are
+// simply serialised, not parallelised - no attempt at scatter/gather reads.
 class FileByteSource final : public IByteSource {
 public:
     // Throws DecodeError if the file cannot be opened.
@@ -78,6 +86,31 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     std::uint64_t size_ = 0;
+    mutable std::mutex mutex_;
+};
+
+// A zero-copy view over [offset, offset + size) of another IByteSource
+// (PLAN.md G1c I3, D8: a STORED nested-ZIP entry's compressed bytes ARE its
+// uncompressed bytes, so they can be read directly out of the outer
+// archive's own byte source with no intermediate buffer). Every read()
+// simply forwards to `base` at `offset` + the caller's own offset, after a
+// bounds check against `size` - `base` itself remains the one place actual
+// I/O (or another subrange's bounds check) happens, so a chain of nested
+// SubrangeByteSources (ZIP-in-ZIP-in-ZIP) stays zero-copy at every level.
+// `base` is kept alive via shared_ptr for as long as this view is.
+class SubrangeByteSource final : public IByteSource {
+public:
+    // Throws DecodeError if `base` is null or [offset, offset + size) is not
+    // entirely within [0, base->size()).
+    SubrangeByteSource(std::shared_ptr<IByteSource> base, std::uint64_t offset, std::uint64_t size);
+
+    std::uint64_t size() const override { return size_; }
+    void read(std::uint64_t offset, std::uint64_t len, std::vector<std::byte>& out) const override;
+
+private:
+    std::shared_ptr<IByteSource> base_;
+    std::uint64_t offset_;
+    std::uint64_t size_;
 };
 
 // An in-memory buffer (e.g. a nested ZIP's inner archive, decompressed once

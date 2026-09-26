@@ -1,5 +1,6 @@
 {"format":"g2m.regions/1","regions":[
   {"name":"fixture","scheme":"utm32n","halo_m":200,"parts":[
-    {"kind":"osm_admin","relation":4209939,"expect_name":"Höchst","expect_admin_level":10}
+    {"kind":"osm_admin","relation":4209939,"expect_name":"Höchst","expect_admin_level":10},
+    {"kind":"utm_bbox","west":474000,"south":5560000,"east":476000,"north":5561000}
   ]}
 ]}

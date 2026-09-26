@@ -20,6 +20,7 @@
 // logging/UI only - never use it as a lookup key.
 #pragma once
 
+#include "g2m/core/result.h"
 #include "g2m/decode/byte_source.h"
 
 #include <cstdint>
@@ -68,6 +69,20 @@ public:
     // without extracting to disk"): decompresses the entry and wraps it as
     // a MemoryByteSource, ready to hand to another ZipReader or TiffReader.
     std::shared_ptr<MemoryByteSource> read_entry_as_source(const ZipEntry& entry) const;
+
+    // Zero-copy nested-ZIP access (PLAN.md G1c I3, D8): for a STORED entry,
+    // returns a SubrangeByteSource directly over this archive's own byte
+    // source (no intermediate buffer, however large the entry) after
+    // verifying its CRC-32 once by streaming it in 1 MiB chunks. For a
+    // DEFLATE entry, inflates it fully into a MemoryByteSource (verifying
+    // CRC-32 the same way read_entry() does) unless its declared
+    // uncompressed size exceeds `max_inflate_bytes`, in which case this
+    // returns ErrorCode::LimitExceeded instead of allocating. Throws
+    // DecodeError for a malformed local header, an unsupported method, a
+    // stored-size mismatch, or a CRC-32 mismatch (the same "untrusted bytes
+    // fail loudly" contract as read_entry()) - the Result return is only for
+    // the recoverable "caller-chosen cap exceeded" case.
+    Result<std::shared_ptr<IByteSource>> entry_source(const ZipEntry& entry, std::uint64_t max_inflate_bytes) const;
 
 private:
     std::shared_ptr<IByteSource> source_;
