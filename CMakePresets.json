@@ -80,6 +80,30 @@
       }
     },
     {
+      "name": "bridge-release",
+      "displayName": "Windows / clang-cl / Release + physics_sim bridge (PLAN.md R2.2 G5/G6)",
+      "inherits": "clang-cl-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "G2M_BUILD_IMPORT": "ON",
+        "G2M_BUILD_TESTS": "ON",
+        "PS_BUILD_TESTS": "OFF",
+        "PS_BUILD_GODOT_ADAPTER": "OFF",
+        "G2M_PS_SOURCE_DIR": "${sourceDir}/out/ps_pin/src",
+        "FETCHCONTENT_FULLY_DISCONNECTED": "ON",
+        "FETCHCONTENT_SOURCE_DIR_JOLTPHYSICS": "S:/claude_code/physics_sim/out/build/release/_deps/joltphysics-src",
+        "FETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON": "S:/claude_code/physics_sim/out/build/release/_deps/nlohmann_json-src",
+        "FETCHCONTENT_SOURCE_DIR_CATCH2": "${sourceDir}/out/build/release/_deps/catch2-src",
+        "FETCHCONTENT_SOURCE_DIR_G2M_ZSTD": "${sourceDir}/out/build/release/_deps/g2m_zstd-src",
+        "FETCHCONTENT_SOURCE_DIR_G2M_SQLITE": "${sourceDir}/out/build/release/_deps/g2m_sqlite-src",
+        "FETCHCONTENT_SOURCE_DIR_G2M_JSON": "${sourceDir}/out/build/release/_deps/g2m_json-src",
+        "FETCHCONTENT_SOURCE_DIR_LIBDEFLATE": "${sourceDir}/out/build/release/_deps/libdeflate-src",
+        "FETCHCONTENT_SOURCE_DIR_ZLIBNG": "${sourceDir}/out/build/release/_deps/zlibng-src",
+        "FETCHCONTENT_SOURCE_DIR_PROTOZERO": "${sourceDir}/out/build/release/_deps/protozero-src",
+        "FETCHCONTENT_SOURCE_DIR_LIBOSMIUM": "${sourceDir}/out/build/release/_deps/libosmium-src"
+      }
+    },
+    {
       "name": "msvc-base",
       "hidden": true,
       "inherits": "windows-base",
@@ -162,6 +186,7 @@
     { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo" },
     { "name": "asan", "configurePreset": "asan" },
     { "name": "consumer-check", "configurePreset": "consumer-check" },
+    { "name": "bridge-release", "configurePreset": "bridge-release" },
     { "name": "msvc-debug", "configurePreset": "msvc-debug" },
     { "name": "msvc-release", "configurePreset": "msvc-release" },
     { "name": "linux-release", "configurePreset": "linux-release" },
@@ -173,6 +198,7 @@
     { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
     { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo", "output": { "outputOnFailure": true } },
     { "name": "asan", "configurePreset": "asan", "output": { "outputOnFailure": true } },
+    { "name": "bridge-release", "configurePreset": "bridge-release", "output": { "outputOnFailure": true } },
     { "name": "msvc-debug", "configurePreset": "msvc-debug", "output": { "outputOnFailure": true } },
     { "name": "msvc-release", "configurePreset": "msvc-release", "output": { "outputOnFailure": true } },
     { "name": "linux-release", "configurePreset": "linux-release", "output": { "outputOnFailure": true } },

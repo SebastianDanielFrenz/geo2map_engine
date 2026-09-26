@@ -12,9 +12,6 @@
 #include "g2m/core/raster.h"
 #include "g2m/core/tile_key.h"
 #include "g2m/decode/dgm1.h"
-#include "g2m/import/dem.h"
-#include "g2m/import/region_resolve.h"
-#include "g2m/import/sink.h"
 #include "g2m/layer/derive_terrain.h"
 #include "g2m/layer/height_tile.h"
 #include "g2m/layer/layer_id.h"
@@ -27,6 +24,8 @@
 #include "g2m/server/server.h"
 #include "g2m/server/tile_store.h"
 #include "g2m/server/upstream.h"
+
+#include "fixture_release.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -45,12 +44,9 @@
 #include <vector>
 
 using namespace g2m;
-using namespace g2m::import;
 namespace dgm1 = g2m::decode::dgm1;
 
 namespace {
-
-std::string fixtures_dir() { return std::string(G2M_SOURCE_DIR) + "/testdata/fixtures"; }
 
 // Same collision-avoidance shape as tests/unit/test_import_e2e.cpp's own
 // TempDir (duplicated rather than shared - that one is private to
@@ -76,25 +72,12 @@ private:
     std::filesystem::path path_;
 };
 
-// The fixture region (testdata/fixtures/regions.json's "fixture" entry
-// covers more than we need here): a literal utm_bbox chosen, like
-// test_import_dem.cpp's and test_import_e2e.cpp's own resolve_bbox_region,
-// to overlap exactly the DGM1 fixture's two 1 km squares 474/5560 and
-// 475/5560 (testdata/fixtures/dgm1/PKT_fixture.zip).
-Result<ResolvedRegion> resolve_fixture_region() {
-    const std::string pbf_path = fixtures_dir() + "/osm/frankfurt_hoechst.osm.pbf";
-    RegionSpec spec;
-    spec.name = "g21_derive_terrain";
-    spec.scheme = "utm32n";
-    spec.halo_m = 0;
-    UtmBboxPart bbox;
-    bbox.west = 474000;
-    bbox.south = 5560000;
-    bbox.east = 476000;
-    bbox.north = 5561000;
-    spec.parts.push_back(bbox);
-    return resolve_region(spec, pbf_path);
-}
+// The fixture region itself (testdata/fixtures/regions.json's "fixture"
+// entry covers more than we need here): a literal utm_bbox overlapping
+// exactly the DGM1 fixture's two 1 km squares 474/5560 and 475/5560
+// (testdata/fixtures/dgm1/PKT_fixture.zip) - now built by
+// tests/support/fixture_release.cpp's own resolve_fixture_region()
+// (PLAN.md R2.2 section 1c), not duplicated here.
 
 std::unique_ptr<TileStore> open_store(const TempDir& d, const std::string& name) {
     TileStoreConfig c;
@@ -203,62 +186,25 @@ void verify_tile_samples(KmDecodedCache& km, const HeightTile& tile) {
 
 // The whole import -> store -> local release -> Server fixture, shared by
 // every TEST_CASE below (each constructs its own, same shape as
-// tests/server/test_server.cpp's own World).
+// tests/server/test_server.cpp's own World) - PLAN.md R2.2 section 1c:
+// factored out into tests/support/fixture_release.{h,cpp} so the physics
+// bridge tests (bridges/physics_sim/tests, G7+) can build the exact same
+// PKT DGM1 fixture release. `release` owns the Server/TileStores/upstream/
+// catalog; the reference/pointer members below just restate its fields
+// under this file's own pre-existing `fx.<name>` spellings so every
+// TEST_CASE below (fx.catalog, fx.region, fx.server, fx.rid, fx.sources,
+// fx.scope, fx.manifest) needed no further changes.
 struct Fixture {
     TempDir dir{"derive_terrain"};
-    std::unique_ptr<TileStore> sources = open_store(dir, "sources");
-    std::unique_ptr<TileStore> derived = open_store(dir, "derived");
-    // Raw g2m.src.elev.dgm1 tiles are served from `sources` through this
-    // upstream (must outlive the Server, hence a member here) - the same
-    // wiring tests/unit/test_import_e2e.cpp and tests/server/test_server.cpp
-    // use for "raw tiles from the local source upstream". Without this the
-    // Server has no store, deriver or upstream for a RAW layer at all, so
-    // every ElevBaseDeriver::inputs_for() resolution 404s and every derived
-    // elev.base tile comes back entirely NoData - found the hard way: with
-    // this missing, 5 of 6 TEST_CASEs below still passed (almost every
-    // sample in this fixture's region legitimately expects NoData, since
-    // the fixture covers only 2 of the many 1 km squares the region's
-    // level-2 tiling touches), and the 6th only failed once REQUIRE hit the
-    // very first sample that expects real data.
-    LocalSourceUpstream local_upstream{*sources};
-    std::optional<dgm1::Catalog> catalog;
-    ResolvedRegion region;
-    BuiltinTerrainDerivers derivers;
-    ReleaseManifest manifest;
-    std::unique_ptr<Server> server;
-    std::string scope = "g21";
-    ReleaseId rid{};
+    std::unique_ptr<test_support::ReleaseFixture> release = test_support::make_fixture_release(dir.path(), "g21");
 
-    Fixture() {
-        Result<ResolvedRegion> r = resolve_fixture_region();
-        REQUIRE(r.ok());
-        region = *r;
-
-        Result<dgm1::Catalog> c = dgm1::Catalog::open({fixtures_dir() + "/dgm1/PKT_fixture.zip"});
-        REQUIRE(c.ok());
-        catalog.emplace(std::move(c).value());
-
-        StoreSink sink(*sources, scope, /*pin=*/true);
-        Result<DemImportReport> report = import_dem(region, *catalog, sink, scope, DemImportOptions{});
-        REQUIRE(report.ok());
-        REQUIRE(report->tiles_written > 0);
-
-        std::vector<ReleaseSource> sources_attr = {
-            ReleaseSource{"dgm1_fixture", "2026-09-26", "dl-de/zero-2-0", "test", false}};
-        LocalReleaseParams params = builtin_local_release_params(scope, derivers, std::move(sources_attr));
-        Result<ReleaseManifest> m = make_local_release(*sources, params);
-        REQUIRE(m.ok());
-        manifest = *m;
-        rid = manifest.rid;
-
-        ServerConfig config;
-        config.server_id = "test-derive-terrain";
-        config.derived_store = derived.get();
-        config.derivers = derivers.ordered();
-        config.upstreams = {&local_upstream};
-        server = std::make_unique<Server>(config);
-        REQUIRE(server->add_release(manifest, scope).ok());
-    }
+    const dgm1::Catalog* catalog = &*release->catalog;
+    const ResolvedRegion& region = release->region;
+    const ReleaseManifest& manifest = release->manifest;
+    Server* server = release->server.get();
+    TileStore* sources = release->sources.get();
+    const std::string& scope = release->scope;
+    const ReleaseId& rid = release->rid;
 };
 
 TileResponse fetch(Server& s, const ReleaseId& rid, const std::string& layer, const TileKey& key) {

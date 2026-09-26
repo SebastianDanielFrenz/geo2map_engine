@@ -85,6 +85,37 @@ endif()
 
 include(FetchContent)
 
+# ---------------------------------------------------------------------------
+# physics_sim (bridges/physics_sim, PLAN.md R2.2 section 1a/G5). Not a
+# submodule - physics_sim stays entirely in its own sibling repo
+# (S:\claude_code\physics_sim); G2M_PS_SOURCE_DIR instead points at a checkout
+# of it (bridges/physics_sim/physics_sim.pin records the exact commit this
+# bridge is built against; tools/ci.ps1's own bridge-release leg clones/checks
+# it out under out/ps_pin/src and wires its FetchContent _deps offline via
+# FETCHCONTENT_SOURCE_DIR_JOLTPHYSICS/_NLOHMANN_JSON, never a network fetch).
+# Mirrors racing_game's own CMakeLists.txt ordering (its physics_sim
+# add_subdirectory sits before its own Catch2 FetchContent_Declare, lines
+# ~81-170): embedded BEFORE our own Catch2 declare below, so physics_sim's
+# own FetchContent declarations (JoltPhysics, nlohmann_json, and - only if a
+# caller leaves PS_BUILD_TESTS ON - its own Catch2) resolve first and nothing
+# here can shadow or clash with them, even though in practice the
+# bridge-release preset sets PS_BUILD_TESTS=OFF so physics_sim never declares
+# its own Catch2 at all. EXCLUDE_FROM_ALL: physics_sim's own tools/tests are
+# not part of geo2map_engine's default build - only ps_core (plus whatever
+# PS_BUILD_TESTS/PS_BUILD_GODOT_ADAPTER, the caller's own cache variables,
+# additionally pull in) is built here. Binary dir "${CMAKE_BINARY_DIR}/ps" so
+# its build tree stays out of geo2map_engine's own out-of-source layout.
+#
+# Empty (the default): the physics_sim bridge is skipped entirely - every
+# existing geo2map_engine build (consumer-check, the sanitizer legs, etc.) is
+# completely unaffected.
+# ---------------------------------------------------------------------------
+set(G2M_PS_SOURCE_DIR "" CACHE PATH
+    "Path to a physics_sim checkout (bridges/physics_sim/physics_sim.pin's own commit) to embed as a nested project; empty skips bridges/physics_sim entirely")
+if(G2M_PS_SOURCE_DIR)
+  add_subdirectory("${G2M_PS_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps" EXCLUDE_FROM_ALL)
+endif()
+
 # --- Catch2 v3 (BSL-1.0), tests only. Same pin as physics_sim.
 if(G2M_BUILD_TESTS)
   FetchContent_Declare(
@@ -202,17 +233,16 @@ if(G2M_BUILD_REFGEN)
 endif()
 
 # Later targets (PLAN.md 2.3), not built yet - placeholders only, see CLAUDE.md:
-#   g2m_c (C API), g2m_http (G6), g2m_ps_bridge (bridges/physics_sim, only
-#   if(TARGET ps_core)), g2m_godot (adapters/godot), apps g2m_server / g2m_cli.
-#   (g2m_layers/g2m_server/g2m_client: G1+, already built above. g2m_import
-#   and its app g2m_tiler: G1c I2, already built above.)
-#
-# PLAN.md G2.0 Task D: bridges/physics_sim does not exist yet (G2.4). Once it
-# does, add here (not inside the G2M_BUILD_IMPORT block above - a consumer
-# bridge only needs g2m_server/g2m_client/g2m_layers, never the decoders):
-#   if(TARGET ps_core)
-#     add_subdirectory(bridges/physics_sim)
-#   endif()
-# `if(TARGET ps_core)` is the existing guard (physics_sim's ps_core must
-# already be add_subdirectory()-ed by whatever embeds both projects); this is
-# additionally why it stays OUTSIDE any G2M_BUILD_IMPORT check.
+#   g2m_c (C API), g2m_http (G6), g2m_godot (adapters/godot), apps g2m_server /
+#   g2m_cli. (g2m_layers/g2m_server/g2m_client: G1+, already built above.
+#   g2m_import and its app g2m_tiler: G1c I2, already built above.
+#   g2m_ps_bridge: bridges/physics_sim, G5, built below.)
+
+# bridges/physics_sim (g2m_ps_bridge, PLAN.md R2.2 section 1a/G5): only when
+# G2M_PS_SOURCE_DIR (above) actually embedded physics_sim's own ps_core -
+# `if(TARGET ps_core)` is the guard. Deliberately OUTSIDE the G2M_BUILD_IMPORT
+# block above: the bridge only needs g2m_server/g2m_client/g2m_layers/g2m_phys,
+# never the decoder/importer stack.
+if(TARGET ps_core)
+  add_subdirectory(bridges/physics_sim)
+endif()

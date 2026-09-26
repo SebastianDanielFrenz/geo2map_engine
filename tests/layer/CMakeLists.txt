@@ -22,6 +22,7 @@ add_executable(g2m_layer_tests
 target_link_libraries(g2m_layer_tests PRIVATE
   g2m_layers g2m_decode g2m_import g2m_server
   g2m_test_catch_main g2m_warnings g2m_options
+  g2m_fixture_release
   libdeflate::libdeflate_static
 )
 target_compile_definitions(g2m_layer_tests PRIVATE G2M_SOURCE_DIR="${PROJECT_SOURCE_DIR}")

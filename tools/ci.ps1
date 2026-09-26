@@ -54,12 +54,20 @@ New-Item -ItemType Directory -Force $logDir, $goldenDir | Out-Null
 $windowsLegs = @('debug', 'release', 'asan', 'msvc-release')
 $wslLegs = @('linux-release', 'linux-asan-ubsan', 'linux-tsan')
 $consumerLeg = 'consumer-check'   # PLAN.md G2.0 Task D: Windows-only, configure + partial build
+# PLAN.md R2.2 section 1c (bridges/physics_sim, G5/G6): deliberately NOT part
+# of $windowsLegs / the default run - it embeds a physics_sim checkout via
+# G2M_PS_SOURCE_DIR (CMakePresets.json's own "bridge-release" preset) and
+# needs a local physics_sim clone prepared first (Invoke-PreparePsPin below),
+# so every existing CI invocation (bare `tools\ci.ps1`, `-Full`, etc.) stays
+# completely unaffected. Only runs via an explicit `-Only bridge-release`
+# (alongside any other named leg, e.g. `-Only release,bridge-release`).
+$bridgeLeg = 'bridge-release'
 
 # -Only accepts "a,b" as one string too.
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ } | ForEach-Object { $_.Trim() })
 foreach ($name in $Only) {
-    if (($windowsLegs + $wslLegs + @($consumerLeg)) -notcontains $name) {
-        throw "-Only: unknown leg '$name' (known: $(($windowsLegs + $wslLegs + @($consumerLeg)) -join ', '))"
+    if (($windowsLegs + $wslLegs + @($consumerLeg, $bridgeLeg)) -notcontains $name) {
+        throw "-Only: unknown leg '$name' (known: $(($windowsLegs + $wslLegs + @($consumerLeg, $bridgeLeg)) -join ', '))"
     }
 }
 
@@ -169,6 +177,101 @@ function Invoke-ConsumerCheck {
     } finally {
         Pop-Location
     }
+}
+
+# PLAN.md R2.2 section 1c: the bridge-release preset's own FETCHCONTENT_
+# SOURCE_DIR_* cache variables (CMakePresets.json), listed here too so this
+# script can fail with an ACTIONABLE message before ever invoking cmake -
+# FetchContent's own error for a missing FETCHCONTENT_FULLY_DISCONNECTED
+# source dir is far less clear. Two are physics_sim's own (JoltPhysics,
+# nlohmann_json - always fetched by ps_core regardless of PS_BUILD_TESTS);
+# the rest are geo2map_engine's own FetchContent deps (Catch2 plus, since
+# the preset sets G2M_BUILD_IMPORT=ON, every decoder dependency) - reused
+# from this repo's own "release" preset build, never re-downloaded.
+$script:BridgeOfflineDeps = @(
+    'S:\claude_code\physics_sim\out\build\release\_deps\joltphysics-src',
+    'S:\claude_code\physics_sim\out\build\release\_deps\nlohmann_json-src',
+    (Join-Path $repoRoot 'out\build\release\_deps\catch2-src'),
+    (Join-Path $repoRoot 'out\build\release\_deps\g2m_zstd-src'),
+    (Join-Path $repoRoot 'out\build\release\_deps\g2m_sqlite-src'),
+    (Join-Path $repoRoot 'out\build\release\_deps\g2m_json-src'),
+    (Join-Path $repoRoot 'out\build\release\_deps\libdeflate-src'),
+    (Join-Path $repoRoot 'out\build\release\_deps\zlibng-src'),
+    (Join-Path $repoRoot 'out\build\release\_deps\protozero-src'),
+    (Join-Path $repoRoot 'out\build\release\_deps\libosmium-src')
+)
+
+function Test-BridgeOfflineDeps {
+    $missing = @($script:BridgeOfflineDeps | Where-Object { -not (Test-Path $_) })
+    if ($missing.Count -eq 0) { return $true }
+    Write-Host "bridge-release: missing offline FetchContent source dir(s):" -ForegroundColor Red
+    $missing | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    Write-Host "  physics_sim's two (joltphysics-src, nlohmann_json-src): build physics_sim's own 'release' preset first (cmake --preset release && cmake --build --preset release)." -ForegroundColor Red
+    Write-Host "  geo2map_engine's own (everything else above): build this repo's own 'release' preset first." -ForegroundColor Red
+    return $false
+}
+
+# Prepares out/ps_pin/src as a local (no-network, --local) clone of
+# physics_sim checked out to bridges/physics_sim/physics_sim.pin's commit -
+# reused as-is if it is already there (matching by HEAD, short-sha aware).
+# physics_sim itself is never touched (a plain read-only `git clone --local`
+# + `git checkout` inside the clone).
+function Invoke-PreparePsPin {
+    Write-Host ""
+    Write-Host "=== Preparing physics_sim pin (out/ps_pin/src) ===" -ForegroundColor Cyan
+    $pinFile = Join-Path $repoRoot 'bridges\physics_sim\physics_sim.pin'
+    if (-not (Test-Path $pinFile)) { throw "bridge-release: pin file not found: $pinFile" }
+    $pin = (Get-Content -LiteralPath $pinFile -Raw).Trim()
+    if (-not $pin) { throw "bridge-release: $pinFile is empty" }
+
+    $physSimSrc = 'S:\claude_code\physics_sim'
+    if (-not (Test-Path (Join-Path $physSimSrc '.git'))) {
+        throw "bridge-release: physics_sim source not found at $physSimSrc (expected a git checkout)"
+    }
+
+    $pinRoot = Join-Path $repoRoot 'out\ps_pin'
+    $clone = Join-Path $pinRoot 'src'
+    New-Item -ItemType Directory -Force $pinRoot | Out-Null
+
+    $needClone = $true
+    if (Test-Path (Join-Path $clone '.git')) {
+        Push-Location $clone
+        try {
+            $head = (& git rev-parse HEAD).Trim()
+            if ($LASTEXITCODE -eq 0 -and $head -like "$pin*") {
+                Write-Host "  out/ps_pin/src already at pin $pin ($head) - reusing" -ForegroundColor DarkGray
+                $needClone = $false
+            }
+        } finally { Pop-Location }
+    }
+
+    if ($needClone) {
+        if (Test-Path $clone) { Remove-Item -LiteralPath $clone -Recurse -Force }
+        Write-Host "  cloning $physSimSrc -> $clone (--local, no network)" -ForegroundColor DarkGray
+        & git clone --local --quiet $physSimSrc $clone
+        if ($LASTEXITCODE -ne 0) { throw "bridge-release: git clone --local $physSimSrc -> $clone failed (exit $LASTEXITCODE)" }
+        Push-Location $clone
+        try {
+            & git checkout --quiet $pin
+            if ($LASTEXITCODE -ne 0) { throw "bridge-release: git checkout $pin failed inside $clone (exit $LASTEXITCODE)" }
+        } finally { Pop-Location }
+    }
+}
+
+function Invoke-BridgeReleaseLeg {
+    Write-Host ""
+    Write-Host "=== Windows leg: $bridgeLeg ===" -ForegroundColor Cyan
+    if (-not (Test-BridgeOfflineDeps)) {
+        Add-Result $bridgeLeg 'configure' $false 'missing offline FetchContent source dir(s), see above'
+        return
+    }
+    try {
+        Invoke-PreparePsPin
+    } catch {
+        Add-Result $bridgeLeg 'configure' $false "physics_sim pin prep failed: $($_.Exception.Message)"
+        return
+    }
+    Invoke-WindowsLeg $bridgeLeg
 }
 
 # ---------------------------------------------------------------------------
@@ -319,10 +422,16 @@ function Invoke-GoldenCompare {
 $start = Get-Date
 Invoke-LibmGrep
 
-if (-not $SkipWindows -and ($windowsLegs + @($consumerLeg) | Where-Object { Should-Run $_ })) {
+# bridge-release only ever runs when explicitly named via -Only (see
+# $bridgeLeg's own comment above) - Should-Run alone would also select it on
+# a bare, no-args run (Only.Count -eq 0 there means "run everything").
+$runBridgeLeg = ($Only.Count -gt 0) -and (Should-Run $bridgeLeg)
+
+if (-not $SkipWindows -and (($windowsLegs + @($consumerLeg) | Where-Object { Should-Run $_ }) -or $runBridgeLeg)) {
     Enter-VsDevShell
     foreach ($leg in $windowsLegs) { if (Should-Run $leg) { Invoke-WindowsLeg $leg } }
     if (Should-Run $consumerLeg) { Invoke-ConsumerCheck }
+    if ($runBridgeLeg) { Invoke-BridgeReleaseLeg }
 }
 if (-not $SkipWsl -and ($wslLegs | Where-Object { Should-Run $_ })) {
     foreach ($leg in $wslLegs) { if (Should-Run $leg) { Invoke-WslLeg $leg } }
