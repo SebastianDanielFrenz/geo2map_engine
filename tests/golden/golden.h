@@ -48,6 +48,13 @@ std::vector<Entry> compute_g2();
 // extends "g2" in parallel); testdata/golden/g2mesh_golden.txt.
 std::vector<Entry> compute_g2mesh();
 
+// G2roads (golden_g2roads.cpp, PLAN.md 6.5 / roads_plan.md): g2m::
+// extract_road_segments + g2m::rasterize_road_segments over a fixed
+// synthetic OsmData set - proves the segment extraction (incl. SurfaceKind /
+// paved-vs-unpaved LandClass) and the exact rasteriser are byte-identical
+// Windows/Linux; testdata/golden/g2roads_golden.txt.
+std::vector<Entry> compute_g2roads();
+
 // "name count hash\n" per entry, the golden file's line format.
 std::string format(const std::vector<Entry>& entries);
 

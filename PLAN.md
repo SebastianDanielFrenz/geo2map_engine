@@ -1014,6 +1014,15 @@ On lidar data this mostly removes noise. On GLO-30 it is what makes a road driva
   - `roof:shape` for simple footprints; base height = minimum terrain under the footprint.
 - **Water:** polygons with a surface height = minimum shoreline height.
 
+**G2.5a note (2026-09-27, roads_plan.md approach (a')):** the client-side
+OSM road raster (g2m::extract_road_segments + g2m::rasterize_road_segments,
+include/g2m/layer/osm_roads.h) ships FIRST, feeding 6.5's "Road ribbons"
+directly. G2.5's own TerrainClassDeriver (server-side `terrain.class`) and
+the physics bridge's `cell_surface_ids` (8.1) REUSE the same two functions
+later - this is why osm_roads.h's SurfaceKind extraction and paved/unpaved
+LandClass split are correct and tested now even though no grip/physics wiring
+happens in this step (open question, roads_plan.md).
+
 ### 6.5 Client-side derivations (never served)
 
 - **Terrain render chunks:**

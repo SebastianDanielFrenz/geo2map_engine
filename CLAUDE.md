@@ -407,7 +407,7 @@ end of `CMakeLists.txt`):
     override global operator new/delete, which would clash with `ps_core`'s
     own override);
   - `g2m_golden` (STATIC, links g2m_layers + g2m_server + g2m_mesh) and
-    `g2m_golden_dump` (exe; sets: `g0`, `g1`, `g1c`, `g2`, `g2mesh`);
+    `g2m_golden_dump` (exe; sets: `g0`, `g1`, `g1c`, `g2`, `g2mesh`, `g2roads`);
   - `g2m_fuzz_run`, `g2m_fuzz_seeds_lib` (STATIC);
   - with `G2M_BUILD_FUZZERS`: `g2m_fuzz_instrumented` (OBJECT:
     `G2M_LAYERS_SOURCES` + `src/server/protocol.cpp` + `fuzz_run.cpp`,

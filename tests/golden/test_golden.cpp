@@ -65,6 +65,15 @@ TEST_CASE("G2mesh golden hashes match testdata/golden/g2mesh_golden.txt", "[gold
     check_against("g2mesh_golden.txt", g2m_golden::compute_g2mesh());
 }
 
+// PLAN.md 6.5 / roads_plan.md: g2m::extract_road_segments +
+// g2m::rasterize_road_segments over a fixed synthetic OsmData set
+// (golden_g2roads.cpp) - proves the client-side OSM road raster (segment
+// extraction incl. SurfaceKind/paved-vs-unpaved LandClass, and the exact
+// rasteriser) is byte-identical Windows/Linux.
+TEST_CASE("G2roads golden hashes match testdata/golden/g2roads_golden.txt", "[golden]") {
+    check_against("g2roads_golden.txt", g2m_golden::compute_g2roads());
+}
+
 // dem.h/osm.h/landcover.h all document their sink output as independent of
 // `jobs` (only DemImportReport's scheduling-dependent counters are not, and
 // the fixture's 2 unique 1km DGM1 keys never evict from the default 256-
