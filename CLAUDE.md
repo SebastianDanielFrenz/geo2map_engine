@@ -109,7 +109,22 @@ geo2map_engine/
                                       the DGM1 L0 data-tile keys a square of physics tiles can touch);
                                       anchored so every physics sample sits exactly on a DGM1 cell centre
                                       (see the header's own derivation and its [AMEND] test)
-  src/phys/                           g2m_phys implementation: physics_grid.cpp
+    resident_heights.h                ResidentHeightSet (PLAN.md R2.2 section 1a): a sorted-by-packed()
+                                      vector<Entry> cache of loaded HeightTiles; find (binary search,
+                                      returns a raw HeightTile* - no refcount traffic), install (nullptr =
+                                      confirmed Absent/404), retain_only (eviction). Threading contract
+                                      written into the header: only the owner mutates it, and only between
+                                      World steps - find() takes no lock
+    fill_physics_heights.h            FillResult (Ok/HadNoData/MissingTile), fill_physics_heights<Real>
+                                      (header-only template): fills one physics tile's samples from a
+                                      ResidentHeightSet, NO allocation for any sample count (incl. 1024),
+                                      NO row flip (out is row-major [j*n+k], j north, matching
+                                      HeightTile::h's own row-0-is-south layout directly). A NoData sample
+                                      or an Absent tile writes `hole`; Absent alone leaves the result Ok
+                                      (a design choice - see the header's own note), a resident tile's own
+                                      NoData sample sets HadNoData, and any tile missing from the set sets
+                                      MissingTile (priority over HadNoData)
+  src/phys/                           g2m_phys implementation: physics_grid.cpp, resident_heights.cpp
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
                                       src_landcover, src_osm, pack, release_manifest, protocol, cache_db
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)
@@ -250,11 +265,12 @@ end of `CMakeLists.txt`):
   other dependency - no rendering-engine or third-party type anywhere in
   `include/g2m/mesh/`.
 - `g2m_phys` (STATIC, PLAN.md R2.2 section 1a): `src/phys/*.cpp`
-  (physics_grid.cpp); PUBLIC `g2m_client` (transitively `g2m_server` /
-  `g2m_layers` / `g2m_core`, for `HeightTile`). Built UNCONDITIONALLY, not
-  gated by `G2M_BUILD_IMPORT` - every CI leg, including the sanitizer legs,
-  exercises it. No physics_sim/Jolt/Godot type anywhere in
-  `include/g2m/phys/`, and it never links physics_sim.
+  (physics_grid.cpp, resident_heights.cpp - fill_physics_heights.h is a
+  header-only template, no .cpp of its own); PUBLIC `g2m_client`
+  (transitively `g2m_server` / `g2m_layers` / `g2m_core`, for `HeightTile`).
+  Built UNCONDITIONALLY, not gated by `G2M_BUILD_IMPORT` - every CI leg,
+  including the sanitizer legs, exercises it. No physics_sim/Jolt/Godot type
+  anywhere in `include/g2m/phys/`, and it never links physics_sim.
 - Third-party (`cmake/deps_core.cmake`, compiled as our own targets, no
   g2m_warnings/options): `g2m_dep_zstd` (STATIC, C), `g2m_dep_sqlite3`
   (STATIC, C), `g2m_dep_json` (INTERFACE, header-only).
@@ -273,9 +289,11 @@ end of `CMakeLists.txt`):
     global operator new/delete counting override scoped to this one
     executable, for `build_chunk`'s zero-allocation-on-repeat-call check),
     `g2m_phys_tests` (tests/phys, PLAN.md R2.2 section 1a/4a -
-    test_physics_grid.cpp; from G2 also its own `alloc_counter.cpp` for
-    `fill_physics_heights`'s zero-allocation check, same pattern as
-    `g2m_mesh_tests`), `g2m_fuzz_smoke_tests`, `g2m_golden_tests` (Catch2;
+    test_physics_grid.cpp, test_resident_heights.cpp,
+    test_fill_physics_heights.cpp; also its own `alloc_counter.cpp` for
+    `fill_physics_heights`'s zero-allocation check at samples = 256 and
+    1024, same pattern as `g2m_mesh_tests`), `g2m_fuzz_smoke_tests`,
+    `g2m_golden_tests` (Catch2;
     tags become CTest labels through `ADD_TAGS_AS_LABELS`);
   - `g2m_golden` (STATIC, links g2m_layers + g2m_server + g2m_mesh) and
     `g2m_golden_dump` (exe; sets: `g0`, `g1`, `g1c`, `g2`, `g2mesh`);
