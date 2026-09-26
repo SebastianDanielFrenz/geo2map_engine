@@ -83,8 +83,17 @@ void gather_window(const ChunkKey& key, TileLookup lookup, void* ctx, HeightWind
 // duplicating a shared corner once per border it belongs to).
 struct TerrainChunkMesh {
     ChunkKey key;
-    double origin[3] = {0.0, 0.0, 0.0}; // absolute UTM E, N of vertex (0,0) (a level-k sample centre); z = 0
-    std::vector<float> positions;       // 3 floats per vertex, x,y,z local (Z-up, x east, y north); z = h/256 exact
+    // Absolute UTM E, N of vertex (0,0); z = 0. PLAN.md G2.3a (chunk-footprint
+    // nesting fix): vertex i sits at E = (64*cx + i) * 2^level + 0.5 (same for
+    // N), so origin = (64*cx*2^level + 0.5, 64*cy*2^level + 0.5) for EVERY
+    // level (level 0 gives the same value as before this fix: 0.5*2^0 == 0.5).
+    // This is what makes a level-(k+1) chunk's corners/edges coincide exactly
+    // with its children's (and so with every finer level down to 0) - see
+    // build_chunk's own comment below for the vertex-placement derivation.
+    double origin[3] = {0.0, 0.0, 0.0};
+    std::vector<float> positions;       // 3 floats per vertex, x,y,z local (Z-up, x east, y north);
+                                         // z = h/256 exact at level 0, bilinear-interpolated (NOT an
+                                         // exact h/256 value) at level >= 1 - see build_chunk's comment
     std::vector<float> normals;         // 3 floats per vertex, unit, Z-up
     std::vector<std::uint8_t> land_class; // 1 byte per vertex
     std::vector<std::uint16_t> indices;   // 3 per triangle, < 65536 vertices total
@@ -132,6 +141,33 @@ struct TerrainChunkMesh {
 //     T1 = {(i,j), (i+1,j), (i,j+1)}, T2 = {(i+1,j), (i+1,j+1), (i,j+1)}.
 //   A triangle is dropped (no index emitted) if any of its 3 vertices is
 //   NoData.
+//
+// Vertex placement / height (PLAN.md G2.3a, chunk-footprint nesting fix):
+//   Level 0 stays exactly as before this fix - vertex (i, j) IS level-0
+//   sample (i, j) (its centre), z = h/256 exactly, and every L0
+//   TerrainChunkMesh::content_hash is unchanged.
+//
+//   Level k >= 1: vertex (i, j) sits on the L0 sample-centre lattice, at
+//   E = (64*cx + i) * 2^k + 0.5 (same for N) - equivalently, at every
+//   2^k-th L0 sample centre. This makes a level-(k+1) chunk's corners and
+//   edges coincide EXACTLY with its own children's (and so with every finer
+//   level down to L0); the only remaining mismatch at a 2:1 boundary is the
+//   ordinary T-junction the skirt already hides. In level-k sample-index
+//   units, this position is fractional index i - 0.5 + 2^-(k+1): between
+//   level-k pyramid samples i-1 and i, at t = 0.5 + 2^-(k+1) of the way from
+//   sample i-1 to sample i (k=1: t=0.75; k=6: t=0.5078125 - an exact dyadic
+//   fraction for every k, so this arithmetic is deterministic). z is the 2D
+//   BILINEAR interpolation of the 4 level-k pyramid samples surrounding
+//   (i, j) at that same fraction t in both axes (bilinear reproduces an
+//   affine height field exactly); z is therefore NOT in general an exact
+//   h/256 value for k >= 1. NoData: if any of the 4 bilinear source samples
+//   is NoData, the vertex is NoData (its triangles are dropped, as at L0).
+//   Normals for k >= 1 are the ANALYTIC gradient of that same bilinear
+//   patch (not a central difference over neighbouring VERTICES), computed
+//   from the same 4 samples the height uses - this needs no halo beyond the
+//   existing 1-sample HeightWindow halo, and two same-level neighbours
+//   compute bit-identical normals on their shared edge because both are
+//   pure functions of the same absolute level-k samples (see gather_window).
 void build_chunk(const ChunkKey& key, const HeightWindow& window, const ClassWindow* classes, TerrainChunkMesh& out);
 
 } // namespace g2m::mesh

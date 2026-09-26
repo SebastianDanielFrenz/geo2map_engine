@@ -17,10 +17,17 @@ struct Rect {
 // exponent range) - no libm transcendental (pow/exp/log) anywhere here.
 double step_m_for(int level) { return static_cast<double>(std::int64_t{1} << level); }
 
+// PLAN.md G2.3a (chunk-footprint nesting fix): the chunk's footprint must
+// use the SAME nested origin build_chunk::TerrainChunkMesh::origin does -
+// (64*cx*2^level + 0.5, 64*cy*2^level + 0.5) - so a level-(k+1) chunk's
+// footprint corners/edges coincide EXACTLY with its own children's (and so
+// with the actual rendered mesh edges), not the old sample-centre-to-
+// sample-centre span (which left a 0.5*step_finer gap/overlap at every 2:1
+// boundary - the bug this fix corrects).
 Rect chunk_rect(const ChunkKey& c) {
     const double step = step_m_for(c.level);
-    const double origin_e = (static_cast<double>(kChunkQuads) * static_cast<double>(c.cx) + 0.5) * step;
-    const double origin_n = (static_cast<double>(kChunkQuads) * static_cast<double>(c.cy) + 0.5) * step;
+    const double origin_e = static_cast<double>(kChunkQuads) * static_cast<double>(c.cx) * step + 0.5;
+    const double origin_n = static_cast<double>(kChunkQuads) * static_cast<double>(c.cy) * step + 0.5;
     const double size = static_cast<double>(kChunkQuads) * step;
     return {origin_e, origin_e + size, origin_n, origin_n + size};
 }

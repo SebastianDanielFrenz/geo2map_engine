@@ -35,8 +35,9 @@ std::uint64_t pack(std::uint8_t level, std::int32_t cx, std::int32_t cy) {
 
 // Independent (test-only) re-derivation of a chunk's world footprint, from
 // the SAME publicly documented formula build_chunk uses for
-// TerrainChunkMesh::origin (terrain_chunk.h: "origin is a half-integer
-// multiple of 2^k") - not a copy of lod_select.cpp's own (internal, static)
+// TerrainChunkMesh::origin (terrain_chunk.h, PLAN.md G2.3a: origin =
+// (64*cx*2^level + 0.5, 64*cy*2^level + 0.5), a CONSTANT +0.5, not
+// +0.5*step) - not a copy of lod_select.cpp's own (internal, static)
 // chunk_rect.
 struct Rect {
     double min_e, max_e, min_n, max_n;
@@ -44,8 +45,8 @@ struct Rect {
 double step_m_for(int level) { return static_cast<double>(std::int64_t{1} << level); }
 Rect footprint(const ChunkKey& c) {
     const double step = step_m_for(c.level);
-    const double origin_e = (static_cast<double>(kChunkQuads) * c.cx + 0.5) * step;
-    const double origin_n = (static_cast<double>(kChunkQuads) * c.cy + 0.5) * step;
+    const double origin_e = static_cast<double>(kChunkQuads) * c.cx * step + 0.5;
+    const double origin_n = static_cast<double>(kChunkQuads) * c.cy * step + 0.5;
     const double size = static_cast<double>(kChunkQuads) * step;
     return {origin_e, origin_e + size, origin_n, origin_n + size};
 }
@@ -173,4 +174,98 @@ TEST_CASE("select_chunks: sorted, balanced, bounded, area-exact over 10000 seede
             CHECK(leaf_units == root_units);
         }
     }
+}
+
+// PLAN.md G2.3a (chunk-footprint nesting fix): the exact INVERSE of
+// racing_game's original trip-wire (test_world_terrain.cpp: 52/52 edges at
+// exactly 0.5*step_finer gap/overlap). Over a mixed-LOD select_chunks output
+// (this camera/params combination is chosen to produce several distinct
+// levels - both the deep-split near ring and coarse far chunks are present),
+// walk every edge-adjacent leaf pair (same-level OR the 2:1-balanced
+// coarse/fine case) and assert the shared border is EXACTLY colinear with
+// zero gap and zero overlap: the touching world coordinate matches to the
+// bit (not just within a tolerance), and the two chunks' spans on that
+// border actually intersect (never merely touch at a point, which would
+// mean the adjacency detection itself picked a non-bordering pair).
+TEST_CASE("select_chunks: edge-adjacent leaves share an exact, gap-free, overlap-free border", "[mesh]") {
+    LodParams params;
+    params.zone = k32N;
+    params.range0_m = 250.0;
+    params.max_level = 6;
+    // max_distance_m must exceed range0_m * step_m_for(max_level - 1) (here
+    // 250*32 = 8000) or EVERY level-6 root candidate is, by construction,
+    // within its own split threshold and none survives unsplit - this test
+    // needs both extremes (level 0 near the camera, level max_level far from
+    // it) actually present, unlike the main sweep test above (which only
+    // checks generic invariants, never which levels appear).
+    params.max_distance_m = 20000.0;
+
+    std::vector<ChunkKey> out;
+    select_chunks(1234.5, -876.25, params, out);
+    REQUIRE(out.size() > 1);
+
+    // Sanity: this camera really does produce a mixed-LOD selection (not
+    // just one level), otherwise the test below would trivially only cover
+    // the same-level case.
+    bool saw_min = false, saw_max = false;
+    for (const ChunkKey& c : out) {
+        if (c.level == 0) saw_min = true;
+        if (c.level == params.max_level) saw_max = true;
+    }
+    CHECK(saw_min);
+    CHECK(saw_max);
+
+    std::vector<Rect> fps;
+    std::vector<IRect> irects;
+    fps.reserve(out.size());
+    irects.reserve(out.size());
+    for (const ChunkKey& c : out) {
+        fps.push_back(footprint(c));
+        irects.push_back(integer_rect(c));
+    }
+
+    int checked_pairs = 0;
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        for (std::size_t j = i + 1; j < out.size(); ++j) {
+            const IRect& ra = irects[i];
+            const IRect& rb = irects[j];
+
+            // Edge-adjacent along X: touching (not overlapping) in x, and
+            // genuinely overlapping (not merely touching at a corner) in y -
+            // integer arithmetic only, so this detection itself is exact.
+            const bool x_touch = (ra.x1 == rb.x0) || (rb.x1 == ra.x0);
+            const bool y_overlap = std::max(ra.y0, rb.y0) < std::min(ra.y1, rb.y1);
+            const bool y_touch = (ra.y1 == rb.y0) || (rb.y1 == ra.y0);
+            const bool x_overlap = std::max(ra.x0, rb.x0) < std::min(ra.x1, rb.x1);
+
+            if (x_touch && y_overlap) {
+                ++checked_pairs;
+                const Rect& fa = fps[i];
+                const Rect& fb = fps[j];
+                INFO("X-adjacent pair i=" << i << " j=" << j << " level_a=" << static_cast<int>(out[i].level)
+                                           << " level_b=" << static_cast<int>(out[j].level));
+                const double gap = (ra.x1 == rb.x0) ? (fb.min_e - fa.max_e) : (fa.min_e - fb.max_e);
+                CHECK(gap == 0.0); // exactly zero - no crack, no overlap
+                const double overlap_lo = std::max(fa.min_n, fb.min_n);
+                const double overlap_hi = std::min(fa.max_n, fb.max_n);
+                CHECK(overlap_hi > overlap_lo); // a real, nonzero shared border segment
+            }
+            if (y_touch && x_overlap) {
+                ++checked_pairs;
+                const Rect& fa = fps[i];
+                const Rect& fb = fps[j];
+                INFO("Y-adjacent pair i=" << i << " j=" << j << " level_a=" << static_cast<int>(out[i].level)
+                                           << " level_b=" << static_cast<int>(out[j].level));
+                const double gap = (ra.y1 == rb.y0) ? (fb.min_n - fa.max_n) : (fa.min_n - fb.max_n);
+                CHECK(gap == 0.0);
+                const double overlap_lo = std::max(fa.min_e, fb.min_e);
+                const double overlap_hi = std::min(fa.max_e, fb.max_e);
+                CHECK(overlap_hi > overlap_lo);
+            }
+        }
+    }
+    // The camera/params above must actually exercise this path - a
+    // regression that made every leaf isolated (or the adjacency detection
+    // itself vacuous) would otherwise pass this test for the wrong reason.
+    CHECK(checked_pairs > 0);
 }
