@@ -1,0 +1,12 @@
+# G1c golden hashes (tests/golden/golden_g1c.cpp): the real import pipeline
+# (region resolution + DEM/OSM/landcover import via g2m::import) run against
+# testdata/fixtures, into a MemorySink at jobs=3.
+# Identical on every build leg. Regenerate ONLY for an intended output change:
+#   g2m_golden_dump g1c testdata/golden/g1c_golden.txt  (then re-add this header)
+g1c.resolved 45 bf1c335e76f6885f
+g1c.catalog 5 0545b65b21e13ea6
+g1c.dem 10 58a981f3d3d9ef37
+g1c.dem.dups 5 80eb9eed63b017c4
+g1c.osm 31 af7d7d19af0e22a9
+g1c.landcover 26 3d7e054ca8442922
+all 122 e7947b8adb8e5b47

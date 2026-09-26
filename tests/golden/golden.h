@@ -27,6 +27,15 @@ std::vector<Entry> compute_g0();
 // inputs; testdata/golden/g1_golden.txt.
 std::vector<Entry> compute_g1();
 
+// G1c (golden_g1c.cpp): the real import pipeline (region resolution + DEM/
+// OSM/landcover import via g2m::import) run against testdata/fixtures, into
+// a MemorySink at jobs=3; testdata/golden/g1c_golden.txt.
+std::vector<Entry> compute_g1c();
+// Same computation at an explicit `jobs` value - used by test_golden.cpp's
+// own jobs-invariance self-check (1 == 3 == 8), since the pipeline's sink
+// output is documented job-count-independent (dem.h/osm.h/landcover.h).
+std::vector<Entry> compute_g1c_for_jobs(unsigned jobs);
+
 // "name count hash\n" per entry, the golden file's line format.
 std::string format(const std::vector<Entry>& entries);
 
