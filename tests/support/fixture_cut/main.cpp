@@ -1006,6 +1006,168 @@ int cmd_write_unsorted_nodes(const Args& args) {
     }
 }
 
+// make-fuzz-seeds (PLAN.md G1c I6 item B): writes the three real-data-shaped
+// libFuzzer seeds tests/fuzz's fuzz_zip/fuzz_tiff targets need
+// (testdata/fuzz_seeds/{zip,tiff}/*) - deterministic synthetic content (no
+// external source read except --crop-src, an already-committed small
+// fixture), built with the same ZipBuilder/TiffBuilder this tool's other
+// subcommands use rather than hand-rolled bytes:
+//  - --out-zip: a nested ZIP (outer -> one inner.zip -> one 20x20 uint8
+//    uncompressed TIFF) - the same two-level nesting fuzz_zip.cpp's own
+//    recursion (depth <= 2) exercises, and dgm1::Catalog's real outer/inner
+//    delivery shape.
+//  - --out-tiff-lzw: a 32x32 float32 TIFF, LZW-compressed with the
+//    horizontal-differencing predictor (2) - the real DGM1 raster shape
+//    (vault G2M-002: predictor 2 over float32 LZW/Deflate data is a
+//    cumulative sum over the raw uint32 WORD, not bytes; see
+//    test_decode_tiff.cpp's own "the DGM1 shape" test case, which this
+//    reuses the exact same word-diff convention from).
+//  - --crop-src PATH --out-tiff-crop PATH: a 64x64 top-left crop of an
+//    already-committed small fixture (testdata/fixtures/worldcover/
+//    fixture_N50E008_hoechst.tif), re-encoded uncompressed/single-strip via
+//    TiffBuilder - NOT a cut from the real ~90 MB WorldCover source (no
+//    reason to touch that read-only source for a fuzz seed).
+int cmd_make_fuzz_seeds(const Args& args) {
+    const auto out_zip = args.get("out-zip");
+    const auto out_tiff_lzw = args.get("out-tiff-lzw");
+    const auto crop_src = args.get("crop-src");
+    const auto out_tiff_crop = args.get("out-tiff-crop");
+    if (!out_zip || !out_tiff_lzw || !crop_src || !out_tiff_crop) {
+        std::cerr << "g2m_fixture_cut make-fuzz-seeds: --out-zip, --out-tiff-lzw, --crop-src and --out-tiff-crop are "
+                     "required\n";
+        return 1;
+    }
+
+    auto write_file = [](const std::string& path, const std::vector<std::byte>& bytes) -> bool {
+        std::ofstream out(path, std::ios::binary);
+        if (!out) return false;
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        return static_cast<bool>(out);
+    };
+
+    try {
+        // --- nested ZIP: outer -> inner0.zip -> tile.tif (20x20 uint8) ------
+        {
+            constexpr int w = 20, h = 20;
+            std::vector<std::byte> strip(static_cast<std::size_t>(w) * h);
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x)
+                    strip[static_cast<std::size_t>(y) * w + x] = static_cast<std::byte>((x * 7 + y * 13) % 251);
+
+            g2m::test_support::TiffBuilder b;
+            b.add_short(256, static_cast<std::uint16_t>(w)); // ImageWidth
+            b.add_short(257, static_cast<std::uint16_t>(h)); // ImageLength
+            b.add_short(258, 8);                             // BitsPerSample
+            b.add_short(259, 1);                             // Compression: none
+            b.add_short(262, 1);                             // PhotometricInterpretation: BlackIsZero
+            b.add_short(277, 1);                             // SamplesPerPixel
+            b.add_long(278, static_cast<std::uint32_t>(h));  // RowsPerStrip
+            b.add_short(284, 1);                             // PlanarConfiguration: chunky
+            b.add_short(339, 1);                             // SampleFormat: unsigned int
+            const auto tif_bytes = b.build(strip);
+
+            g2m::test_support::ZipBuilder inner;
+            inner.add(g2m::test_support::ZipBuilder::Item{"tile.tif", tif_bytes, /*deflate=*/false});
+            const auto inner_bytes = inner.build();
+
+            g2m::test_support::ZipBuilder outer;
+            outer.add(g2m::test_support::ZipBuilder::Item{"inner0.zip", inner_bytes, /*deflate=*/false});
+            const auto outer_bytes = outer.build();
+
+            if (!write_file(*out_zip, outer_bytes)) {
+                std::cerr << "g2m_fixture_cut make-fuzz-seeds: cannot write " << *out_zip << "\n";
+                return 1;
+            }
+            std::cerr << "g2m_fixture_cut make-fuzz-seeds: " << *out_zip << " (" << outer_bytes.size()
+                      << " bytes: outer.zip[inner0.zip[tile.tif " << tif_bytes.size() << " bytes]])\n";
+        }
+
+        // --- 32x32 float32, LZW + horizontal-differencing predictor (2) -----
+        {
+            constexpr int w = 32, h = 32;
+            std::vector<float> vals(static_cast<std::size_t>(w) * h);
+            for (std::size_t i = 0; i < vals.size(); ++i) {
+                vals[i] = 100.0f + 0.5f * static_cast<float>(i % 37);
+            }
+            std::vector<std::byte> raw(vals.size() * 4);
+            std::memcpy(raw.data(), vals.data(), raw.size());
+
+            std::vector<std::byte> encoded(raw.size());
+            for (int y = 0; y < h; ++y) {
+                auto* words = reinterpret_cast<std::uint32_t*>(raw.data()) + static_cast<std::ptrdiff_t>(y) * w;
+                std::vector<std::uint32_t> row(words, words + w);
+                for (int x = w - 1; x >= 1; --x) row[static_cast<std::size_t>(x)] -= row[static_cast<std::size_t>(x - 1)];
+                std::memcpy(encoded.data() + static_cast<std::ptrdiff_t>(y) * w * 4, row.data(), row.size() * 4);
+            }
+            const auto lzw = g2m::test_support::lzw_encode_literal_only(encoded);
+
+            g2m::test_support::TiffBuilder b;
+            b.add_short(256, static_cast<std::uint16_t>(w));
+            b.add_short(257, static_cast<std::uint16_t>(h));
+            b.add_short(258, 32);
+            b.add_short(259, 5); // Compression: LZW
+            b.add_short(262, 1);
+            b.add_short(277, 1);
+            b.add_long(278, static_cast<std::uint32_t>(h));
+            b.add_short(284, 1);
+            b.add_short(317, 2); // Predictor: horizontal differencing
+            b.add_short(339, 3); // SampleFormat: float
+            const auto bytes = b.build(lzw);
+
+            if (!write_file(*out_tiff_lzw, bytes)) {
+                std::cerr << "g2m_fixture_cut make-fuzz-seeds: cannot write " << *out_tiff_lzw << "\n";
+                return 1;
+            }
+            std::cerr << "g2m_fixture_cut make-fuzz-seeds: " << *out_tiff_lzw << " (" << bytes.size() << " bytes)\n";
+        }
+
+        // --- 64x64 top-left crop of an already-committed small fixture ------
+        {
+            auto src = std::make_shared<g2m::decode::FileByteSource>(*crop_src);
+            g2m::decode::tiff::TiffReader reader(src);
+            if (reader.ifds().empty()) {
+                std::cerr << "g2m_fixture_cut make-fuzz-seeds: " << *crop_src << ": no IFD\n";
+                return 1;
+            }
+            const auto& ifd = reader.ifds()[0];
+            const int w = static_cast<int>(std::min<std::uint64_t>(ifd.width, 64));
+            const int h = static_cast<int>(std::min<std::uint64_t>(ifd.height, 64));
+            const auto window = reader.decode_window_u8(0, 0, 0, w, h);
+
+            std::vector<std::byte> strip(static_cast<std::size_t>(w) * h);
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) strip[static_cast<std::size_t>(y) * w + x] = static_cast<std::byte>(window.at(x, y));
+
+            g2m::test_support::TiffBuilder b;
+            b.add_short(256, static_cast<std::uint16_t>(w));
+            b.add_short(257, static_cast<std::uint16_t>(h));
+            b.add_short(258, 8);
+            b.add_short(259, 1); // Compression: none
+            b.add_short(262, 1);
+            b.add_short(277, 1);
+            b.add_long(278, static_cast<std::uint32_t>(h));
+            b.add_short(284, 1);
+            b.add_short(339, 1); // SampleFormat: unsigned int
+            const auto bytes = b.build(strip);
+
+            if (!write_file(*out_tiff_crop, bytes)) {
+                std::cerr << "g2m_fixture_cut make-fuzz-seeds: cannot write " << *out_tiff_crop << "\n";
+                return 1;
+            }
+            std::cerr << "g2m_fixture_cut make-fuzz-seeds: " << *out_tiff_crop << " (" << bytes.size() << " bytes, "
+                      << w << "x" << h << " crop of " << *crop_src << ")\n";
+        }
+
+        return 0;
+    } catch (const DecodeError& e) {
+        std::cerr << "g2m_fixture_cut make-fuzz-seeds: " << e.what() << "\n";
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "g2m_fixture_cut make-fuzz-seeds: " << e.what() << "\n";
+        return 1;
+    }
+}
+
 int usage() {
     std::cerr << "usage: g2m_fixture_cut <command> [options]\n"
                  "commands:\n"
@@ -1013,7 +1175,8 @@ int usage() {
                  "  repack-dgm1 --out PATH --inner OUTER_ZIP#SUBSTRING [--inner ...] --key E,N [--key ...]\n"
                  "  cut-worldcover --in PATH --resolved PATH [--margin-px N] --out PATH [--out PATH ...]\n"
                  "                 (one --out per connected tile cluster, in ascending (northing,easting) order)\n"
-                 "  write-unsorted-nodes --out PATH\n";
+                 "  write-unsorted-nodes --out PATH\n"
+                 "  make-fuzz-seeds --out-zip PATH --out-tiff-lzw PATH --crop-src PATH --out-tiff-crop PATH\n";
     return 1;
 }
 
@@ -1027,6 +1190,7 @@ int main(int argc, char** argv) {
     if (command == "repack-dgm1") return cmd_repack_dgm1(args);
     if (command == "cut-worldcover") return cmd_cut_worldcover(args);
     if (command == "write-unsorted-nodes") return cmd_write_unsorted_nodes(args);
+    if (command == "make-fuzz-seeds") return cmd_make_fuzz_seeds(args);
     std::cerr << "g2m_fixture_cut: unknown command '" << command << "'\n";
     return usage();
 }

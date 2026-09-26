@@ -36,10 +36,14 @@ foreach(_t zip tiff pbf)
   target_link_options(fuzz_${_t} PRIVATE -fsanitize=fuzzer)
   target_link_libraries(fuzz_${_t} PRIVATE
     g2m_core libdeflate::libdeflate_static g2m_dep_libosmium g2m_warnings g2m_options)
-  # No seed corpus yet (G1c adds real-data cuts); the work dir starts empty.
+  # Real-data-shaped seed corpus (PLAN.md G1c I6 item B, testdata/fuzz_seeds/
+  # <t>/) as a SECOND, read-only libFuzzer corpus dir - libFuzzer reads seeds
+  # from every corpus dir given but only ever WRITES new finds into the
+  # first, so this never mutates the committed seeds. -max_len bounds a
+  # single fuzz iteration's input size regardless of corpus content.
   add_test(NAME fuzz_${_t}
-    COMMAND fuzz_${_t} -max_total_time=${G2M_FUZZ_SECONDS} -seed=1 -rss_limit_mb=2048 -timeout=20
+    COMMAND fuzz_${_t} -max_total_time=${G2M_FUZZ_SECONDS} -seed=1 -rss_limit_mb=2048 -timeout=20 -max_len=1048576
             -artifact_prefix=${_g2m_decode_fuzz_dir}/fuzz_${_t}- -print_final_stats=1
-            ${_g2m_decode_fuzz_dir}/${_t})
+            ${_g2m_decode_fuzz_dir}/${_t} ${PROJECT_SOURCE_DIR}/testdata/fuzz_seeds/${_t})
   set_tests_properties(fuzz_${_t} PROPERTIES FIXTURES_REQUIRED g2m_decode_fuzz_corpus LABELS "fuzz" TIMEOUT 120)
 endforeach()
