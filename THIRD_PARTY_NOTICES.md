@@ -261,3 +261,47 @@ osm::PbfHandler` is g2m's own virtual-dispatch seam.
   needs), exposed as an `INTERFACE` target with `SYSTEM` include dirs. Not
   vendored; no source committed to this repository.
 - Licence: BSL-1.0, at its upstream repository (`LICENSE`).
+
+## Data
+
+Small derived cuts of third-party geodata are committed under
+`testdata/fixtures/` and `testdata/fuzz_seeds/` for tests and fuzzing (see
+`testdata/fixtures/README.md` for exact source files, cut commands, sizes
+and SHA-256 hashes of every committed file). None of this data is used at
+runtime by any shipped `g2m` binary - fixtures and fuzz seeds only.
+
+- **DGM1 (digital terrain model)**: © HVBG - Hessisches Landesamt für
+  Bodenmanagement und Geoinformation, licensed
+  [Datenlizenz Deutschland – Zero – Version 2.0](https://www.govdata.de/dl-de/zero-2-0)
+  (`dl-de/zero-2-0`) - equivalent to a public-domain dedication; no
+  attribution is legally required, but source is credited anyway in
+  `testdata/fixtures/README.md`. Covers `testdata/fixtures/dgm1/
+  PKT_fixture.zip` and the DGM1-shaped synthetic fuzz seed
+  `testdata/fuzz_seeds/tiff/dgm1_shape_32x32_lzw_pred2_f32.tif` (values are
+  synthetic, but the file's LZW+predictor-2 float32 encoding shape matches
+  a real DGM1 tile).
+- **OpenStreetMap (via Geofabrik's `hessen-latest.osm.pbf` extract)**:
+  © OpenStreetMap contributors, licensed
+  [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). Covers
+  `testdata/fixtures/osm/frankfurt_hoechst.osm.pbf` and
+  `testdata/fuzz_seeds/pbf/tiny_bbox_cut.osm.pbf` (both are small
+  bbox/relation-closure cuts of the same source, produced by
+  `g2m_fixture_cut cut-pbf`; `testdata/fixtures/osm/unsorted_nodes.osm.pbf`
+  is hand-built test data, not derived from this source, and carries no
+  OSM copyright). **Produced Work / Derivative Database note**: a bbox+
+  relation-closure extract that preserves the original entities'
+  attribution-bearing structure (nodes/ways/relations with their original
+  ids and tags, not merely rendered/aggregated output) is a Derivative
+  Database under ODbL 1.0 §2.3/§4, not a Produced Work under §2.4 - it must
+  therefore itself be licensed under ODbL 1.0 (as it is: this notice is the
+  required attribution, and the extract is redistributed under the same
+  ODbL 1.0 terms as its source, satisfying the share-alike requirement).
+- **ESA WorldCover** (`ESA_WorldCover_10m_2021_v200_N48E006_Map.tif`):
+  © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel
+  data, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+  Covers `testdata/fixtures/worldcover/fixture_N50E008_hoechst.tif`,
+  `testdata/fixtures/worldcover/fixture_N50E008_bbox.tif` (cropped windows,
+  re-encoded uncompressed - see `testdata/fixtures/README.md`'s
+  `cut-worldcover` section for the exact georeferencing/tag handling) and
+  `testdata/fuzz_seeds/tiff/worldcover_crop_64x64_u8.tif` (a further 64x64
+  crop of the first fixture, re-encoded uncompressed).

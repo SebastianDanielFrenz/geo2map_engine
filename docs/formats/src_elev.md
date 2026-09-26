@@ -9,6 +9,44 @@ Values are `int32` heights in 1/256 m. NoData is `INT32_MIN`, and it is
 preserved exactly: the round trip is bit-exact for every value, NoData
 included.
 
+### Quantisation (DGM1)
+
+A source height in metres (double) is scaled by `kHeightUnitsPerMetre`
+(256, an exact power of two, so the scaling itself introduces no rounding
+error) and rounded to the nearest integer using **round-half-to-even**
+("banker's rounding": `g2m::quantise_height_half_even`,
+`src/core/raster.cpp`) rather than round-half-away-from-zero - a source
+value that lands exactly on a `1/512 m` half-unit boundary rounds to
+whichever neighbouring `1/256 m` unit is even, not always up (or always
+away from zero). This matters for DGM1 specifically because its published
+values are themselves already rounded to a fixed number of decimal places,
+so exact-half ties are common, not a rare double-rounding edge case; using
+a biased rule instead would systematically shift every tied value the same
+direction. `INT32_MIN`/`INT32_MAX` (with a 0.5-unit margin, since
+`INT32_MIN` is reserved for NoData) still bound the result exactly as they
+do for the plain `quantise_height` used by other sources.
+
+### Duplicate DGM1 tile copies
+
+A single 1 km × 1 km DGM1 tile key can appear more than once across a
+DGM1 delivery's outer/inner ZIP structure (`g2m::decode::dgm1::Catalog`,
+one committed real example: `testdata/fixtures/dgm1/PKT_fixture.zip`'s tile
+474/5560, delivered by two different municipalities' zips). `import_dem`
+decodes **every** copy the catalog reports for that key
+(`Catalog::copies(e_km, n_km)`) and compares them sample-for-sample -
+never just decodes the first one found and assumes the rest agree. Copies
+are otherwise expected to be bit-exact duplicates (same real-world terrain
+surveyed once, redistributed in multiple deliveries); if any pair of
+decoded copies differs by even one sample, that key is reported in
+`DemImportReport::differing`, but import does not fail - it proceeds using
+one designated copy. The designated copy is `copies()[0]`: deterministically
+the earliest by `(outer basename, inner index, entry index)` (NOT
+"whichever the filesystem/zip iteration happens to visit first", and NOT
+influenced by thread count or cache size - `km_cache_tiles`'s only effect on
+`DemImportReport` is how much of the dup bookkeeping gets re-derived from a
+cache hit vs. freshly decoded, not which copy wins or whether a difference
+is detected).
+
 ## Sections
 
 | Type | Codec | Content |
