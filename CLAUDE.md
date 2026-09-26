@@ -64,6 +64,10 @@ geo2map_engine/
     osm_data.h                        osm::OsmData (canonical model: sorted strings/ids, pooled tags/refs/members), OsmBuilder
     src_osm.h                         OsmTile, encode/decode_src_osm
     osm_clip.h                        clip_osm (per-tile selection with halo), segment_touches_box
+    osm_roads.h                        client-side OSM road raster (PLAN.md 6.5, roads_plan.md): RoadStyle (data-table
+                                      highway->LandClass/rank/width, surface->SurfaceKind), extract_road_segments,
+                                      Lattice/RasterParams, rasterize_road_segments (exact integer inside test, round
+                                      end caps via clamped projection)
     release.h                         ReleaseInputs -> compute_release_id, Coverage, ReleaseManifest + to_json/from_json,
                                       to_hex / content_hash_from_hex
     pack.h                            PackDirectory/PackEntry/PackTileState, pack_of/pack_tile, encode/decode_pack

@@ -1,7 +1,8 @@
 # g2m_layer_tests: Catch2 v3 over g2m_layers (container, raw encodings, OSM
 # clip, release ids/manifests, packs, layer registry, regions, terrain
-# derivers). Topic tags: [layer], [container], [elev], [landcover], [osm],
-# [release], [pack], [region], [terrain]; tags become CTest labels.
+# derivers, OSM road extraction/rasterisation). Topic tags: [layer],
+# [container], [elev], [landcover], [osm], [release], [pack], [region],
+# [terrain]; tags become CTest labels.
 #
 # test_derive_terrain.cpp (PLAN.md G2.1) additionally needs g2m_decode/
 # g2m_import (DGM1 fixture import: dgm1::Catalog, import_dem, resolve_region)
@@ -9,10 +10,14 @@
 # resolver chain) - no other test in this binary does, but pulling all three
 # in here is simpler than a second executable just for one test file (same
 # call tests/unit/CMakeLists.txt makes for its own test_import_e2e.cpp).
+# test_osm_roads.cpp (PLAN.md 6.5) reuses g2m_decode's read_pbf directly, to
+# load testdata/fixtures/osm/frankfurt_hoechst.osm.pbf for its own fixture
+# test - already linked here for test_derive_terrain.cpp's sake.
 add_executable(g2m_layer_tests
   test_container.cpp
   test_raster_encodings.cpp
   test_osm.cpp
+  test_osm_roads.cpp
   test_release.cpp
   test_pack.cpp
   test_region.cpp
