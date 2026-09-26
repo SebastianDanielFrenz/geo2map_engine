@@ -17,6 +17,19 @@
 #include <limits>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <process.h>
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 using namespace g2m;
 
 namespace {
@@ -30,12 +43,21 @@ TileKey any_key(int level) {
     return k;
 }
 
-HeightTile uniform_tile(int level, std::int32_t fill) {
-    HeightTile t;
+// Out-parameter, not a by-value return: cl.exe's Release codegen does not
+// reliably NRVO a named-local return of this size (HeightTile's 256x256
+// int32 grid is 256 KiB) - a by-value `uniform_tile()` used to leave BOTH
+// its own local and the caller's destination materialized as separate
+// stack slots once inlined into a TEST_CASE, and combined with a second
+// on-stack HeightTile (`out`) that alone was enough to blow a default 1 MiB
+// thread stack under msvc-release (measured ~768 KiB for a single such
+// TEST_CASE frame via `dumpbin /disasm`'s __chkstk argument -
+// STATUS_STACK_OVERFLOW, ctest ids 44/46/47/48). See fill_uniform_tile's
+// callers below: every HeightTile this file works with now lives in a
+// heap-backed std::vector<HeightTile>, never on the stack.
+void fill_uniform_tile(HeightTile& t, int level, std::int32_t fill) {
     t.key = any_key(level);
     t.h.fill(fill);
     t.has_nodata = (fill == kHeightNoData);
-    return t;
 }
 
 // Sets the single 2x2 block at local (row0, row0+1) x (col0, col0+1) of
@@ -85,9 +107,12 @@ TEST_CASE("terrain pyramid: half-even (banker's) rounding at sum mod 4 == 2 ties
     };
     for (const Case& c : cases) {
         INFO(c.what);
-        HeightTile sw = uniform_tile(1, 0);
+        // Heap-allocated, not stack locals - see fill_uniform_tile's comment.
+        std::vector<HeightTile> tiles(2);
+        HeightTile& sw = tiles[0];
+        HeightTile& out = tiles[1];
+        fill_uniform_tile(sw, 1, 0);
         set_block(sw, 0, 0, c.v00, c.v01, c.v10, c.v11);
-        HeightTile out;
         out.key = any_key(2);
         downsample_2x2(&sw, nullptr, nullptr, nullptr, out);
         CHECK(out.h[0] == c.expect);
@@ -106,9 +131,12 @@ TEST_CASE("terrain pyramid: negative, non-tied sums round to the nearest integer
         {-5, -5, -5, -4, -5}, // sum=-19, mean=-4.75 -> nearest -5
     };
     for (const Case& c : cases) {
-        HeightTile sw = uniform_tile(1, 0);
+        // Heap-allocated, not stack locals - see fill_uniform_tile's comment.
+        std::vector<HeightTile> tiles(2);
+        HeightTile& sw = tiles[0];
+        HeightTile& out = tiles[1];
+        fill_uniform_tile(sw, 1, 0);
         set_block(sw, 0, 0, c.v00, c.v01, c.v10, c.v11);
-        HeightTile out;
         out.key = any_key(2);
         downsample_2x2(&sw, nullptr, nullptr, nullptr, out);
         CHECK(out.h[0] == c.expect);
@@ -133,9 +161,12 @@ TEST_CASE("terrain pyramid: the half-even mean sums in int64, safe near int32 ex
         {kMax, kMax, kMin + 1, kMin + 1, 0},
     };
     for (const Case& c : cases) {
-        HeightTile sw = uniform_tile(1, 0);
+        // Heap-allocated, not stack locals - see fill_uniform_tile's comment.
+        std::vector<HeightTile> tiles(2);
+        HeightTile& sw = tiles[0];
+        HeightTile& out = tiles[1];
+        fill_uniform_tile(sw, 1, 0);
         set_block(sw, 0, 0, c.v00, c.v01, c.v10, c.v11);
-        HeightTile out;
         out.key = any_key(2);
         downsample_2x2(&sw, nullptr, nullptr, nullptr, out);
         CHECK(out.h[0] == c.expect);
@@ -145,12 +176,15 @@ TEST_CASE("terrain pyramid: the half-even mean sums in int64, safe near int32 ex
 TEST_CASE("terrain pyramid: NoData propagation - one NoData input poisons only its own output sample; a missing "
          "child poisons its whole quadrant",
          "[layer][terrain]") {
-    HeightTile sw = uniform_tile(3, 5);
+    // Heap-allocated, not stack locals - see fill_uniform_tile's comment.
+    std::vector<HeightTile> tiles(2);
+    HeightTile& sw = tiles[0];
+    HeightTile& out = tiles[1];
+    fill_uniform_tile(sw, 3, 5);
     // Poison exactly one 2x2 block (output sample (0,0)); every other block
     // of sw stays {5,5,5,5} -> mean 5, exact.
     set_block(sw, 0, 0, 5, kHeightNoData, 5, 5);
 
-    HeightTile out;
     out.key = any_key(4);
     downsample_2x2(&sw, nullptr, nullptr, nullptr, out); // se/nw/ne missing entirely
     CHECK(out.has_nodata);
@@ -221,4 +255,87 @@ TEST_CASE("terrain pyramid: an integer-affine ramp h = a*E + b*N + c reproduces 
             }
         }
     }
+}
+
+namespace {
+
+// Regression guard for the msvc-release stack overflow above: runs
+// downsample_2x2 - the one function this whole file exercises, and the
+// core of TerrainHeightDeriver::derive()'s own pyramid step
+// (derive_terrain.cpp) - on a thread given a deliberately small (256 KiB)
+// stack, on every leg/every build type, not just msvc-release. This is a
+// stricter guard than reproducing the original bug (a large NAMED-RETURN
+// struct cl.exe's optimizer failed to elide): it fails on ANY future
+// on-stack HeightTile-sized local reachable from here, on any compiler,
+// because a real caller can supply a small stack - PLAN.md/CLAUDE.md flag
+// racing_game as one such caller (worker threads with smaller stacks than
+// the default 1 MiB).
+struct SmallStackResult {
+    bool ran = false;
+    bool has_nodata = false;
+    std::int32_t sample0 = 0;
+};
+
+// Everything HeightTile-sized here is heap-allocated (std::vector<HeightTile>),
+// exactly like fill_uniform_tile's callers above and TerrainHeightDeriver::
+// derive()'s own 4-child buffer - never a stack local. No Catch2 assertion
+// runs on this thread (assertions are not thread-safe here): the result is
+// only recorded into `*result`, checked by the TEST_CASE after join().
+void small_stack_worker(SmallStackResult* result) {
+    std::vector<HeightTile> tiles(2);
+    HeightTile& sw = tiles[0];
+    HeightTile& out = tiles[1];
+    fill_uniform_tile(sw, 1, 7);
+    set_block(sw, 0, 0, 7, 7, 7, 7);
+    out.key = any_key(2);
+    downsample_2x2(&sw, nullptr, nullptr, nullptr, out);
+    result->has_nodata = out.has_nodata;
+    result->sample0 = out.h[0];
+    result->ran = true;
+}
+
+#if defined(_WIN32)
+unsigned __stdcall small_stack_thread_main(void* arg) {
+    small_stack_worker(static_cast<SmallStackResult*>(arg));
+    return 0;
+}
+#else
+void* small_stack_thread_main(void* arg) {
+    small_stack_worker(static_cast<SmallStackResult*>(arg));
+    return nullptr;
+}
+#endif
+
+} // namespace
+
+TEST_CASE("terrain pyramid: downsample_2x2 runs to completion on a deliberately small (256 KiB) thread stack "
+         "(regression guard for the msvc-release stack overflow, PLAN.md G2.2)",
+         "[layer][terrain]") {
+    constexpr std::size_t kStackBytes = 256 * 1024;
+    SmallStackResult result;
+
+#if defined(_WIN32)
+    HANDLE thread = reinterpret_cast<HANDLE>(_beginthreadex(
+        /*security=*/nullptr, static_cast<unsigned>(kStackBytes), &small_stack_thread_main, &result,
+        /*initflag=*/0, /*thrdaddr=*/nullptr));
+    REQUIRE(thread != nullptr);
+    REQUIRE(WaitForSingleObject(thread, INFINITE) == WAIT_OBJECT_0);
+    CloseHandle(thread);
+#else
+    pthread_attr_t attr;
+    REQUIRE(pthread_attr_init(&attr) == 0);
+    REQUIRE(pthread_attr_setstacksize(&attr, kStackBytes) == 0);
+    pthread_t thread;
+    REQUIRE(pthread_create(&thread, &attr, &small_stack_thread_main, &result) == 0);
+    pthread_attr_destroy(&attr);
+    REQUIRE(pthread_join(thread, nullptr) == 0);
+#endif
+
+    REQUIRE(result.ran);
+    // se/nw/ne are null (only sw is supplied) - height_tile.h's own contract
+    // makes a missing child poison its whole quadrant, so this tile IS
+    // NoData overall; sample (0,0) still falls in sw's own quadrant, so it
+    // is the exact mean of a uniform {7,7,7,7} block.
+    CHECK(result.has_nodata);
+    CHECK(result.sample0 == 7);
 }
