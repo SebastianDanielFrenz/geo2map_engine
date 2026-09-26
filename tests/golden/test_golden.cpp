@@ -52,6 +52,12 @@ TEST_CASE("G1c golden hashes match testdata/golden/g1c_golden.txt", "[golden]") 
     check_against("g1c_golden.txt", g2m_golden::compute_g1c());
 }
 
+// PLAN.md G2.1: g2m.elev.base/g2m.terrain.height level 0, over the real
+// import -> store -> local release -> Server path (golden_g2.cpp).
+TEST_CASE("G2 golden hashes match testdata/golden/g2_golden.txt", "[golden]") {
+    check_against("g2_golden.txt", g2m_golden::compute_g2());
+}
+
 // dem.h/osm.h/landcover.h all document their sink output as independent of
 // `jobs` (only DemImportReport's scheduling-dependent counters are not, and
 // the fixture's 2 unique 1km DGM1 keys never evict from the default 256-

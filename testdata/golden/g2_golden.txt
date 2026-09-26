@@ -1,0 +1,3 @@
+g2.g2m.elev.base 192 63016a60e70e412f
+g2.g2m.terrain.height 192 63016a60e70e412f
+all 384 47c880c15e619f83

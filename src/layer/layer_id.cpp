@@ -2,6 +2,7 @@
 
 #include "g2m/layer/layer_id.h"
 #include "g2m/layer/layer_registry.h"
+#include "g2m/layer/terrain_layers.h"
 
 #include <algorithm>
 #include <string>
@@ -80,6 +81,10 @@ const LayerRegistry& LayerRegistry::builtin() {
         (void)r.add(make_raw_elev_layer("dgm1"));
         (void)r.add(make_raw_landcover_layer());
         (void)r.add(make_raw_osm_layer());
+        // PLAN.md G2.1: the terrain L0 layers.
+        (void)r.add(elev_base_desc());
+        (void)r.add(terrain_height_desc());
+        (void)r.add(terrain_class_desc());
         return r;
     }();
     return reg;

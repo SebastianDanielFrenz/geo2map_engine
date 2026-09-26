@@ -6,6 +6,7 @@ add_library(g2m_server STATIC
   tile_store.cpp
   protocol.cpp
   server.cpp
+  builtin_release.cpp
 )
 target_include_directories(g2m_server PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(g2m_server

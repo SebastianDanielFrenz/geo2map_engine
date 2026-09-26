@@ -1,13 +1,14 @@
 # tests/golden - golden hashes (PLAN.md 2.4):
 #   g2m_golden        the hash computation (golden.h, golden.cpp = G0,
-#                     golden_g1.cpp = G1, golden_g1c.cpp = G1c), test-only
+#                     golden_g1.cpp = G1, golden_g1c.cpp = G1c,
+#                     golden_g2.cpp = G2, PLAN.md G2.1), test-only
 #   g2m_golden_dump   prints one set; tools/ci.ps1 compares its output across legs
-#   g2m_golden_tests  Catch2 check against testdata/golden/g0_golden.txt, g1_golden.txt, g1c_golden.txt
-add_library(g2m_golden STATIC golden.cpp golden_g1.cpp golden_g1c.cpp)
+#   g2m_golden_tests  Catch2 check against testdata/golden/g0_golden.txt, g1_golden.txt, g1c_golden.txt, g2_golden.txt
+add_library(g2m_golden STATIC golden.cpp golden_g1.cpp golden_g1c.cpp golden_g2.cpp)
 target_include_directories(g2m_golden PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(g2m_golden PUBLIC g2m_core g2m_layers g2m_server g2m_import g2m_headless_env PRIVATE g2m_warnings g2m_options)
-# golden_g1c.cpp reads testdata/fixtures/** directly (unlike golden.cpp/
-# golden_g1.cpp, which only use synthetic SplitMix64 inputs).
+# golden_g1c.cpp/golden_g2.cpp read testdata/fixtures/** directly (unlike
+# golden.cpp/golden_g1.cpp, which only use synthetic SplitMix64 inputs).
 target_compile_definitions(g2m_golden PRIVATE G2M_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 add_executable(g2m_golden_dump dump_main.cpp)

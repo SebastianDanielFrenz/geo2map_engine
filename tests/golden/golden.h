@@ -36,6 +36,12 @@ std::vector<Entry> compute_g1c();
 // output is documented job-count-independent (dem.h/osm.h/landcover.h).
 std::vector<Entry> compute_g1c_for_jobs(unsigned jobs);
 
+// G2 (golden_g2.cpp, PLAN.md G2.1): the real import -> store -> local
+// release -> Server path over testdata/fixtures/dgm1, hashing each
+// level-0 g2m.elev.base/g2m.terrain.height target tile's Server-reported
+// status and ETag (body content hash); testdata/golden/g2_golden.txt.
+std::vector<Entry> compute_g2();
+
 // "name count hash\n" per entry, the golden file's line format.
 std::string format(const std::vector<Entry>& entries);
 
