@@ -124,7 +124,16 @@ geo2map_engine/
                                       (a design choice - see the header's own note), a resident tile's own
                                       NoData sample sets HadNoData, and any tile missing from the set sets
                                       MissingTile (priority over HadNoData)
-  src/phys/                           g2m_phys implementation: physics_grid.cpp, resident_heights.cpp
+    height_tile_loader.h              async L0 HeightTile loading: FetchResult, IHeightTileFetch (blocking,
+                                      thread-safe), TransportHeightTileFetch (ITransport -> parse_container
+                                      -> decode_body -> decode_height_tile, applies header height_offset),
+                                      DelayedFetch (test/smoke: base + key/seed-hashed jitter),
+                                      LoadOutcome/LoadedHeightTile/LoaderConfig/LoaderStats,
+                                      HeightTileLoader (worker pool; request() replaces the want-list,
+                                      dedups vs in-flight/done; poll() sorted by key; retry/backoff;
+                                      destructor joins). Status mapping and threading contract in the header
+  src/phys/                           g2m_phys implementation: physics_grid.cpp, resident_heights.cpp,
+                                      height_tile_loader.cpp
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
                                       src_landcover, src_osm, pack, release_manifest, protocol, cache_db
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)
@@ -265,9 +274,10 @@ end of `CMakeLists.txt`):
   other dependency - no rendering-engine or third-party type anywhere in
   `include/g2m/mesh/`.
 - `g2m_phys` (STATIC, PLAN.md R2.2 section 1a): `src/phys/*.cpp`
-  (physics_grid.cpp, resident_heights.cpp - fill_physics_heights.h is a
-  header-only template, no .cpp of its own); PUBLIC `g2m_client`
-  (transitively `g2m_server` / `g2m_layers` / `g2m_core`, for `HeightTile`).
+  (physics_grid.cpp, resident_heights.cpp, height_tile_loader.cpp -
+  fill_physics_heights.h is a header-only template, no .cpp of its own);
+  PUBLIC `g2m_client` (transitively `g2m_server` / `g2m_layers` /
+  `g2m_core`, for `HeightTile` and `ITransport`), PRIVATE `Threads::Threads`.
   Built UNCONDITIONALLY, not gated by `G2M_BUILD_IMPORT` - every CI leg,
   including the sanitizer legs, exercises it. No physics_sim/Jolt/Godot type
   anywhere in `include/g2m/phys/`, and it never links physics_sim.
@@ -290,7 +300,8 @@ end of `CMakeLists.txt`):
     executable, for `build_chunk`'s zero-allocation-on-repeat-call check),
     `g2m_phys_tests` (tests/phys, PLAN.md R2.2 section 1a/4a -
     test_physics_grid.cpp, test_resident_heights.cpp,
-    test_fill_physics_heights.cpp; also its own `alloc_counter.cpp` for
+    test_fill_physics_heights.cpp, test_height_tile_loader.cpp (scripted
+    fetch + fake ITransport, no network/store files); also its own `alloc_counter.cpp` for
     `fill_physics_heights`'s zero-allocation check at samples = 256 and
     1024, same pattern as `g2m_mesh_tests`), `g2m_fuzz_smoke_tests`,
     `g2m_golden_tests` (Catch2;

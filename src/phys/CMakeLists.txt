@@ -7,6 +7,7 @@
 set(G2M_PHYS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/physics_grid.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/resident_heights.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/height_tile_loader.cpp
   CACHE INTERNAL "g2m_phys sources"
 )
 
@@ -14,5 +15,5 @@ add_library(g2m_phys STATIC ${G2M_PHYS_SOURCES})
 target_include_directories(g2m_phys PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(g2m_phys
   PUBLIC  g2m_client
-  PRIVATE g2m_warnings g2m_options
+  PRIVATE g2m_warnings g2m_options Threads::Threads
 )
