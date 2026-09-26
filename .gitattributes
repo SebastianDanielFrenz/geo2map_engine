@@ -1,0 +1,13 @@
+# testdata/** must check out byte-for-byte identical on every machine and
+# every checkout (this worktree, the main checkout, a fresh clone, the
+# racing_game submodule, every CI leg). With core.autocrlf=true and no
+# .gitattributes, Git LF->CRLF-converts "text-ish" fixture files (e.g.
+# testdata/fixtures/regions.json, testdata/golden/*_golden.txt) on
+# checkout on Windows, which silently changes their SHA-256 - the exact
+# cause of tests/unit/test_fixtures.cpp's provenance-table check failing
+# in a fresh Windows worktree while passing in an older checkout whose
+# working-tree copy predates this. `-text` disables Git's line-ending
+# normalization/conversion entirely for these paths regardless of
+# core.autocrlf/core.eol, so every checkout gets the exact bytes Git has
+# stored, never a re-encoded copy.
+testdata/** -text
