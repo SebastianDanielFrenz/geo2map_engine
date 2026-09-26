@@ -364,14 +364,22 @@ Result<ResolvedRegion> parse_resolved_region(std::string_view text) {
     return r;
 }
 
-std::vector<TileKey> tile_keys(const ResolvedRegion& r) {
+namespace {
+std::vector<TileKey> keys_from_runs(const std::string& scheme, int level, const std::vector<CoverageRun>& runs) {
     std::vector<TileKey> out;
-    const std::optional<geo::UtmZone> zone = geo::parse_utm_scheme(r.scheme);
+    const std::optional<geo::UtmZone> zone = geo::parse_utm_scheme(scheme);
     if (!zone) return out;
-    for (const CoverageRun& run : r.tiles) {
-        for (std::int32_t x = run.x0; x <= run.x1; ++x) out.push_back(TileKey{*zone, r.level, x, run.y});
+    for (const CoverageRun& run : runs) {
+        for (std::int32_t x = run.x0; x <= run.x1; ++x) out.push_back(TileKey{*zone, level, x, run.y});
     }
     return out;
+}
+} // namespace
+
+std::vector<TileKey> tile_keys(const ResolvedRegion& r) { return keys_from_runs(r.scheme, r.level, r.tiles); }
+
+std::vector<TileKey> interior_tile_keys(const ResolvedRegion& r) {
+    return keys_from_runs(r.scheme, r.level, r.interior);
 }
 
 } // namespace g2m

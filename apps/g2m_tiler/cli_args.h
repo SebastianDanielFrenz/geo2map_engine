@@ -13,6 +13,19 @@
 
 namespace g2m_tiler {
 
+// Splits a "DIR:SCOPE" argument (e.g. diff-scopes's --a/--b, PLAN.md G2.0
+// Task E) on the LAST ':' - a Windows drive letter's own colon ("S:\...")
+// sits earlier in the string, and a scope name is never allowed to contain
+// ':', so the last occurrence is always the DIR/SCOPE boundary. Returns
+// nullopt if there is no ':' at all, or the ':' is the first character
+// (empty dir), or it is the last character (empty scope). Header-only
+// alongside Args/parse_args above so it can be unit-tested directly.
+inline std::optional<std::pair<std::string, std::string>> split_dir_scope(const std::string& s) {
+    const auto pos = s.rfind(':');
+    if (pos == std::string::npos || pos == 0 || pos + 1 >= s.size()) return std::nullopt;
+    return std::make_pair(s.substr(0, pos), s.substr(pos + 1));
+}
+
 struct Args {
     std::vector<std::string> positional;
     std::vector<std::pair<std::string, std::string>> flags; // --key value

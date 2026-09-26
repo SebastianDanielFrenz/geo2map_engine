@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -67,6 +68,36 @@ Result<void> check_address(const TileAddress& a) {
 std::string path_utf8(const std::filesystem::path& p) {
     const std::u8string u = p.u8string();
     return std::string(u.begin(), u.end());
+}
+
+// Converts a filesystem path (as returned by path_utf8, so already UTF-8,
+// with whatever separator std::filesystem used natively - backslash on
+// Windows) to a form safe to place between "file:" and the "?" of an
+// SQLite URI (sqlite.org "URI Filenames"): a backslash becomes a forward
+// slash (SQLite's own Windows-URI convention - "file:C:/dir/db.sqlite3" is
+// accepted directly, no extra leading slash needed before the drive
+// letter), and every byte outside [A-Za-z0-9./:_-] is percent-encoded so a
+// literal '?', '#', '%' or space in the path can never be misread as
+// starting the query string, an escape, or a bare token break.
+std::string uri_encode_path(const std::string& p) {
+    std::string out;
+    out.reserve(p.size());
+    for (unsigned char c : p) {
+        if (c == '\\') {
+            out += '/';
+            continue;
+        }
+        const bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/' ||
+                          c == ':' || c == '.' || c == '_' || c == '-';
+        if (safe) {
+            out += static_cast<char>(c);
+        } else {
+            char buf[4];
+            std::snprintf(buf, sizeof buf, "%%%02X", c);
+            out += buf;
+        }
+    }
+    return out;
 }
 
 ContentHash hash_from_blob(const void* p, int n) {
@@ -394,6 +425,7 @@ struct TileStore::Impl {
     }
 
     Result<void> touch(const TileAddress& a) {
+        if (cfg.read_only) return {}; // no-op: read_only never issues a write
         Query q(*this, "UPDATE tiles SET last_used = (SELECT COALESCE(MAX(last_used), 0) + 1 FROM tiles) "
                        "WHERE scope = ?1 AND layer = ?2 AND key = ?3");
         q.addr(a);
@@ -452,13 +484,41 @@ const TileStoreConfig& TileStore::config() const { return impl_->cfg; }
 
 Result<std::unique_ptr<TileStore>> TileStore::open(const TileStoreConfig& config) {
     if (!valid_store_name(config.name)) return make_error(ErrorCode::InvalidArgument, "tile store: invalid name");
-    std::error_code ec;
-    std::filesystem::create_directories(config.dir, ec);
-    if (ec) return make_error(ErrorCode::Io, "tile store: cannot create " + path_utf8(config.dir));
     auto impl = std::make_unique<Impl>();
     impl->cfg = config;
     impl->blob_dir = config.dir / (config.name + "_blobs");
     const std::string db_path = path_utf8(config.dir / (config.name + ".sqlite3"));
+
+    if (config.read_only) {
+        // No create_directories (the doc comment's contract: read_only never
+        // touches the filesystem beyond opening the existing file), no
+        // PRAGMA journal_mode/synchronous (both could attempt a write), and
+        // no BEGIN IMMEDIATE transaction (immutable=1 promises this
+        // connection is the only reader/writer for the file's whole
+        // lifetime, and mode=ro forbids writing at all - a transaction here
+        // would just fail with SQLITE_READONLY). "PRAGMA user_version" is a
+        // plain read, safe outside any transaction.
+        const std::string uri = "file:" + uri_encode_path(db_path) + "?mode=ro&immutable=1";
+        const int rc = sqlite3_open_v2(uri.c_str(), &impl->db,
+                                       SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX, nullptr);
+        if (rc != SQLITE_OK) return impl->db_error(rc, "open (read-only)");
+        sqlite3_busy_timeout(impl->db, config.busy_timeout_ms);
+        sqlite3_extended_result_codes(impl->db, 0);
+        std::int64_t version = 0;
+        {
+            Impl::Query q(*impl, "PRAGMA user_version");
+            if (q.step() != SQLITE_ROW) return impl->db_error(SQLITE_ERROR, "user_version");
+            version = q.col_i64(0);
+        }
+        if (version != kSchemaVersion) {
+            return make_error(ErrorCode::Unsupported, "tile store: schema version " + std::to_string(version));
+        }
+        return std::unique_ptr<TileStore>(new TileStore(std::move(impl)));
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(config.dir, ec);
+    if (ec) return make_error(ErrorCode::Io, "tile store: cannot create " + path_utf8(config.dir));
     const int rc = sqlite3_open_v2(db_path.c_str(), &impl->db,
                                    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX, nullptr);
     if (rc != SQLITE_OK) return impl->db_error(rc, "open");
@@ -486,6 +546,7 @@ Result<std::unique_ptr<TileStore>> TileStore::open(const TileStoreConfig& config
 }
 
 Result<void> TileStore::put(const TileAddress& addr, TileHeader header, std::span<const std::uint8_t> body, bool pin) {
+    if (impl_->cfg.read_only) return make_error(ErrorCode::ReadOnly, "tile store: store is read-only");
     if (auto r = check_address(addr); !r) return r;
     if (header.layer != addr.layer || header.key != addr.key) {
         return make_error(ErrorCode::InvalidArgument, "tile store: header does not match the address");
@@ -578,6 +639,7 @@ Result<void> TileStore::put(const TileAddress& addr, TileHeader header, std::spa
 }
 
 Result<void> TileStore::put_container(const TileAddress& addr, std::span<const std::uint8_t> container, bool pin) {
+    if (impl_->cfg.read_only) return make_error(ErrorCode::ReadOnly, "tile store: store is read-only");
     auto v = parse_container(container);
     if (!v) return v.error();
     return put(addr, v->header, v->body, pin);
@@ -655,6 +717,7 @@ Result<std::optional<ContentHash>> TileStore::peek_hash(const TileAddress& addr)
 }
 
 Result<bool> TileStore::set_pinned(const TileAddress& addr, bool pinned) {
+    if (impl_->cfg.read_only) return make_error(ErrorCode::ReadOnly, "tile store: store is read-only");
     if (auto r = check_address(addr); !r) return r.error();
     Impl& I = *impl_;
     std::lock_guard lock(I.mu);
@@ -666,6 +729,7 @@ Result<bool> TileStore::set_pinned(const TileAddress& addr, bool pinned) {
 
 Result<std::uint64_t> TileStore::set_pinned_range(const std::string& scope, const std::string& layer, const TileKey& lo,
                                                   const TileKey& hi, bool pinned) {
+    if (impl_->cfg.read_only) return make_error(ErrorCode::ReadOnly, "tile store: store is read-only");
     if (auto r = check_address(TileAddress{scope, layer, lo}); !r) return r.error();
     if (!hi.valid() || hi.zone != lo.zone || hi.level != lo.level || hi.x < lo.x || hi.y < lo.y) {
         return make_error(ErrorCode::InvalidArgument, "tile store: bad pin range");
@@ -689,6 +753,7 @@ Result<std::uint64_t> TileStore::set_pinned_range(const std::string& scope, cons
 }
 
 Result<bool> TileStore::remove(const TileAddress& addr) {
+    if (impl_->cfg.read_only) return make_error(ErrorCode::ReadOnly, "tile store: store is read-only");
     if (auto r = check_address(addr); !r) return r.error();
     Impl& I = *impl_;
     std::lock_guard lock(I.mu);
@@ -704,6 +769,7 @@ Result<bool> TileStore::remove(const TileAddress& addr) {
 }
 
 Result<std::uint64_t> TileStore::evict_to(std::uint64_t target_bytes) {
+    if (impl_->cfg.read_only) return make_error(ErrorCode::ReadOnly, "tile store: store is read-only");
     Impl& I = *impl_;
     std::lock_guard lock(I.mu);
     Impl::Txn txn(I);

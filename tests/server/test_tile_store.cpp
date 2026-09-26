@@ -337,6 +337,73 @@ TEST_CASE("tile store: contents persist across reopen", "[server][store]") {
     consistent(*s);
 }
 
+// PLAN.md G2.0 Task C: TileStoreConfig::read_only opens the sqlite file with
+// mode=ro&immutable=1 (no write handle at all, unlike a plain read/write
+// store simply never being written to) - for a FINISHED, PINNED store a
+// consumer only ever reads from (a release id's own source snapshot).
+TEST_CASE("tile store: read_only opens for read-only access and rejects every mutation", "[server][store]") {
+    TempDir d("store_readonly");
+    const auto body = g2m_test::make_body(50, 200);
+    {
+        auto s = open_store(d);
+        put(*s, addr(0), body, /*pin=*/true);
+    }
+
+    const auto db_path = d.path() / "tiles.sqlite3";
+    const auto before = g2m_test::read_file(db_path);
+    REQUIRE_FALSE(before.empty());
+
+    TileStoreConfig ro;
+    ro.dir = d.path();
+    ro.inline_limit = kInlineLimit;
+    ro.read_only = true;
+    auto rs = TileStore::open(ro);
+    REQUIRE(rs);
+    auto& s = **rs;
+
+    // Reading - including the LRU-order touch a plain get() would otherwise
+    // issue - does not change a single byte of the database file.
+    auto a = get(s, addr(0));
+    REQUIRE(a);
+    CHECK(a->body == body);
+    CHECK(a->pinned);
+    CHECK(stats(s).tiles == 1);
+    consistent(s);
+    CHECK(before == g2m_test::read_file(db_path));
+
+    // Every mutating call is rejected outright, not merely a no-op.
+    const auto other_body = g2m_test::make_body(51, 64);
+    const TileAddress a1 = addr(1);
+    auto put_r = s.put(a1, g2m_test::make_header(kLc, a1.key, other_body), other_body);
+    REQUIRE_FALSE(put_r);
+    CHECK(put_r.error().code == ErrorCode::ReadOnly);
+
+    const auto container =
+        assemble_container(g2m_test::make_header(kLc, a1.key, other_body), other_body).value();
+    auto put_c_r = s.put_container(a1, container);
+    REQUIRE_FALSE(put_c_r);
+    CHECK(put_c_r.error().code == ErrorCode::ReadOnly);
+
+    auto pin_r = s.set_pinned(addr(0), false);
+    REQUIRE_FALSE(pin_r);
+    CHECK(pin_r.error().code == ErrorCode::ReadOnly);
+
+    auto pin_range_r = s.set_pinned_range("s1", kLc, g2m_test::home_tile(0, 0), g2m_test::home_tile(0, 0), false);
+    REQUIRE_FALSE(pin_range_r);
+    CHECK(pin_range_r.error().code == ErrorCode::ReadOnly);
+
+    auto rm_r = s.remove(addr(0));
+    REQUIRE_FALSE(rm_r);
+    CHECK(rm_r.error().code == ErrorCode::ReadOnly);
+
+    auto evict_r = s.evict_to(0);
+    REQUIRE_FALSE(evict_r);
+    CHECK(evict_r.error().code == ErrorCode::ReadOnly);
+
+    // None of the rejected calls above touched the file either.
+    CHECK(before == g2m_test::read_file(db_path));
+}
+
 // PLAN.md 7.3: several g2m workers share one store object, and a second
 // object (another process in real use) opens the same directory. Bodies are
 // drawn from a small shared pool so dedup/refcount races are exercised.

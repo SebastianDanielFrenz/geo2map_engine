@@ -1,7 +1,7 @@
 // g2m/import/dem.h - DGM1 -> g2m.src.elev.dgm1 tile import (PLAN.md G1c I3).
 //
 // Assembles each of a resolved region's level-2 (1024 m) tiles from the up
-// to four 1 km DGM1 squares that touch it (dgm1::Catalog), quantises to the
+// to nine 1 km DGM1 squares that touch it (dgm1::Catalog), quantises to the
 // project's own int32 height units, encodes as g2m.src.elev.dgm1 and writes
 // through ITileSink. See dem.cpp's own header comment for the per-tile
 // algorithm and the determinism argument (output is independent of `jobs`
@@ -21,6 +21,23 @@
 #include <vector>
 
 namespace g2m::import {
+
+// The inclusive range of DGM1 1 km square indices (along one axis) touched
+// by a footprint of `extent_m` metres starting at `min_m` (a UTM easting or
+// northing, metres): `lo` = floor(min_m / 1000), `hi` = floor((min_m +
+// extent_m - 1) / 1000) (the last covered metre's own square). `hi - lo` is
+// 0 for an extent <= 1000 m that does not straddle a km boundary; for a
+// geo2map level-2 tile (1024 m > 1000 m, so it always straddles at least
+// one boundary) it is 1 when `min_m mod 1000 < 977` (two squares) and 2 when
+// `min_m mod 1000 >= 977` (THREE squares - PLAN.md G2.0: a level-2 tile can
+// span three DGM1 1 km squares per axis, not merely two; the importer must
+// visit every (e, n) pair in `[e_span.lo, e_span.hi] x [n_span.lo,
+// n_span.hi]`, up to 3x3 = 9, never just the 4 corners of a 2x2 box).
+struct KmSpan {
+    int lo = 0;
+    int hi = 0;
+};
+KmSpan dgm1_km_span(std::int64_t min_m, std::int64_t extent_m);
 
 struct DemImportOptions {
     // 0 = std::thread::hardware_concurrency() (at least 1) - see

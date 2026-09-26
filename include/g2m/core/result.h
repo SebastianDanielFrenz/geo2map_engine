@@ -25,6 +25,7 @@ enum class ErrorCode : std::uint16_t {
     NotFound,
     Io,                  // file system / database error
     Busy,                // database locked beyond the busy timeout
+    ReadOnly,            // a mutating call on a TileStoreConfig::read_only store
 };
 
 const char* to_string(ErrorCode code);

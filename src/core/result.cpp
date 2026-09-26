@@ -16,6 +16,7 @@ const char* to_string(ErrorCode code) {
     case ErrorCode::NotFound: return "not found";
     case ErrorCode::Io: return "i/o error";
     case ErrorCode::Busy: return "busy";
+    case ErrorCode::ReadOnly: return "read only";
     }
     return "unknown";
 }

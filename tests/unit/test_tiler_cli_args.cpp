@@ -14,6 +14,7 @@
 
 using g2m_tiler::Args;
 using g2m_tiler::parse_args;
+using g2m_tiler::split_dir_scope;
 
 namespace {
 
@@ -82,4 +83,38 @@ TEST_CASE("cli_args: repeatable value flags (e.g. --pkt) are unaffected by bool_
         if (k == "pkt") ++pkt_count;
     }
     CHECK(pkt_count == 2);
+}
+
+// split_dir_scope (PLAN.md G2.0 Task E, diff-scopes's --a/--b): splits on the
+// LAST ':' so a Windows drive-letter path still parses correctly.
+TEST_CASE("cli_args: split_dir_scope splits on the last ':'", "[import][cli]") {
+    {
+        const auto r = split_dir_scope("S:\\claude_code\\geo2map_cache\\home:home-2026-09");
+        REQUIRE(r.has_value());
+        CHECK(r->first == "S:\\claude_code\\geo2map_cache\\home");
+        CHECK(r->second == "home-2026-09");
+    }
+    {
+        // A scope name is never allowed to contain ':', so this is
+        // unambiguous even though the dir itself has an earlier ':'.
+        const auto r = split_dir_scope("C:/a/b:scope");
+        REQUIRE(r.has_value());
+        CHECK(r->first == "C:/a/b");
+        CHECK(r->second == "scope");
+    }
+    {
+        // A relative/POSIX-style dir with no drive letter still works: the
+        // one ':' present is the DIR/SCOPE boundary.
+        const auto r = split_dir_scope("relative/dir:scope");
+        REQUIRE(r.has_value());
+        CHECK(r->first == "relative/dir");
+        CHECK(r->second == "scope");
+    }
+}
+
+TEST_CASE("cli_args: split_dir_scope rejects missing/empty dir or scope", "[import][cli]") {
+    CHECK_FALSE(split_dir_scope("no-colon-at-all").has_value());
+    CHECK_FALSE(split_dir_scope(":scope").has_value());   // empty dir
+    CHECK_FALSE(split_dir_scope("dir:").has_value());     // empty scope
+    CHECK_FALSE(split_dir_scope("").has_value());
 }

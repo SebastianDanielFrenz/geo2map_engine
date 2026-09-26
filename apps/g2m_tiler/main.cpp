@@ -25,6 +25,23 @@
 //          index in TileStore::index's own (layer, key) order - a
 //          --jobs-independent, filesystem-enumeration-independent
 //          fingerprint for comparing two stores built from the same import)
+//   diff-scopes --a DIR:SCOPE --b DIR:SCOPE
+//          (PLAN.md G2.0 Task E: a per-tile complement to index-hash - two
+//          index-hash values differing says ONLY that something changed,
+//          not what. Splits each DIR:SCOPE argument on the LAST ':' (a
+//          Windows drive letter's own colon sits earlier; a scope name never
+//          contains ':'), opens both stores' TileStore::index(scope) (each
+//          already sorted by (layer, key)) and merge-diffs them, printing
+//          "added"/"removed"/"changed" per (layer, key) plus a per-layer and
+//          overall added/removed/changed/unchanged summary. Read-only: never
+//          calls a TileStore mutator)
+//   check-dem-nodata --store DIR --scope SCOPE --resolved PATH [--interior-only]
+//          (PLAN.md G2.0 Task B: decodes every requested tile's real
+//          g2m.src.elev.dgm1 body and counts actual NoData samples - the
+//          check `stats`/`index-hash` never did; see cmd_check_dem_nodata's
+//          own comment for why the G1c "0 NoData in interior tiles" claim
+//          needed this. --interior-only restricts to the region's interior
+//          tiles and fails (exit 1) if any of them carry NoData)
 //
 // Exit codes: 0 success, 1 usage/runtime error, 2 "not implemented yet".
 #include "cli_args.h"
@@ -35,7 +52,9 @@
 #include "g2m/import/landcover.h"
 #include "g2m/import/osm.h"
 #include "g2m/import/region_resolve.h"
+#include "g2m/layer/layer_id.h"
 #include "g2m/layer/region.h"
+#include "g2m/layer/src_elev.h"
 #include "g2m/core/hash.h"
 #include "g2m/server/tile_store.h"
 
@@ -55,6 +74,7 @@
 namespace {
 
 using g2m_tiler::Args;
+using g2m_tiler::split_dir_scope;
 
 std::optional<std::string> read_file(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
@@ -138,7 +158,9 @@ int usage() {
                  "         (--tif PATH [--tif ...] | --wc-data DIR)\n"
                  "         [--jobs N] [--km-cache N] [--pin]\n"
                  "  stats --store DIR [--scope SCOPE]\n"
-                 "  index-hash --store DIR --scope SCOPE\n";
+                 "  index-hash --store DIR --scope SCOPE\n"
+                 "  diff-scopes --a DIR:SCOPE --b DIR:SCOPE\n"
+                 "  check-dem-nodata --store DIR --scope SCOPE --resolved PATH [--interior-only]\n";
     return 1;
 }
 
@@ -833,12 +855,259 @@ int cmd_index_hash(const Args& args) {
     return 0;
 }
 
+// diff-scopes --a DIR:SCOPE --b DIR:SCOPE (PLAN.md G2.0 Task E): a per-tile
+// complement to index-hash. Two index-hash values differing across an "old"
+// and a "new" store/scope says only that something changed - never what.
+// This opens both stores' TileStore::index(scope) (each already sorted by
+// (layer, key), same contract cmd_index_hash relies on) and merge-diffs the
+// two sorted sequences directly (no sort/hash-map needed): a (layer, key)
+// present only on one side is "removed"/"added"; present on both with a
+// different body_hash is "changed"; otherwise "unchanged" (counted, not
+// printed - a re-import of an unchanged region should print nothing but
+// summary lines). --a and --b may name the same directory (diffing two
+// scopes of one store) or two different directories (e.g. the old home
+// store vs. a freshly re-imported one, PLAN.md G2.0 Task G) - TileStore
+// itself supports several objects opening the same directory concurrently.
+// Never calls a TileStore mutator.
+int cmd_diff_scopes(const Args& args) {
+    const auto a_arg = args.get("a");
+    const auto b_arg = args.get("b");
+    if (!a_arg || !b_arg) {
+        std::cerr << "g2m_tiler diff-scopes: --a and --b are required (DIR:SCOPE each)\n";
+        return 1;
+    }
+    const auto a_split = split_dir_scope(*a_arg);
+    if (!a_split) {
+        std::cerr << "g2m_tiler diff-scopes: --a must be DIR:SCOPE, got '" << *a_arg << "'\n";
+        return 1;
+    }
+    const auto b_split = split_dir_scope(*b_arg);
+    if (!b_split) {
+        std::cerr << "g2m_tiler diff-scopes: --b must be DIR:SCOPE, got '" << *b_arg << "'\n";
+        return 1;
+    }
+    const auto& [a_dir, a_scope] = *a_split;
+    const auto& [b_dir, b_scope] = *b_split;
+
+    g2m::TileStoreConfig a_config;
+    a_config.dir = a_dir;
+    auto a_store = g2m::TileStore::open(a_config);
+    if (!a_store) {
+        std::cerr << "g2m_tiler diff-scopes: --a: " << a_store.error().message << "\n";
+        return 1;
+    }
+    g2m::TileStoreConfig b_config;
+    b_config.dir = b_dir;
+    auto b_store = g2m::TileStore::open(b_config);
+    if (!b_store) {
+        std::cerr << "g2m_tiler diff-scopes: --b: " << b_store.error().message << "\n";
+        return 1;
+    }
+
+    const auto a_index = (*a_store)->index(a_scope);
+    if (!a_index) {
+        std::cerr << "g2m_tiler diff-scopes: --a: " << a_index.error().message << "\n";
+        return 1;
+    }
+    const auto b_index = (*b_store)->index(b_scope);
+    if (!b_index) {
+        std::cerr << "g2m_tiler diff-scopes: --b: " << b_index.error().message << "\n";
+        return 1;
+    }
+    const auto& av = *a_index;
+    const auto& bv = *b_index;
+
+    struct Counts {
+        std::uint64_t added = 0, removed = 0, changed = 0, unchanged = 0;
+    };
+    Counts totals;
+    Counts layer_counts;
+    std::string current_layer;
+    bool have_layer = false;
+    auto flush_layer = [&]() {
+        std::cout << current_layer << " added=" << layer_counts.added << " removed=" << layer_counts.removed
+                  << " changed=" << layer_counts.changed << " unchanged=" << layer_counts.unchanged << "\n";
+    };
+    auto note_layer = [&](const std::string& layer) {
+        if (!have_layer || layer != current_layer) {
+            if (have_layer) flush_layer();
+            current_layer = layer;
+            have_layer = true;
+            layer_counts = Counts{};
+        }
+    };
+
+    std::size_t ia = 0, ib = 0;
+    while (ia < av.size() || ib < bv.size()) {
+        const bool have_a = ia < av.size();
+        const bool have_b = ib < bv.size();
+        int cmp;
+        if (have_a && have_b) {
+            if (av[ia].layer != bv[ib].layer) {
+                cmp = av[ia].layer < bv[ib].layer ? -1 : 1;
+            } else if (av[ia].key != bv[ib].key) {
+                cmp = av[ia].key < bv[ib].key ? -1 : 1;
+            } else {
+                cmp = 0;
+            }
+        } else if (have_a) {
+            cmp = -1;
+        } else {
+            cmp = 1;
+        }
+
+        if (cmp < 0) {
+            note_layer(av[ia].layer);
+            std::cout << "removed " << av[ia].layer << " " << g2m::to_string(av[ia].key) << "\n";
+            ++layer_counts.removed;
+            ++totals.removed;
+            ++ia;
+        } else if (cmp > 0) {
+            note_layer(bv[ib].layer);
+            std::cout << "added " << bv[ib].layer << " " << g2m::to_string(bv[ib].key) << "\n";
+            ++layer_counts.added;
+            ++totals.added;
+            ++ib;
+        } else {
+            note_layer(av[ia].layer);
+            if (av[ia].body_hash != bv[ib].body_hash) {
+                std::cout << "changed " << av[ia].layer << " " << g2m::to_string(av[ia].key) << "\n";
+                ++layer_counts.changed;
+                ++totals.changed;
+            } else {
+                ++layer_counts.unchanged;
+                ++totals.unchanged;
+            }
+            ++ia;
+            ++ib;
+        }
+    }
+    if (have_layer) flush_layer();
+
+    std::cout << "total added=" << totals.added << " removed=" << totals.removed << " changed=" << totals.changed
+              << " unchanged=" << totals.unchanged << "\n";
+    return 0;
+}
+
+// check-dem-nodata --store DIR --scope SCOPE --resolved PATH [--interior-only]
+// (PLAN.md G2.0 Task B). The G1c I7 report's "0 NoData samples in the 533
+// interior tiles" claim was never actually measured: cmd_stats() only calls
+// TileStore::check_consistency() (reference counts / blob presence+size, no
+// body decode) and cmd_index_hash() only fingerprints (layer, key,
+// body_hash) tuples (detects a byte difference across runs, says nothing
+// about what the bytes MEAN) - neither one ever decodes a src_elev.dgm1
+// body and looks at its samples. The claim rested on an unstated assumption
+// ("if DGM1 coverage exists for every km square an interior tile touches,
+// the tile has no NoData") that silently depended on the importer visiting
+// every touching km square correctly - exactly the assumption the
+// dgm1_km_span bug (g2m/import/dem.h, dem.cpp) violated: a tile whose
+// middle km square was skipped still reads back as "covered" by any check
+// that does not decode the body, while its samples carry a real NoData
+// stripe. This command is that missing check: it fetches each requested
+// key's g2m.src.elev.dgm1 tile, decodes the real container body
+// (decode_body + decode_src_elev) and counts actual kHeightNoData samples.
+//
+// --interior-only restricts the keys to ResolvedRegion::interior
+// (region.h's interior_tile_keys(), PLAN.md G2.0) - the subset the G1c
+// claim was actually about, where full coverage is expected - and makes
+// the command exit 1 if any interior tile carries NoData (a regression
+// guard for future imports). Without --interior-only every footprint tile
+// is checked and reported (including the halo, where partial/no coverage
+// is accepted, PLAN.md's own open item), but the exit code stays 0.
+int cmd_check_dem_nodata(const Args& args) {
+    const auto store_dir = args.get("store");
+    const auto scope = args.get("scope");
+    const auto resolved_path = args.get("resolved");
+    if (!store_dir || !scope || !resolved_path) {
+        std::cerr << "g2m_tiler check-dem-nodata: --store, --scope and --resolved are required\n";
+        return 1;
+    }
+    const bool interior_only = args.flag("interior-only");
+
+    const auto resolved_text = read_file(*resolved_path);
+    if (!resolved_text) {
+        std::cerr << "g2m_tiler check-dem-nodata: cannot read " << *resolved_path << "\n";
+        return 1;
+    }
+    const auto resolved = g2m::parse_resolved_region(*resolved_text);
+    if (!resolved) {
+        std::cerr << "g2m_tiler check-dem-nodata: " << resolved.error().message << "\n";
+        return 1;
+    }
+
+    const std::vector<g2m::TileKey> keys =
+        interior_only ? g2m::interior_tile_keys(*resolved) : g2m::tile_keys(*resolved);
+
+    g2m::TileStoreConfig config;
+    config.dir = *store_dir;
+    auto store = g2m::TileStore::open(config);
+    if (!store) {
+        std::cerr << "g2m_tiler check-dem-nodata: " << store.error().message << "\n";
+        return 1;
+    }
+
+    std::uint64_t tiles_checked = 0;
+    std::uint64_t tiles_missing = 0;
+    std::uint64_t tiles_with_nodata = 0;
+    std::uint64_t total_nodata_samples = 0;
+    std::uint64_t total_samples = 0;
+
+    for (const g2m::TileKey& key : keys) {
+        const g2m::TileAddress addr{*scope, std::string(g2m::kSrcElevDgm1Layer), key};
+        const auto got = (*store)->get(addr);
+        if (!got) {
+            std::cerr << "g2m_tiler check-dem-nodata: " << got.error().message << "\n";
+            return 1;
+        }
+        if (!got->has_value()) {
+            ++tiles_missing;
+            continue;
+        }
+        ++tiles_checked;
+        const auto body = g2m::decode_body((*got)->body);
+        if (!body) {
+            std::cerr << "g2m_tiler check-dem-nodata: decode_body(" << g2m::to_string(key)
+                      << "): " << body.error().message << "\n";
+            return 1;
+        }
+        const auto tile = g2m::decode_src_elev(*body);
+        if (!tile) {
+            std::cerr << "g2m_tiler check-dem-nodata: decode_src_elev(" << g2m::to_string(key)
+                      << "): " << tile.error().message << "\n";
+            return 1;
+        }
+        std::uint64_t nodata_here = 0;
+        for (const std::int32_t h : tile->heights.data()) {
+            ++total_samples;
+            if (h == g2m::kHeightNoData) ++nodata_here;
+        }
+        if (nodata_here > 0) {
+            ++tiles_with_nodata;
+            total_nodata_samples += nodata_here;
+            std::cout << "nodata " << g2m::to_string(key) << " " << nodata_here << "/" << tile->heights.size()
+                      << "\n";
+        }
+    }
+
+    std::cout << "scope=" << (interior_only ? "interior" : "footprint") << " requested=" << keys.size()
+              << " checked=" << tiles_checked << " missing=" << tiles_missing
+              << " tiles_with_nodata=" << tiles_with_nodata << " total_nodata_samples=" << total_nodata_samples
+              << " total_samples=" << total_samples << "\n";
+
+    if (interior_only && tiles_with_nodata > 0) {
+        std::cout << "check-dem-nodata FAILED: " << tiles_with_nodata << " interior tile(s) contain NoData sample(s)\n";
+        return 1;
+    }
+    std::cout << "check-dem-nodata OK\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) return usage();
     const std::string command = argv[1];
-    const Args args = g2m_tiler::parse_args(argc, argv, 2, {"pin"});
+    const Args args = g2m_tiler::parse_args(argc, argv, 2, {"pin", "interior-only"});
 
     if (command == "find-admin") return cmd_find_admin(args);
     if (command == "resolve") return cmd_resolve(args);
@@ -848,6 +1117,8 @@ int main(int argc, char** argv) {
     if (command == "import") return cmd_import(args);
     if (command == "stats") return cmd_stats(args);
     if (command == "index-hash") return cmd_index_hash(args);
+    if (command == "diff-scopes") return cmd_diff_scopes(args);
+    if (command == "check-dem-nodata") return cmd_check_dem_nodata(args);
     if (command == "--help" || command == "-h" || command == "help") return usage(), 0;
     std::cerr << "g2m_tiler: unknown command '" << command << "'\n";
     return usage();

@@ -15,7 +15,23 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 # -fsanitize=address, so the ASan runtime must be named explicitly (static
 # /MT CRT variant, the same libraries clang-cl itself would pass). Set before
 # project() because the compiler-check link step needs it too.
-if(CMAKE_CXX_COMPILER MATCHES "clang-cl" AND CMAKE_CXX_FLAGS MATCHES "-fsanitize=address")
+#
+# Guarded to the actual top-level CMakeLists.txt (PLAN.md G2.0 Task D):
+# PROJECT_IS_TOP_LEVEL does not exist yet at this point (it is set by
+# project(), a few lines below) - CMAKE_SOURCE_DIR (the directory of the
+# outermost CMakeLists.txt CMake was invoked on) vs. CMAKE_CURRENT_SOURCE_DIR
+# (this file's own directory) is the equivalent check that is already valid
+# before project() runs. If this file is ever add_subdirectory()-ed from a
+# parent build (e.g. a future bridges/physics_sim consumer), the mutation is
+# skipped: CMAKE_EXE_LINKER_FLAGS is a directory-scoped variable that this
+# APPENDS to, and a parent project using the same asan-setup pattern for its
+# own targets must not have this geo2map_engine subtree append the same
+# /WHOLEARCHIVE flags to it a second time. A directly-invoked (top-level)
+# configure is completely unaffected: CMAKE_SOURCE_DIR ==
+# CMAKE_CURRENT_SOURCE_DIR is always true there, so behaviour stays
+# byte-identical.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND
+   CMAKE_CXX_COMPILER MATCHES "clang-cl" AND CMAKE_CXX_FLAGS MATCHES "-fsanitize=address")
   execute_process(
     COMMAND "${CMAKE_CXX_COMPILER}" -print-resource-dir
     OUTPUT_VARIABLE G2M_CLANG_RESOURCE_DIR
@@ -36,7 +52,24 @@ option(G2M_BUILD_TESTS "Build the Catch2 test suites" ON)
 option(G2M_BUILD_REFGEN "Build tools/refgen (fetches GeographicLib; reference-value generator, never linked into g2m)" OFF)
 option(G2M_SANITIZER_BUILD "This build instruments code with a sanitizer (ASan/UBSan/TSan)" OFF)
 option(G2M_BUILD_FUZZERS "Build the libFuzzer targets in tests/fuzz_formats and tests/fuzz (clang only; set by the WSL clang presets)" OFF)
-option(G2M_BUILD_APPS "Build the g2m_tiler CLI (apps/g2m_tiler, PLAN.md G1c I2)" ON)
+# PLAN.md G2.0 Task D: OFF skips the whole decoder/importer stack - the
+# libdeflate/zlib-ng/protozero/libosmium FetchContent deps (cmake/deps_decoders.cmake),
+# src/decode, src/import and apps/g2m_tiler - for a pure CONSUMER of the
+# tile-serving stack (g2m_core/g2m_layers/g2m_server/g2m_client only, e.g. a
+# game linking g2m_server to read an already-built store, PLAN.md's
+# bridges/physics_sim / racing_game use case). ON reproduces the previous,
+# only behaviour exactly (every decoder dep still fetched, src/decode and
+# src/import still built).
+option(G2M_BUILD_IMPORT "Build src/decode, src/import and apps/g2m_tiler (and fetch their decoder dependencies)" ON)
+option(G2M_BUILD_APPS "Build the g2m_tiler CLI (apps/g2m_tiler, PLAN.md G1c I2) - requires G2M_BUILD_IMPORT" ON)
+
+if(G2M_BUILD_APPS AND NOT G2M_BUILD_IMPORT)
+  message(FATAL_ERROR "G2M_BUILD_APPS requires G2M_BUILD_IMPORT: apps/g2m_tiler links g2m_import")
+endif()
+if(G2M_BUILD_TESTS AND NOT G2M_BUILD_IMPORT)
+  message(FATAL_ERROR "G2M_BUILD_TESTS requires G2M_BUILD_IMPORT: several test suites link g2m_import "
+                      "or exercise g2m_decode directly")
+endif()
 
 # An optimised build type must carry an optimisation flag. CMake seeds
 # CMAKE_CXX_FLAGS_<CONFIG> only on a build dir's first configure; a cache
@@ -117,14 +150,16 @@ add_subdirectory(src/client)
 add_subdirectory(third_party/musl_math)
 add_subdirectory(src)
 
-include(cmake/deps_decoders.cmake)
-add_subdirectory(src/decode)
+if(G2M_BUILD_IMPORT)
+  include(cmake/deps_decoders.cmake)
+  add_subdirectory(src/decode)
 
-# G1c I2: the importer support library (region resolution, tile-write seam)
-# and its CLI, apps/g2m_tiler.
-add_subdirectory(src/import)
-if(G2M_BUILD_APPS)
-  add_subdirectory(apps/g2m_tiler)
+  # G1c I2: the importer support library (region resolution, tile-write seam)
+  # and its CLI, apps/g2m_tiler.
+  add_subdirectory(src/import)
+  if(G2M_BUILD_APPS)
+    add_subdirectory(apps/g2m_tiler)
+  endif()
 endif()
 
 if(G2M_BUILD_TESTS)
@@ -148,3 +183,13 @@ endif()
 #   if(TARGET ps_core)), g2m_godot (adapters/godot), apps g2m_server / g2m_cli.
 #   (g2m_layers/g2m_server/g2m_client: G1+, already built above. g2m_import
 #   and its app g2m_tiler: G1c I2, already built above.)
+#
+# PLAN.md G2.0 Task D: bridges/physics_sim does not exist yet (G2.4). Once it
+# does, add here (not inside the G2M_BUILD_IMPORT block above - a consumer
+# bridge only needs g2m_server/g2m_client/g2m_layers, never the decoders):
+#   if(TARGET ps_core)
+#     add_subdirectory(bridges/physics_sim)
+#   endif()
+# `if(TARGET ps_core)` is the existing guard (physics_sim's ps_core must
+# already be add_subdirectory()-ed by whatever embeds both projects); this is
+# additionally why it stays OUTSIDE any G2M_BUILD_IMPORT check.

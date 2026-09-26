@@ -69,6 +69,17 @@
       }
     },
     {
+      "name": "consumer-check",
+      "displayName": "Windows / clang-cl / consumer-only configure (PLAN.md G2.0 Task D)",
+      "inherits": "clang-cl-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "G2M_BUILD_IMPORT": "OFF",
+        "G2M_BUILD_TESTS": "OFF",
+        "G2M_BUILD_APPS": "OFF"
+      }
+    },
+    {
       "name": "msvc-base",
       "hidden": true,
       "inherits": "windows-base",
@@ -150,6 +161,7 @@
     { "name": "release", "configurePreset": "release" },
     { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo" },
     { "name": "asan", "configurePreset": "asan" },
+    { "name": "consumer-check", "configurePreset": "consumer-check" },
     { "name": "msvc-debug", "configurePreset": "msvc-debug" },
     { "name": "msvc-release", "configurePreset": "msvc-release" },
     { "name": "linux-release", "configurePreset": "linux-release" },

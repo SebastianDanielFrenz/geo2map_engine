@@ -6,10 +6,17 @@
 //     registration and NorthToSouth row order chosen to match DGM1's own
 //     lattice exactly (1 m cells, row 0 = north), so assembling the tile is
 //     a pure row/column COPY, never a resample.
-//  2. The tile's footprint touches at most two DGM1 1 km squares per axis
-//     (1024 m > 1000 m, so it always straddles at least one km boundary,
-//     never more than two per axis): e in {floor(west/1000),
-//     floor((west+1023)/1000)}, n likewise - up to 4 distinct (e, n) pairs.
+//  2. The tile's footprint touches TWO OR THREE DGM1 1 km squares per axis
+//     (1024 m > 1000 m, so it always straddles at least one km boundary;
+//     when the tile's west/south edge sits at km-remainder 977..999 the
+//     1024 m extent straddles TWO boundaries, touching three squares on
+//     that axis, not two - PLAN.md G2.0, dgm1_km_span()/KmSpan in dem.h):
+//     e in [floor(west/1000), floor((west+1023)/1000)], n likewise - up to
+//     3x3 = 9 distinct (e, n) pairs. An earlier version of this importer
+//     assumed "at most two per axis" and only visited the 2x2 box's 4
+//     corners, silently skipping the middle square whenever a tile spanned
+//     three - producing a NoData stripe through otherwise-covered terrain
+//     (found post-import, G2M-005/G2.0; see tests/unit/test_dem_km_span.cpp).
 //  3. Each needed (e, n) square is fetched through a KmCache: a bounded LRU
 //     of decoded, quantised 1000x1000 squares, keyed by (e, n), with
 //     "decode this key exactly once while any thread is waiting on it"
@@ -46,7 +53,6 @@
 #include "g2m/import/ordered_parallel.h"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <future>
@@ -248,6 +254,11 @@ struct TileOutcome {
 
 } // namespace
 
+KmSpan dgm1_km_span(std::int64_t min_m, std::int64_t extent_m) {
+    return KmSpan{static_cast<int>(floor_div(min_m, 1000)),
+                  static_cast<int>(floor_div(min_m + extent_m - 1, 1000))};
+}
+
 Result<DemImportReport> import_dem(const ResolvedRegion& region, const Catalog& catalog, ITileSink& sink,
                                     std::string_view scope, const DemImportOptions& options) {
     (void)scope; // informational only - see dem.h's own doc comment
@@ -277,48 +288,46 @@ Result<DemImportReport> import_dem(const ResolvedRegion& region, const Catalog& 
 
         const std::int64_t west = key.min_easting();
         const std::int64_t south = key.min_northing();
-        const int e0 = static_cast<int>(floor_div(west, 1000));
-        const int e1 = static_cast<int>(floor_div(west + dest_georef.cells_x() - 1, 1000));
-        const int n0 = static_cast<int>(floor_div(south, 1000));
-        const int n1 = static_cast<int>(floor_div(south + dest_georef.cells_y() - 1, 1000));
+        const KmSpan e_span = dgm1_km_span(west, dest_georef.cells_x());
+        const KmSpan n_span = dgm1_km_span(south, dest_georef.cells_y());
 
-        const std::array<std::pair<int, int>, 4> combos{{{e0, n0}, {e0, n1}, {e1, n0}, {e1, n1}}};
-        std::array<bool, 4> done{};
-        for (std::size_t ci = 0; ci < combos.size(); ++ci) {
-            if (done[ci]) continue;
-            for (std::size_t cj = ci; cj < combos.size(); ++cj) {
-                if (combos[cj] == combos[ci]) done[cj] = true;
-            }
-            const auto [e_km, n_km] = combos[ci];
+        // Every (e, n) pair in the full rectangle, up to 3x3 = 9 - not just
+        // the 2x2 box's 4 corners (PLAN.md G2.0; see this file's header
+        // comment and dem.h's dgm1_km_span()). e_span/n_span each enumerate
+        // a contiguous, non-repeating range, so no de-duplication is needed.
+        for (int e_km = e_span.lo; e_km <= e_span.hi; ++e_km) {
+            for (int n_km = n_span.lo; n_km <= n_span.hi; ++n_km) {
+                Result<std::shared_ptr<const KmEntry>> entry_res = cache.get(e_km, n_km);
+                if (!entry_res) throw std::runtime_error(entry_res.error().message);
+                const KmEntry& entry = **entry_res;
+                if (!entry.covered) continue;
+                covered_any = true;
 
-            Result<std::shared_ptr<const KmEntry>> entry_res = cache.get(e_km, n_km);
-            if (!entry_res) throw std::runtime_error(entry_res.error().message);
-            const KmEntry& entry = **entry_res;
-            if (!entry.covered) continue;
-            covered_any = true;
+                RasterGeoref src_georef;
+                src_georef.zone = dest_georef.zone;
+                src_georef.west_mm = static_cast<std::int64_t>(e_km) * 1'000'000;
+                src_georef.south_mm = static_cast<std::int64_t>(n_km) * 1'000'000;
+                src_georef.spacing_mm = 1000;
+                src_georef.registration = SampleRegistration::Cell;
+                src_georef.row_order = RowOrder::NorthToSouth;
+                src_georef.width = kKmSamples;
+                src_georef.height = kKmSamples;
 
-            RasterGeoref src_georef;
-            src_georef.zone = dest_georef.zone;
-            src_georef.west_mm = static_cast<std::int64_t>(e_km) * 1'000'000;
-            src_georef.south_mm = static_cast<std::int64_t>(n_km) * 1'000'000;
-            src_georef.spacing_mm = 1000;
-            src_georef.registration = SampleRegistration::Cell;
-            src_georef.row_order = RowOrder::NorthToSouth;
-            src_georef.width = kKmSamples;
-            src_georef.height = kKmSamples;
+                const std::optional<LatticeOffset> off = lattice_offset(src_georef, dest_georef);
+                if (!off) throw std::runtime_error("dem: DGM1 km lattice does not align with the tile lattice");
+                if (off->row_flip) {
+                    throw std::runtime_error("dem: unexpected row-order flip between DGM1 and tile lattices");
+                }
 
-            const std::optional<LatticeOffset> off = lattice_offset(src_georef, dest_georef);
-            if (!off) throw std::runtime_error("dem: DGM1 km lattice does not align with the tile lattice");
-            if (off->row_flip) throw std::runtime_error("dem: unexpected row-order flip between DGM1 and tile lattices");
-
-            for (int r = 0; r < dest_georef.height; ++r) {
-                const std::int64_t src_row = r + off->drow;
-                if (src_row < 0 || src_row >= kKmSamples) continue;
-                for (int c = 0; c < dest_georef.width; ++c) {
-                    const std::int64_t src_col = c + off->dcol;
-                    if (src_col < 0 || src_col >= kKmSamples) continue;
-                    dest.at(c, r) = entry.heights[static_cast<std::size_t>(src_row) * kKmSamples +
-                                                   static_cast<std::size_t>(src_col)];
+                for (int r = 0; r < dest_georef.height; ++r) {
+                    const std::int64_t src_row = r + off->drow;
+                    if (src_row < 0 || src_row >= kKmSamples) continue;
+                    for (int c = 0; c < dest_georef.width; ++c) {
+                        const std::int64_t src_col = c + off->dcol;
+                        if (src_col < 0 || src_col >= kKmSamples) continue;
+                        dest.at(c, r) = entry.heights[static_cast<std::size_t>(src_row) * kKmSamples +
+                                                       static_cast<std::size_t>(src_col)];
+                    }
                 }
             }
         }

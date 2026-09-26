@@ -389,6 +389,133 @@ TEST_CASE("import: import_dem skips level-2 tiles with no DGM1 coverage at all",
     CHECK(report->tiles_written > 0);
 }
 
+TEST_CASE("import: the committed fixture's own level-2 tiles never span three DGM1 km squares per axis",
+          "[import][io][dgm1]") {
+    // PLAN.md G2.0: the fixture is too small to reach a real three-square
+    // tile (see the synthetic case below for that), but this pins the
+    // fixture's own footprint so a future fixture change that DID grow into
+    // a three-square span would be caught here rather than silently only
+    // exercised by the synthetic test.
+    Result<ResolvedRegion> resolved = resolve_bbox_region(474000, 5560000, 476000, 5561000);
+    REQUIRE(resolved.ok());
+    REQUIRE_FALSE(resolved->tiles.empty());
+    for (const TileKey& key : tile_keys(*resolved)) {
+        const KmSpan e_span = dgm1_km_span(key.min_easting(), key.size_m());
+        const KmSpan n_span = dgm1_km_span(key.min_northing(), key.size_m());
+        CHECK((e_span.hi - e_span.lo + 1) <= 2);
+        CHECK((n_span.hi - n_span.lo + 1) <= 2);
+    }
+}
+
+TEST_CASE("import: a level-2 tile spanning three DGM1 km squares on one axis is filled without a "
+          "NoData stripe through the middle square (PLAN.md G2.0 regression)",
+          "[import][io][dgm1]") {
+    // Level-2 tile x-index 416 (arbitrary, synthetic - not real DGM1
+    // coverage): min_easting = 416*1024 = 425984, which is 984 mod 1000 -
+    // squarely in the 977..999 "three squares per axis" band this bug
+    // dropped the MIDDLE of. y-index 5860: min_northing = 5860*1024 =
+    // 6000640 (640 mod 1000, an ordinary two-square span on that axis) -
+    // isolating the regression to the easting axis, matching the real
+    // stripe's own shape (PLAN.md G2/R2 plan section 0: x=458, one axis).
+    constexpr std::int64_t kMinEasting = 425984;
+    constexpr std::int64_t kMinNorthing = 6000640;
+    constexpr std::int64_t kExtent = 1024;
+
+    const KmSpan e_span = dgm1_km_span(kMinEasting, kExtent);
+    const KmSpan n_span = dgm1_km_span(kMinNorthing, kExtent);
+    REQUIRE(e_span.lo == 425);
+    REQUIRE(e_span.hi == 427); // three squares: 425, 426 (the one the old code dropped), 427
+    REQUIRE(n_span.lo == 6000);
+    REQUIRE(n_span.hi == 6001);
+
+    auto square_value = [](int e_km, int n_km) {
+        return 1000.0f + static_cast<float>(e_km - 425) * 11.0f + static_cast<float>(n_km - 6000) * 3.0f;
+    };
+
+    ZipBuilder inner;
+    for (int e_km = e_span.lo; e_km <= e_span.hi; ++e_km) {
+        for (int n_km = n_span.lo; n_km <= n_span.hi; ++n_km) {
+            const std::vector<float> samples(1000 * 1000, square_value(e_km, n_km));
+            const std::string name = "dgm1_32_" + std::to_string(e_km) + "_" + std::to_string(n_km) + "_1_he.tif";
+            inner.add({name, build_dgm1_tiff(samples), /*deflate=*/false});
+        }
+    }
+    const std::vector<std::byte> inner_bytes = inner.build();
+
+    ZipBuilder outer;
+    outer.add({"muni.zip", inner_bytes, /*deflate=*/false});
+    const std::vector<std::byte> outer_bytes = outer.build();
+
+    const std::string path =
+        (std::filesystem::temp_directory_path() / "g2m_test_dgm1_three_square_span.zip").string();
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(outer_bytes.data()), static_cast<std::streamsize>(outer_bytes.size()));
+    }
+
+    {
+        Result<dgm1::Catalog> catalog = dgm1::Catalog::open({path});
+        REQUIRE(catalog.ok());
+        for (int e_km = e_span.lo; e_km <= e_span.hi; ++e_km) {
+            for (int n_km = n_span.lo; n_km <= n_span.hi; ++n_km) {
+                REQUIRE(catalog->copies(e_km, n_km).size() == 1);
+            }
+        }
+
+        // A bbox strictly INSIDE the tile's own footprint (inset by 1 m on
+        // every edge, so it never touches a neighbouring tile's boundary -
+        // a bbox exactly on the grid line resolves to every tile that
+        // touches that line, 4 in this case, not just the one the bbox sits
+        // in) resolves to exactly this one level-2 tile.
+        Result<ResolvedRegion> resolved = resolve_bbox_region(kMinEasting + 1, kMinNorthing + 1,
+                                                               kMinEasting + kExtent - 1, kMinNorthing + kExtent - 1);
+        REQUIRE(resolved.ok());
+        REQUIRE(resolved->tile_count == 1);
+
+        MemorySink sink;
+        Result<DemImportReport> report = import_dem(*resolved, *catalog, sink, "test", DemImportOptions{});
+        REQUIRE(report.ok());
+        CHECK(report->tiles_written == 1);
+        // Every DGM1 square touching the tile - including the middle one at
+        // e_km=426 the old "at most two per axis" code silently skipped -
+        // is present, so the whole tile is covered: no NoData at all.
+        CHECK(report->tiles_partial == 0);
+        REQUIRE(sink.size() == 1);
+
+        const auto entries = sink.entries();
+        const auto& entry = entries.front().second;
+        Result<TileBody> body = decode_body(entry.body);
+        REQUIRE(body.ok());
+        Result<ElevTile> tile = decode_src_elev(*body);
+        REQUIRE(tile.ok());
+
+        // No NoData anywhere in the tile.
+        for (int r = 0; r < tile->heights.height(); ++r) {
+            for (int c = 0; c < tile->heights.width(); ++c) {
+                REQUIRE(tile->heights.at(c, r) != kHeightNoData);
+            }
+        }
+
+        // A sample squarely inside the MIDDLE easting square (426, 6000) -
+        // the one the old 4-corner-combo code never visited - carries that
+        // square's own value, not NoData and not a neighbour's value.
+        constexpr double kTargetEasting = 426500.5;   // e=426, col 500
+        constexpr double kTargetNorthing = 6000750.5; // n=6000, row 249
+        int col = 0, row = 0;
+        REQUIRE(find_sample(*tile, kTargetEasting, kTargetNorthing, &col, &row));
+        const std::optional<std::int32_t> expected =
+            quantise_height_half_even(static_cast<double>(square_value(426, 6000)));
+        REQUIRE(expected.has_value());
+        CHECK(tile->heights.at(col, row) == *expected);
+    }
+
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        std::error_code ec;
+        if (std::filesystem::remove(path, ec) || ec == std::errc::no_such_file_or_directory) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+}
+
 TEST_CASE("import: import_dem's tile output is independent of --jobs and --km-cache", "[import][io][dgm1]") {
     Result<ResolvedRegion> resolved = resolve_bbox_region(474000, 5560000, 476000, 5561000);
     REQUIRE(resolved.ok());

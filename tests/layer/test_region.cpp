@@ -275,3 +275,32 @@ TEST_CASE("resolved region: tile_keys reconstructs from coverage runs", "[layer]
     r.scheme = "not_a_scheme";
     CHECK(tile_keys(r).empty());
 }
+
+TEST_CASE("resolved region: interior_tile_keys reconstructs from r.interior, not r.tiles",
+          "[layer][region]") {
+    // PLAN.md G2.0 Task B: a verification that a region's interior carries
+    // no unexpected NoData needs to enumerate exactly the interior subset,
+    // not the full footprint - the two coverage-run lists can, and here do,
+    // differ (r.tiles is the union including halo/boundary tiles, r.interior
+    // only the tiles fully inside the region).
+    ResolvedRegion r;
+    r.name = "home";
+    r.scheme = "utm32n";
+    r.level = 2;
+    r.tiles = {CoverageRun{5, 9, 13}, CoverageRun{6, 19, 21}}; // wider: includes halo
+    r.interior = {CoverageRun{5, 10, 12}, CoverageRun{6, 20, 20}};
+    const std::vector<TileKey> keys = interior_tile_keys(r);
+    REQUIRE(keys.size() == 4);
+    const geo::UtmZone zone{32, geo::Hemisphere::North};
+    CHECK(keys[0] == TileKey{zone, 2, 10, 5});
+    CHECK(keys[1] == TileKey{zone, 2, 11, 5});
+    CHECK(keys[2] == TileKey{zone, 2, 12, 5});
+    CHECK(keys[3] == TileKey{zone, 2, 20, 6});
+    // tile_keys() on the same region returns the wider footprint, not this.
+    CHECK(tile_keys(r).size() == 8);
+
+    // An unparseable scheme yields an empty (defensive) result, same
+    // contract as tile_keys().
+    r.scheme = "not_a_scheme";
+    CHECK(interior_tile_keys(r).empty());
+}

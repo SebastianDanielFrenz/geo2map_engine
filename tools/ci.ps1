@@ -24,6 +24,14 @@
   (det_math.h/.cpp and third_party/musl_math are exempt); it runs a
   self-test of its own pattern first.
 
+  Also (Windows only, cheap): "consumer-check" configures a SEPARATE build
+  dir (out/build/consumer-check) with -DG2M_BUILD_IMPORT=OFF
+  -DG2M_BUILD_TESTS=OFF -DG2M_BUILD_APPS=OFF (PLAN.md G2.0 Task D - a pure
+  consumer of the tile-serving stack, e.g. a future game bridge, never
+  needs the decoder/importer stack or its FetchContent deps) and builds
+  only g2m_layers/g2m_server/g2m_client - proving that configuration
+  actually works, not just that the option exists.
+
   Build/test output goes to out/ci_logs/<leg>.log; the console shows the
   per-leg summary, and the log tail of anything that failed. Exits
   non-zero on any failure.
@@ -45,12 +53,13 @@ New-Item -ItemType Directory -Force $logDir, $goldenDir | Out-Null
 
 $windowsLegs = @('debug', 'release', 'asan', 'msvc-release')
 $wslLegs = @('linux-release', 'linux-asan-ubsan', 'linux-tsan')
+$consumerLeg = 'consumer-check'   # PLAN.md G2.0 Task D: Windows-only, configure + partial build
 
 # -Only accepts "a,b" as one string too.
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ } | ForEach-Object { $_.Trim() })
 foreach ($name in $Only) {
-    if (($windowsLegs + $wslLegs) -notcontains $name) {
-        throw "-Only: unknown leg '$name' (known: $(($windowsLegs + $wslLegs) -join ', '))"
+    if (($windowsLegs + $wslLegs + @($consumerLeg)) -notcontains $name) {
+        throw "-Only: unknown leg '$name' (known: $(($windowsLegs + $wslLegs + @($consumerLeg)) -join ', '))"
     }
 }
 
@@ -130,6 +139,33 @@ function Invoke-WindowsLeg([string]$Preset) {
             Add-Result $Preset "golden-$set" $ok 'dump written'
             if ($ok) { $script:GoldenDumps.Add([pscustomobject]@{ Leg = $Preset; Set = $set; Path = $out }) }
         }
+    } finally {
+        Pop-Location
+    }
+}
+
+# PLAN.md G2.0 Task D: prove a pure consumer configuration (no decoders/
+# importer/tests/apps) actually configures and builds, in its own build dir
+# so it never disturbs the real "debug"/"release"/... build dirs. Cheap:
+# Catch2 and the decoder FetchContent deps are never fetched (G2M_BUILD_TESTS
+# and G2M_BUILD_IMPORT are both OFF), and only the three consumer-facing
+# targets are built, not the whole tree.
+function Invoke-ConsumerCheck {
+    Write-Host ""
+    Write-Host "=== Windows leg: $consumerLeg ===" -ForegroundColor Cyan
+    $log = Join-Path $logDir "$consumerLeg.log"
+    Set-Content -LiteralPath $log -Value "" -Encoding utf8
+    Push-Location $repoRoot
+    try {
+        $t = Measure-Command { & cmake --preset $consumerLeg *>> $log }
+        Add-Result $consumerLeg 'configure' ($LASTEXITCODE -eq 0) '' $t.TotalSeconds
+        if ($LASTEXITCODE -ne 0) { Show-LogTail $log; return }
+
+        $t = Measure-Command {
+            & cmake --build --preset $consumerLeg --target g2m_layers --target g2m_server --target g2m_client *>> $log
+        }
+        Add-Result $consumerLeg 'build' ($LASTEXITCODE -eq 0) 'g2m_layers, g2m_server, g2m_client' $t.TotalSeconds
+        if ($LASTEXITCODE -ne 0) { Show-LogTail $log 60 }
     } finally {
         Pop-Location
     }
@@ -283,9 +319,10 @@ function Invoke-GoldenCompare {
 $start = Get-Date
 Invoke-LibmGrep
 
-if (-not $SkipWindows -and ($windowsLegs | Where-Object { Should-Run $_ })) {
+if (-not $SkipWindows -and ($windowsLegs + @($consumerLeg) | Where-Object { Should-Run $_ })) {
     Enter-VsDevShell
     foreach ($leg in $windowsLegs) { if (Should-Run $leg) { Invoke-WindowsLeg $leg } }
+    if (Should-Run $consumerLeg) { Invoke-ConsumerCheck }
 }
 if (-not $SkipWsl -and ($wslLegs | Where-Object { Should-Run $_ })) {
     foreach ($leg in $wslLegs) { if (Should-Run $leg) { Invoke-WslLeg $leg } }

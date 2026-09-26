@@ -164,4 +164,13 @@ Result<ResolvedRegion> parse_resolved_region(std::string_view json);
 // which already validates `scheme`).
 std::vector<TileKey> tile_keys(const ResolvedRegion& r);
 
+// Every TileKey in `r.interior` only (the subset fully inside the region,
+// excluding halo/boundary tiles) - PLAN.md G2.0: the DGM1 three-square-span
+// stripe bug (dgm1_km_span, g2m/import/dem.h) affected INTERIOR tiles too,
+// not just the halo, so a verification that a region's interior carries no
+// unexpected NoData needs this to enumerate exactly (and only) the interior
+// keys, the same way `tile_keys()` enumerates the full footprint. Same
+// empty-on-unparseable-scheme contract as `tile_keys()`.
+std::vector<TileKey> interior_tile_keys(const ResolvedRegion& r);
+
 } // namespace g2m

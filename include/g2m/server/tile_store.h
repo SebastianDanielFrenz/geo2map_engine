@@ -59,11 +59,27 @@
 namespace g2m {
 
 struct TileStoreConfig {
-    std::filesystem::path dir;                  // created if missing
+    std::filesystem::path dir;                  // created if missing (never for read_only, see below)
     std::string name = "tiles";                 // <dir>/<name>.sqlite3, <dir>/<name>_blobs/; [a-z0-9_]+
     std::uint64_t size_cap_bytes = 0;           // 0 = no cap; counts distinct body bytes
     std::size_t inline_limit = 256 * 1024;      // bodies larger than this go to blob files
     int busy_timeout_ms = 5000;
+    // Opens the sqlite database with SQLITE_OPEN_READONLY via the URI
+    // "file:<path>?mode=ro&immutable=1" instead of the usual
+    // READWRITE|CREATE: no directory is created, no schema-creation
+    // transaction runs, and no PRAGMA that could touch the file (journal
+    // mode, synchronous) is issued - `immutable=1` tells SQLite the file
+    // will not change out from under this connection for as long as it is
+    // open, which lets it skip locking and change-detection entirely (and
+    // is why this is only for a FINISHED, PINNED store: a concurrent writer
+    // elsewhere, or an eviction removing an entry this reader has open,
+    // is exactly what `immutable` promises will not happen). Impl::touch()
+    // (the LRU-order update every get() would otherwise issue) becomes a
+    // no-op, and put()/put_container()/set_pinned()/set_pinned_range()/
+    // remove()/evict_to() all return ErrorCode::ReadOnly immediately
+    // without touching the database. Not meant for a store still being
+    // imported into or evicted from - use the default (false) for that.
+    bool read_only = false;
 };
 
 struct TileAddress {
