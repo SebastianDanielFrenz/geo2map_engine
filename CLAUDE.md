@@ -142,6 +142,38 @@ geo2map_engine/
                                       (retry_failed()); gate_keys()/keep_keys() accessors
   src/phys/                           g2m_phys implementation: physics_grid.cpp, resident_heights.cpp,
                                       height_tile_loader.cpp, physics_streamer.cpp
+  bridges/physics_sim/                 g2m_ps_bridge (PLAN.md R2.2 section 1b, G5/G6): the seam between
+                                      g2m_phys's ps-free physics-tile data and physics_sim's own
+                                      ps::terrain::ITerrainSource - the only place the two projects meet.
+                                      Reached only via the root CMakeLists.txt's `if(TARGET ps_core)`
+                                      guard, itself only true when the top level was configured with
+                                      G2M_PS_SOURCE_DIR (see "CMake options" below)
+    physics_sim.pin                   the exact physics_sim commit this bridge is built/tested against
+                                      (read by tools/ci.ps1's bridge-release leg only, never enforced by
+                                      CMake itself); must equal racing_game's own physics_sim submodule sha
+    include/g2m/ps_bridge/
+      version.h                       bridge_version_string() - scaffolding proving the target links
+                                      against both ps_core (Jolt included) and g2m_phys (G5)
+      g2m_terrain_source.h            G2mTerrainSource : ps::terrain::ITerrainSource (G6) - every override
+                                      is a thin, allocation-free translation between
+                                      g2m::phys::PhysicsTileGrid's own opaque tile-index packing and
+                                      ps::terrain::TileKey; fill_tile defers to
+                                      g2m::phys::fill_physics_heights against the ResidentHeightSet the
+                                      source holds a shared_ptr to. fill_miss_count()/nodata_fill_count()
+                                      (relaxed atomics) surface g2m::phys::FillResult::MissingTile/HadNoData
+                                      for the streaming determinism witness (PLAN.md R2.2 section 2).
+                                      make_terrain_config(interest_radius_m, fills_per_tick) builds a
+                                      ps::terrain::TerrainConfig with suppression/precompute off and
+                                      max_resident_tiles = (2*ceil(r/255)+3)^2
+    src/                               version.cpp, g2m_terrain_source.cpp
+    tests/                             g2m_bridge_tests (bridge-release leg only): test_smoke.cpp (links
+                                      against ps_core/Jolt and g2m_phys), test_g2m_terrain_source.cpp
+                                      (contract: samples even/tile_size 255/key_offset+origin round-trip/
+                                      fill_tile never resizes; fill_tile zero-alloc under
+                                      ps::jobs::debug_alloc across ps::jobs::JobSystem::parallel_batches).
+                                      Deliberately does not link tests/mesh/alloc_counter.cpp or
+                                      tests/phys/alloc_counter.cpp (both override global operator new,
+                                      which clashes with ps_core's own override)
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
                                       src_landcover, src_osm, pack, release_manifest, protocol, cache_db
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)
@@ -259,10 +291,10 @@ end of `CMakeLists.txt`):
 - the other core headers `polyline.h`, `graph/`, `mesh/`;
 - `include/g2m_c/`;
 - `apps/g2m_server`, `apps/g2m_cli` (`apps/g2m_tiler` is now built - G1c);
-- `bridges/physics_sim/`;
 - `adapters/`;
 - `tests/{determinism,protocol,bench}`;
-- the targets `g2m_c`, `g2m_http`, `g2m_ps_bridge` and `g2m_godot`.
+- the targets `g2m_c`, `g2m_http` and `g2m_godot` (`bridges/physics_sim` /
+  `g2m_ps_bridge` is now built - PLAN.md R2.2 G5/G6, see "Layout" above).
 
 ## Targets
 
@@ -290,6 +322,13 @@ end of `CMakeLists.txt`):
   Built UNCONDITIONALLY, not gated by `G2M_BUILD_IMPORT` - every CI leg,
   including the sanitizer legs, exercises it. No physics_sim/Jolt/Godot type
   anywhere in `include/g2m/phys/`, and it never links physics_sim.
+- `g2m_ps_bridge` (STATIC, `bridges/physics_sim/`, PLAN.md R2.2 section 1b,
+  G5/G6): `src/version.cpp`, `src/g2m_terrain_source.cpp`; PUBLIC `ps_core`
+  (physics_sim's own target, embedded via `G2M_PS_SOURCE_DIR` - see "CMake
+  options" below) + `g2m_phys`, PRIVATE `g2m_warnings`/`g2m_options`. Only
+  ever `add_subdirectory`'d behind the root CMakeLists.txt's
+  `if(TARGET ps_core)` guard, so it silently does not exist in any
+  configuration that did not embed physics_sim.
 - Third-party (`cmake/deps_core.cmake`, compiled as our own targets, no
   g2m_warnings/options): `g2m_dep_zstd` (STATIC, C), `g2m_dep_sqlite3`
   (STATIC, C), `g2m_dep_json` (INTERFACE, header-only).
@@ -367,6 +406,15 @@ end of `CMakeLists.txt`):
   `linux-asan-ubsan` presets.
 - Configure fails on purpose if an optimised build type has no `-O`/`/O` flag
   (a stale cache). Fix it with `cmake --preset <name> --fresh`.
+- `G2M_PS_SOURCE_DIR` (empty, PLAN.md R2.2 section 1b/1c, only used by the
+  `bridge-release` preset): path to a physics_sim checkout at
+  `bridges/physics_sim/physics_sim.pin`'s own commit. When set, the top
+  level `add_subdirectory`s it (as `ps`, `EXCLUDE_FROM_ALL`) BEFORE its own
+  Catch2 `FetchContent_Declare` (mirrors `racing_game/CMakeLists.txt`'s
+  ordering so nlohmann/Catch2 target names don't clash), and
+  `bridges/physics_sim` (`g2m_ps_bridge`) is only `add_subdirectory`'d once
+  `ps_core` exists as a target. Empty skips both entirely - every other
+  preset never touches physics_sim.
 
 ## Dependencies (FetchContent, pinned)
 
@@ -393,6 +441,17 @@ end of `CMakeLists.txt`):
     proves a pure consumer configuration builds `g2m_layers`/`g2m_server`/
     `g2m_client` alone; `tools/ci.ps1`'s own leg builds exactly those three
     targets and nothing else.
+  - `bridge-release` (clang-cl, PLAN.md R2.2 G5/G6): `release` plus
+    `G2M_BUILD_IMPORT=ON`, `G2M_BUILD_TESTS=ON`, `PS_BUILD_TESTS=OFF`,
+    `PS_BUILD_GODOT_ADAPTER=OFF`, `G2M_PS_SOURCE_DIR=out/ps_pin/src` and
+    `FETCHCONTENT_FULLY_DISCONNECTED=ON` with `FETCHCONTENT_SOURCE_DIR_*`
+    overrides for every one of physics_sim's AND this repo's own
+    FetchContent deps (JoltPhysics/nlohmann_json redirected at physics_sim's
+    own already-built `_deps`; Catch2 and the decoder-stack deps redirected
+    at this repo's own `release` preset's `_deps`) - `FULLY_DISCONNECTED` is
+    a global switch, so every FetchContent dependency in the whole configure
+    needs an offline source, not just the two `g2m_ps_bridge` itself needs.
+    Not in the default `tools/ci.ps1` run (see "CI" below).
   - build dirs are `out/build/<preset>`.
 - WSL (clang + lld):
   - `linux-release`, `linux-asan-ubsan`, `linux-tsan`;
@@ -511,6 +570,15 @@ tools\ci.ps1 -Only release,linux-release   # named legs only
   Windows legs: configures+builds the `consumer-check` preset
   (`G2M_BUILD_IMPORT=OFF`), only `g2m_layers`/`g2m_server`/`g2m_client` -
   no `ctest`/golden dump (tests are OFF in that configuration).
+- **`bridge-release` (PLAN.md R2.2 G5/G6):** NOT in the default set above -
+  reachable only via `tools\ci.ps1 -Only bridge-release[,release]`. Before
+  the generic Windows-leg runner, it stages `out/ps_pin/src` as a
+  `git clone --local` of `S:\claude_code\physics_sim` checked out to
+  `bridges/physics_sim/physics_sim.pin` (reused as-is if already at that
+  pin) - a filesystem-local clone, no network, `physics_sim` itself
+  untouched. A missing offline dependency directory (see the preset's own
+  entry above) is an actionable configure-time failure, not a silent
+  network fetch.
 - **Per leg:** configure, build, `ctest` (every test), then
   `g2m_golden_dump <set>` into `out/ci_golden/<leg>.<set>.txt` for each set
   (g0, g1). On `linux-release` and `linux-asan-ubsan` the ctest run includes

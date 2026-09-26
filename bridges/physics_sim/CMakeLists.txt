@@ -17,6 +17,7 @@
 # directory is ever processed.
 add_library(g2m_ps_bridge STATIC
   src/version.cpp
+  src/g2m_terrain_source.cpp
 )
 target_include_directories(g2m_ps_bridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(g2m_ps_bridge

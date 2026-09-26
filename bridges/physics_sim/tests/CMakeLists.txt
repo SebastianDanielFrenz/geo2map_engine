@@ -13,6 +13,7 @@
 # ps_core's operator new").
 add_executable(g2m_bridge_tests
   test_smoke.cpp
+  test_g2m_terrain_source.cpp
 )
 target_link_libraries(g2m_bridge_tests PRIVATE g2m_ps_bridge g2m_test_catch_main g2m_warnings g2m_options)
 
