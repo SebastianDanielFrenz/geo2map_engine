@@ -162,6 +162,12 @@ add_subdirectory(src/client)
 # g2m_core and g2m_layers only - no rendering-engine type anywhere in it).
 add_subdirectory(src/mesh)
 
+# R2.2 section 1a: g2m_phys (ps-free physics-tile grid, resident height
+# cache, fill_physics_heights), built UNCONDITIONALLY (not gated by
+# G2M_BUILD_IMPORT) so every CI leg, including the sanitizer legs, exercises
+# it - see src/phys/CMakeLists.txt.
+add_subdirectory(src/phys)
+
 add_subdirectory(third_party/musl_math)
 add_subdirectory(src)
 
@@ -186,6 +192,7 @@ if(G2M_BUILD_TESTS)
   add_subdirectory(tests/support)
   add_subdirectory(tests/unit)
   add_subdirectory(tests/mesh)
+  add_subdirectory(tests/phys)
   add_subdirectory(tests/golden)
   add_subdirectory(tests/fuzz)
 endif()

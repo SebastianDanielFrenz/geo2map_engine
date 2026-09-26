@@ -99,6 +99,17 @@ geo2map_engine/
     lod_select.h                     LodParams, select_chunks (distance-based split + restricted-quadtree
                                       2:1 balance, output sorted by level desc/cy/cx)
   src/mesh/                           g2m_mesh implementation: terrain_chunk.cpp, lod_select.cpp
+  include/g2m/phys/                   public API of g2m_phys (PLAN.md R2.2 section 1a): ps-free physics-tile
+                                      grid + resident height cache, shared by g2m_ps_bridge (G6+) and any
+                                      other physics_sim peer - no physics_sim/Jolt/Godot type anywhere here,
+                                      and g2m_phys never links physics_sim
+    physics_grid.h                   kPhysSamples (256, tile edge 255 m, 1 m spacing), PhysTileIndex,
+                                      PhysicsTileGrid (index_for_local/origin_local, pack/unpack - same
+                                      layout as physics_sim's ProceduralTerrainSource - l0_keys_for_square:
+                                      the DGM1 L0 data-tile keys a square of physics tiles can touch);
+                                      anchored so every physics sample sits exactly on a DGM1 cell centre
+                                      (see the header's own derivation and its [AMEND] test)
+  src/phys/                           g2m_phys implementation: physics_grid.cpp
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
                                       src_landcover, src_osm, pack, release_manifest, protocol, cache_db
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)
@@ -238,6 +249,12 @@ end of `CMakeLists.txt`):
   lod_select.cpp); PUBLIC `g2m_core` + `g2m_layers` (for `HeightTile`), no
   other dependency - no rendering-engine or third-party type anywhere in
   `include/g2m/mesh/`.
+- `g2m_phys` (STATIC, PLAN.md R2.2 section 1a): `src/phys/*.cpp`
+  (physics_grid.cpp); PUBLIC `g2m_client` (transitively `g2m_server` /
+  `g2m_layers` / `g2m_core`, for `HeightTile`). Built UNCONDITIONALLY, not
+  gated by `G2M_BUILD_IMPORT` - every CI leg, including the sanitizer legs,
+  exercises it. No physics_sim/Jolt/Godot type anywhere in
+  `include/g2m/phys/`, and it never links physics_sim.
 - Third-party (`cmake/deps_core.cmake`, compiled as our own targets, no
   g2m_warnings/options): `g2m_dep_zstd` (STATIC, C), `g2m_dep_sqlite3`
   (STATIC, C), `g2m_dep_json` (INTERFACE, header-only).
@@ -255,8 +272,11 @@ end of `CMakeLists.txt`):
     (tests/mesh, PLAN.md G2.3 - also has its own `alloc_counter.cpp`, a
     global operator new/delete counting override scoped to this one
     executable, for `build_chunk`'s zero-allocation-on-repeat-call check),
-    `g2m_fuzz_smoke_tests`, `g2m_golden_tests` (Catch2; tags become CTest
-    labels through `ADD_TAGS_AS_LABELS`);
+    `g2m_phys_tests` (tests/phys, PLAN.md R2.2 section 1a/4a -
+    test_physics_grid.cpp; from G2 also its own `alloc_counter.cpp` for
+    `fill_physics_heights`'s zero-allocation check, same pattern as
+    `g2m_mesh_tests`), `g2m_fuzz_smoke_tests`, `g2m_golden_tests` (Catch2;
+    tags become CTest labels through `ADD_TAGS_AS_LABELS`);
   - `g2m_golden` (STATIC, links g2m_layers + g2m_server + g2m_mesh) and
     `g2m_golden_dump` (exe; sets: `g0`, `g1`, `g1c`, `g2`, `g2mesh`);
   - `g2m_fuzz_run`, `g2m_fuzz_seeds_lib` (STATIC);
