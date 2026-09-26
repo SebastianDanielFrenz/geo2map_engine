@@ -156,3 +156,35 @@ TEST_CASE("G2mTerrainSource: fill_tile is allocation-free across concurrent jobs
 
     CHECK(ps::jobs::debug_alloc::own_violation_count() == 0);
 }
+
+// Negative control for the test above (PLAN.md R2.2 4b, G7): the same
+// armed-window/parallel_batches/JobSystem(4) shape, with one deliberate heap
+// allocation per job. Proves the hook really sees an allocation made on a
+// worker thread inside a job while armed - without it, the 0 above could
+// just as well mean "the hook never fires in this executable" (e.g. another
+// operator new override winning at link time, or jobs not counted as
+// in-job), and would be vacuous.
+TEST_CASE("G2mTerrainSource: zero-alloc negative control - an allocation inside a job IS counted",
+         "[bridge][terrain][alloc]") {
+    if (!ps::jobs::debug_alloc::hook_available()) {
+        SKIP("debug_alloc hook is disabled on this build (ASan/TSan)");
+    }
+    constexpr std::size_t kJobs = 64;
+    std::vector<void*> sinks(kJobs, nullptr); // sized up front, outside the armed window
+    ps::jobs::JobSystem jobs(4);
+    jobs.parallel_batches(kJobs, [&](std::size_t) {}); // warm-up, as above
+
+    ps::jobs::debug_alloc::reset();
+    ps::jobs::debug_alloc::set_armed(true);
+    // A direct ::operator new call, not a new-expression: the compiler may
+    // not elide it (a new-expression's allocation may be elided/merged).
+    jobs.parallel_batches(kJobs, [&](std::size_t i) { sinks[i] = ::operator new(64); });
+    ps::jobs::debug_alloc::set_armed(false);
+    const std::uint64_t counted = ps::jobs::debug_alloc::own_violation_count();
+    for (void* p : sinks) ::operator delete(p);
+
+    CHECK(counted >= 1);
+    // Every job allocated exactly once, and none of them ran outside a job
+    // (parallel_batches runs every index as a job, inline fallback included).
+    CHECK(counted == kJobs);
+}

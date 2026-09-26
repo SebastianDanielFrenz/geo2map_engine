@@ -170,7 +170,24 @@ geo2map_engine/
                                       against ps_core/Jolt and g2m_phys), test_g2m_terrain_source.cpp
                                       (contract: samples even/tile_size 255/key_offset+origin round-trip/
                                       fill_tile never resizes; fill_tile zero-alloc under
-                                      ps::jobs::debug_alloc across ps::jobs::JobSystem::parallel_batches).
+                                      ps::jobs::debug_alloc across ps::jobs::JobSystem::parallel_batches,
+                                      plus its negative control - one ::operator new per job IS counted, G7).
+                                      G7 acceptance (PLAN.md R2.2 4b): test_render_vs_jolt.cpp (4096 LCG
+                                      points strictly inside L0 quads, Jolt ray_cast through a primed World
+                                      vs barycentric interpolation in g2m_mesh build_chunk's own triangles:
+                                      +-51/256 m checkerboard saddle max <= 2 mm, the other diagonal >= 0.1 m
+                                      as negative control; PKT fixture max <= 5 mm, p99 <= 2 mm),
+                                      test_residency.cpp (fixture, r 255, real loader+streamer+
+                                      TransportHeightTileFetch near the northern coverage edge: gate opens
+                                      with 404 keys Absent, starved/relief_overflow/fill_miss 0, holes in
+                                      Jolt and in fill_tile beyond the edge), test_determinism.cpp (a box +
+                                      16 spheres pushed across seams for 2400 ticks at pool 49/F 1: per-tick
+                                      state_hash equal at 1/4/10 workers and up-front vs gated delayed
+                                      installs - TokenFetch releases one tile per 3 frozen attempts behind a
+                                      minimal test-local racing_game-style gate). bridge_test_support.h:
+                                      synthetic L0 tiles from a per-cell height function (SyntheticTileCache,
+                                      install_square), a fixed MMIX LCG, TempDir. Also links g2m_mesh and
+                                      g2m_fixture_release (tests/support).
                                       Deliberately does not link tests/mesh/alloc_counter.cpp or
                                       tests/phys/alloc_counter.cpp (both override global operator new,
                                       which clashes with ps_core's own override)
