@@ -90,6 +90,15 @@ geo2map_engine/
                                       (INTERNAL: georef block)
   src/server/                         g2m_server: tile_store.cpp, protocol.cpp, server.cpp
   src/client/                         g2m_client: cache.cpp
+  include/g2m/mesh/                   public API of g2m_mesh (PLAN.md G2.3): engine-neutral terrain render
+                                      chunks + LOD selection, POD-shaped for a later C API
+    terrain_chunk.h                  ChunkKey, HeightWindow (67x67 halo)/ClassWindow, TileLookup,
+                                      gather_window, TerrainChunkMesh, build_chunk (triangulates with the
+                                      SAME diagonal as physics_sim's Jolt HeightFieldShape - see the header
+                                      comment on build_chunk for the full derivation)
+    lod_select.h                     LodParams, select_chunks (distance-based split + restricted-quadtree
+                                      2:1 balance, output sorted by level desc/cy/cx)
+  src/mesh/                           g2m_mesh implementation: terrain_chunk.cpp, lod_select.cpp
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
                                       src_landcover, src_osm, pack, release_manifest, protocol, cache_db
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)
@@ -225,6 +234,10 @@ end of `CMakeLists.txt`):
 - `g2m_server` (STATIC): `src/server/*.cpp`; PUBLIC `g2m_layers`, PRIVATE
   `g2m_dep_sqlite3`, `g2m_dep_json`.
 - `g2m_client` (STATIC): `src/client/*.cpp`; PUBLIC `g2m_server`.
+- `g2m_mesh` (STATIC, PLAN.md G2.3): `src/mesh/*.cpp` (terrain_chunk.cpp,
+  lod_select.cpp); PUBLIC `g2m_core` + `g2m_layers` (for `HeightTile`), no
+  other dependency - no rendering-engine or third-party type anywhere in
+  `include/g2m/mesh/`.
 - Third-party (`cmake/deps_core.cmake`, compiled as our own targets, no
   g2m_warnings/options): `g2m_dep_zstd` (STATIC, C), `g2m_dep_sqlite3`
   (STATIC, C), `g2m_dep_json` (INTERFACE, header-only).
@@ -238,11 +251,14 @@ end of `CMakeLists.txt`):
   `project()`, the same as physics_sim.
 - Test-only targets:
   - `g2m_headless_env`, `g2m_test_catch_main` (tests/support);
-  - `g2m_unit_tests`, `g2m_layer_tests`, `g2m_server_tests`,
+  - `g2m_unit_tests`, `g2m_layer_tests`, `g2m_server_tests`, `g2m_mesh_tests`
+    (tests/mesh, PLAN.md G2.3 - also has its own `alloc_counter.cpp`, a
+    global operator new/delete counting override scoped to this one
+    executable, for `build_chunk`'s zero-allocation-on-repeat-call check),
     `g2m_fuzz_smoke_tests`, `g2m_golden_tests` (Catch2; tags become CTest
     labels through `ADD_TAGS_AS_LABELS`);
-  - `g2m_golden` (STATIC, links g2m_layers + g2m_server) and
-    `g2m_golden_dump` (exe);
+  - `g2m_golden` (STATIC, links g2m_layers + g2m_server + g2m_mesh) and
+    `g2m_golden_dump` (exe; sets: `g0`, `g1`, `g1c`, `g2`, `g2mesh`);
   - `g2m_fuzz_run`, `g2m_fuzz_seeds_lib` (STATIC);
   - with `G2M_BUILD_FUZZERS`: `g2m_fuzz_instrumented` (OBJECT:
     `G2M_LAYERS_SOURCES` + `src/server/protocol.cpp` + `fuzz_run.cpp`,

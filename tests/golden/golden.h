@@ -42,6 +42,12 @@ std::vector<Entry> compute_g1c_for_jobs(unsigned jobs);
 // status and ETag (body content hash); testdata/golden/g2_golden.txt.
 std::vector<Entry> compute_g2();
 
+// G2mesh (golden_g2mesh.cpp, PLAN.md G2.3): g2m_mesh's select_chunks +
+// build_chunk over 2 fixed camera positions and a deterministic synthetic
+// (analytic) HeightTile source - a SEPARATE golden set from "g2" (G2.2
+// extends "g2" in parallel); testdata/golden/g2mesh_golden.txt.
+std::vector<Entry> compute_g2mesh();
+
 // "name count hash\n" per entry, the golden file's line format.
 std::string format(const std::vector<Entry>& entries);
 

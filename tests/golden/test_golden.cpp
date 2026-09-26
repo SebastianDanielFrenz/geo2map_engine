@@ -58,6 +58,13 @@ TEST_CASE("G2 golden hashes match testdata/golden/g2_golden.txt", "[golden]") {
     check_against("g2_golden.txt", g2m_golden::compute_g2());
 }
 
+// PLAN.md G2.3: g2m_mesh's select_chunks + build_chunk over 2 fixed cameras
+// and a deterministic synthetic HeightTile source (golden_g2mesh.cpp) - a
+// SEPARATE golden set from "g2" (G2.2 extends "g2" in parallel).
+TEST_CASE("G2mesh golden hashes match testdata/golden/g2mesh_golden.txt", "[golden]") {
+    check_against("g2mesh_golden.txt", g2m_golden::compute_g2mesh());
+}
+
 // dem.h/osm.h/landcover.h all document their sink output as independent of
 // `jobs` (only DemImportReport's scheduling-dependent counters are not, and
 // the fixture's 2 unique 1km DGM1 keys never evict from the default 256-

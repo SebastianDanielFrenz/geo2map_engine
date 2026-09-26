@@ -1,0 +1,3 @@
+g2mesh.cam0 2209 94042cafdf1d8c4f
+g2mesh.cam1 2245 552208ed28c3aca8
+all 4454 d9fb849d6b9ed6ff

@@ -147,6 +147,10 @@ add_subdirectory(src/layer)
 add_subdirectory(src/server)
 add_subdirectory(src/client)
 
+# G2.3: engine-neutral terrain render chunks and LOD selection (links
+# g2m_core and g2m_layers only - no rendering-engine type anywhere in it).
+add_subdirectory(src/mesh)
+
 add_subdirectory(third_party/musl_math)
 add_subdirectory(src)
 
@@ -170,6 +174,7 @@ if(G2M_BUILD_TESTS)
   add_subdirectory(tests/fuzz_formats)
   add_subdirectory(tests/support)
   add_subdirectory(tests/unit)
+  add_subdirectory(tests/mesh)
   add_subdirectory(tests/golden)
   add_subdirectory(tests/fuzz)
 endif()
