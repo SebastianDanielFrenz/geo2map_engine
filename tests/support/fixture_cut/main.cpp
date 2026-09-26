@@ -13,25 +13,43 @@
 // cut-pbf --in PATH --relation ID [--relation ID...] [--bbox
 //          lon0,lat0,lon1,lat1] --out PATH
 //
-// DEVIATION from the plan's literal "all objects in bbox + listed relations
-// with member ways/nodes + ways referencing bbox nodes made complete":
-// this implementation extracts exactly the listed relations' transitive
-// closure - each relation's own tags/members, each Way-typed member's own
-// tags/node-refs, and each of those ways' referenced nodes' own
-// tags/location - and nothing else. It does NOT scan the source file for
-// unrelated objects whose geometry merely intersects --bbox (that needs a
-// node-location-indexed two-pass bbox scan, the "smart"/"complete_ways"
-// strategy osmium's own `osmium extract` tool implements) - that
-// background context is not needed for a small ADMIN-BOUNDARY fixture
-// resolvable by g2m::import::resolve_region, only the requested relation's
-// own closure is. --bbox is still accepted and recorded into the output
-// PBF's header bounding box (provenance only) but does not otherwise
-// filter what gets extracted. A relation-typed member (e.g. a sub-area of
-// a multi-level admin boundary) is NOT recursed into - it is dropped from
-// the member list with a warning on stderr (none of this project's own
-// admin relations use nested relation members; recursing would need
-// unbounded-depth cycle detection for a case this tool never actually
-// hits).
+// PLAN.md G1c pre-item 2: with --bbox, this is a real "everything in bbox"
+// cut, not just provenance metadata:
+//  - every node inside --bbox is included;
+//  - every way with at least one node ref inside --bbox is included, and
+//    COMPLETED with every one of its own node refs (even ones outside
+//    --bbox), so no included way ever has a dangling node reference;
+//  - every --relation id (and, recursively, every Relation-typed member of
+//    an already-included relation - see below) gets the SAME full
+//    treatment: every Way-typed member is included and completed with all
+//    its nodes, every Node-typed member is included;
+//  - beyond that, any OTHER relation in the source file that references an
+//    already-included node/way/relation is ALSO included ("closure
+//    upward") - best-effort only: an upward-swept relation's OWN members
+//    are not force-completed, so it may reference an object this cut does
+//    not carry (the same "possibly incomplete at the edge" trade-off
+//    osmium's own bbox-extraction strategies make; only the explicit
+//    --relation closure above is guaranteed complete).
+// Without --bbox, behaviour is unchanged from I2 except for the recursion
+// fix below: --bbox is still accepted and recorded into the output PBF's
+// header bounding box either way.
+//
+// FIXED since I2: a Relation-typed member of an included relation (e.g. a
+// sub-area of a multi-level admin boundary) is now RECURSED into - given
+// the exact same full-closure treatment - instead of being dropped from the
+// member list with a warning. Implemented as an in-memory graph closure
+// over every relation in the file (see all_relations below), so cycles
+// (a relation referencing itself, directly or through others) terminate
+// naturally: a relation id is added to the included set at most once.
+//
+// One full, unfiltered Relations pass loads every relation's id/members/
+// tags into memory up front (`all_relations`) - this is what makes both the
+// downward recursion above and the upward bbox sweep below pure in-memory
+// graph problems needing no further re-reads of the (possibly huge) source
+// file. This costs some memory (a country extract's relations are a small
+// fraction of its total object count) but not extra wall-clock time: the
+// PBF entity-bits reader (PbfEntities) already has to decode every
+// Relations block whether or not a caller further filters by id.
 #include "g2m/decode/byte_source.h"
 #include "g2m/decode/dgm1.h"
 #include "g2m/decode/osm/pbf_reader.h"
@@ -122,39 +140,55 @@ std::optional<Bbox> parse_bbox(const std::string& s) {
     return Bbox{vals[0], vals[1], vals[2], vals[3]};
 }
 
-// --- pass 1: relations ------------------------------------------------------
+// --- pass: every relation in the file (unfiltered - see this file's own
+// header comment for why) ----------------------------------------------------
 
-class RelationCollector : public PbfHandler {
+class AllRelationCollector : public PbfHandler {
 public:
-    explicit RelationCollector(std::vector<std::int64_t> wanted) : wanted_(std::move(wanted)) {
-        std::sort(wanted_.begin(), wanted_.end());
-    }
-    void on_relation(const OsmRelation& r) override {
-        if (std::binary_search(wanted_.begin(), wanted_.end(), r.id)) found_[r.id] = r;
-    }
+    void on_relation(const OsmRelation& r) override { found_[r.id] = r; }
     std::map<std::int64_t, OsmRelation> found_;
-
-private:
-    std::vector<std::int64_t> wanted_;
 };
 
-// --- pass 2: ways ------------------------------------------------------------
+// --- pass: ways, either explicitly wanted (by id) or swept in because at
+// least one of their node refs lies inside --bbox (bbox_node_ids empty ==
+// no bbox given == degrades to a plain by-id WayCollector) ------------------
 
-class WayCollector : public PbfHandler {
+class WaySweepCollector : public PbfHandler {
 public:
-    explicit WayCollector(std::vector<std::int64_t> wanted) : wanted_(std::move(wanted)) {
-        std::sort(wanted_.begin(), wanted_.end());
+    WaySweepCollector(std::vector<std::int64_t> wanted_ids, std::vector<std::int64_t> bbox_node_ids)
+        : wanted_ids_(std::move(wanted_ids)), bbox_node_ids_(std::move(bbox_node_ids)) {
+        std::sort(wanted_ids_.begin(), wanted_ids_.end());
+        std::sort(bbox_node_ids_.begin(), bbox_node_ids_.end());
     }
     void on_way(const OsmWay& w) override {
-        if (std::binary_search(wanted_.begin(), wanted_.end(), w.id)) found_[w.id] = w;
+        bool include = std::binary_search(wanted_ids_.begin(), wanted_ids_.end(), w.id);
+        if (!include) {
+            for (const auto ref : w.node_refs) {
+                if (std::binary_search(bbox_node_ids_.begin(), bbox_node_ids_.end(), ref)) {
+                    include = true;
+                    break;
+                }
+            }
+        }
+        if (include) found_[w.id] = w;
     }
     std::map<std::int64_t, OsmWay> found_;
 
 private:
-    std::vector<std::int64_t> wanted_;
+    std::vector<std::int64_t> wanted_ids_;
+    std::vector<std::int64_t> bbox_node_ids_;
 };
 
-// --- pass 3: nodes -----------------------------------------------------------
+// --- pass: every node inside --bbox (BoundingBox's own node-only prefilter
+// already restricts delivery - nothing further to filter here) --------------
+
+class BboxNodeCollector : public PbfHandler {
+public:
+    void on_node(const OsmNode& n) override { found_[n.id] = n; }
+    std::map<std::int64_t, OsmNode> found_;
+};
+
+// --- pass: nodes by id --------------------------------------------------
 
 class NodeCollector : public PbfHandler {
 public:
@@ -197,63 +231,176 @@ int cmd_cut_pbf(const Args& args) {
     }
 
     try {
-        // Pass 1: relations.
-        RelationCollector relations(wanted_relations);
-        read_pbf(*in_path, relations, nullptr, PbfEntities::Relations);
+        // Pass: every relation in the file, unfiltered (this file's own
+        // header comment explains why).
+        AllRelationCollector all_relations_pass;
+        read_pbf(*in_path, all_relations_pass, nullptr, PbfEntities::Relations);
+        const std::map<std::int64_t, OsmRelation>& all_relations = all_relations_pass.found_;
+
         for (const auto id : wanted_relations) {
-            if (!relations.found_.count(id)) {
+            if (!all_relations.count(id)) {
                 std::cerr << "g2m_fixture_cut cut-pbf: relation " << id << " not found in " << *in_path << "\n";
                 return 1;
             }
         }
 
-        // Wanted way ids: every Way-typed member of every found relation.
-        // A Relation-typed member is dropped (not recursed into, see this
-        // file's header comment); a Node-typed member's id goes straight
-        // into wanted_nodes below.
-        std::set<std::int64_t> wanted_ways;
-        std::set<std::int64_t> wanted_nodes_from_members;
-        for (const auto& [rid, rel] : relations.found_) {
-            for (const auto& m : rel.members) {
-                if (m.type == OsmMemberType::Way) {
-                    wanted_ways.insert(m.ref);
-                } else if (m.type == OsmMemberType::Node) {
-                    wanted_nodes_from_members.insert(m.ref);
-                } else {
-                    std::cerr << "g2m_fixture_cut cut-pbf: warning: relation " << rid
-                              << " has a relation-typed member (ref " << m.ref << ") - not recursed into, dropped\n";
+        // Explicit closure, downward: every --relation id, plus every
+        // Relation-typed member of an already-included relation, recursively
+        // - replaces I2's "drop with a warning" (this file's header
+        // comment). A dangling Relation-typed member (ref not present in the
+        // file at all) is warned about, not an error.
+        std::set<std::int64_t> explicit_relations(wanted_relations.begin(), wanted_relations.end());
+        {
+            std::vector<std::int64_t> frontier(wanted_relations.begin(), wanted_relations.end());
+            while (!frontier.empty()) {
+                std::vector<std::int64_t> next;
+                for (const auto rid : frontier) {
+                    const auto it = all_relations.find(rid);
+                    if (it == all_relations.end()) continue; // unreachable: checked above for explicit ids
+                    for (const auto& m : it->second.members) {
+                        if (m.type != OsmMemberType::Relation) continue;
+                        if (explicit_relations.count(m.ref)) continue; // already queued/included
+                        const auto child = all_relations.find(m.ref);
+                        if (child == all_relations.end()) {
+                            std::cerr << "g2m_fixture_cut cut-pbf: warning: relation " << rid
+                                      << " has a relation-typed member (ref " << m.ref << ") not found in " << *in_path
+                                      << " - skipped\n";
+                            continue;
+                        }
+                        explicit_relations.insert(m.ref);
+                        next.push_back(m.ref);
+                    }
                 }
+                frontier = std::move(next);
             }
         }
 
-        // Pass 2: ways.
-        WayCollector ways(std::vector<std::int64_t>(wanted_ways.begin(), wanted_ways.end()));
-        if (!wanted_ways.empty()) read_pbf(*in_path, ways, nullptr, PbfEntities::Ways);
-        for (const auto id : wanted_ways) {
-            if (!ways.found_.count(id)) {
+        // Every Way-typed member of the explicit closure gets full
+        // completion (fetched below, then completed with ALL its own node
+        // refs); every Node-typed member is wanted directly.
+        std::set<std::int64_t> wanted_ways_explicit;
+        std::set<std::int64_t> wanted_nodes;
+        for (const auto rid : explicit_relations) {
+            for (const auto& m : all_relations.at(rid).members) {
+                if (m.type == OsmMemberType::Way) {
+                    wanted_ways_explicit.insert(m.ref);
+                } else if (m.type == OsmMemberType::Node) {
+                    wanted_nodes.insert(m.ref);
+                }
+                // Relation-typed members are exactly explicit_relations - no
+                // separate bookkeeping needed.
+            }
+        }
+
+        // Bbox node pass: every node inside --bbox (BoundingBox's own
+        // node-only prefilter - see pbf_reader.h's own comment).
+        std::map<std::int64_t, OsmNode> bbox_nodes;
+        std::vector<std::int64_t> bbox_node_ids;
+        if (bbox) {
+            BoundingBox filter;
+            filter.min_lon = bbox->west;
+            filter.max_lon = bbox->east;
+            filter.min_lat = bbox->south;
+            filter.max_lat = bbox->north;
+            BboxNodeCollector bbox_pass;
+            read_pbf(*in_path, bbox_pass, &filter, PbfEntities::Nodes);
+            bbox_nodes = std::move(bbox_pass.found_);
+            bbox_node_ids.reserve(bbox_nodes.size());
+            for (const auto& [id, n] : bbox_nodes) bbox_node_ids.push_back(id);
+        }
+
+        // Ways pass: explicit-closure ways, plus (bbox mode) every way with
+        // at least one node ref inside --bbox (bbox_node_ids is empty
+        // without --bbox, so this degrades to exactly the explicit set).
+        WaySweepCollector way_sweep(std::vector<std::int64_t>(wanted_ways_explicit.begin(), wanted_ways_explicit.end()),
+                                    bbox_node_ids);
+        if (!wanted_ways_explicit.empty() || bbox) read_pbf(*in_path, way_sweep, nullptr, PbfEntities::Ways);
+        for (const auto id : wanted_ways_explicit) {
+            if (!way_sweep.found_.count(id)) {
                 std::cerr << "g2m_fixture_cut cut-pbf: way " << id << " (member of a requested relation) not found in "
                           << *in_path << "\n";
                 return 1;
             }
         }
+        const std::map<std::int64_t, OsmWay>& ways_found = way_sweep.found_;
 
-        std::set<std::int64_t> wanted_nodes(wanted_nodes_from_members.begin(), wanted_nodes_from_members.end());
-        for (const auto& [wid, way] : ways.found_)
-            for (const auto ref : way.node_refs) wanted_nodes.insert(ref);
+        // Every included way is completed with ALL its own node refs (even
+        // ones outside --bbox) - "all ways with >= 1 node in bbox, completed
+        // with all their nodes".
+        for (const auto& [wid, w] : ways_found)
+            for (const auto ref : w.node_refs) wanted_nodes.insert(ref);
 
-        // Pass 3: nodes.
-        NodeCollector nodes(std::vector<std::int64_t>(wanted_nodes.begin(), wanted_nodes.end()));
-        if (!wanted_nodes.empty()) read_pbf(*in_path, nodes, nullptr, PbfEntities::Nodes);
+        std::vector<std::int64_t> extra_node_ids;
         for (const auto id : wanted_nodes) {
-            if (!nodes.found_.count(id)) {
-                std::cerr << "g2m_fixture_cut cut-pbf: node " << id << " (referenced by a requested way/relation) not found in "
-                          << *in_path << "\n";
-                return 1;
+            if (!bbox_nodes.count(id)) extra_node_ids.push_back(id);
+        }
+        std::map<std::int64_t, OsmNode> extra_nodes;
+        if (!extra_node_ids.empty()) {
+            NodeCollector node_pass(extra_node_ids);
+            read_pbf(*in_path, node_pass, nullptr, PbfEntities::Nodes);
+            extra_nodes = std::move(node_pass.found_);
+        }
+        for (const auto id : wanted_nodes) {
+            if (bbox_nodes.count(id) || extra_nodes.count(id)) continue;
+            std::cerr << "g2m_fixture_cut cut-pbf: node " << id
+                       << " (referenced by a requested way/relation) not found in " << *in_path << "\n";
+            return 1;
+        }
+
+        // Every bbox node is written too, even one no way/relation
+        // references ("every node inside --bbox is included").
+        std::map<std::int64_t, OsmNode> nodes_found = std::move(bbox_nodes);
+        for (auto& [id, n] : extra_nodes) nodes_found.emplace(id, std::move(n));
+
+        // Upward sweep (bbox mode only): any OTHER relation in the file that
+        // references an already-included node/way/relation is included too
+        // - best-effort ("closure upward"): its own members are NOT
+        // force-completed, unlike the explicit closure above (this file's
+        // header comment).
+        std::set<std::int64_t> included_relations = explicit_relations;
+        if (bbox) {
+            std::set<std::int64_t> included_node_ids;
+            for (const auto& [id, n] : nodes_found) included_node_ids.insert(id);
+            std::set<std::int64_t> included_way_ids;
+            for (const auto& [id, w] : ways_found) included_way_ids.insert(id);
+
+            for (bool changed = true; changed;) {
+                changed = false;
+                for (const auto& [rid, rel] : all_relations) {
+                    if (included_relations.count(rid)) continue;
+                    bool member_included = false;
+                    for (const auto& m : rel.members) {
+                        if ((m.type == OsmMemberType::Way && included_way_ids.count(m.ref)) ||
+                            (m.type == OsmMemberType::Node && included_node_ids.count(m.ref)) ||
+                            (m.type == OsmMemberType::Relation && included_relations.count(m.ref))) {
+                            member_included = true;
+                            break;
+                        }
+                    }
+                    if (member_included) {
+                        included_relations.insert(rid);
+                        changed = true;
+                    }
+                }
+                // Downward: a newly swept relation's own Relation-typed
+                // members are pulled in too (same closure rule as the
+                // explicit set above).
+                for (const auto& [rid, rel] : all_relations) {
+                    if (!included_relations.count(rid)) continue;
+                    for (const auto& m : rel.members) {
+                        if (m.type == OsmMemberType::Relation && all_relations.count(m.ref) &&
+                            !included_relations.count(m.ref)) {
+                            included_relations.insert(m.ref);
+                            changed = true;
+                        }
+                    }
+                }
             }
         }
 
         // --- write the fixture: nodes then ways then relations, each
-        // block sorted by id ascending (std::map's own iteration order).
+        // block sorted by id ascending (std::map/std::set's own iteration
+        // order).
         osmium::io::Header header;
         header.set("generator", "g2m_fixture_cut");
         if (bbox) header.add_box(osmium::Box{bbox->west, bbox->south, bbox->east, bbox->north});
@@ -266,7 +413,7 @@ int cmd_cut_pbf(const Args& args) {
         osmium::io::Writer writer{out_file, header, osmium::io::overwrite::allow};
 
         osmium::memory::Buffer buffer{1024 * 1024, osmium::memory::Buffer::auto_grow::yes};
-        for (const auto& [id, n] : nodes.found_) {
+        for (const auto& [id, n] : nodes_found) {
             {
                 osmium::builder::NodeBuilder builder{buffer};
                 builder.set_id(n.id);
@@ -278,7 +425,7 @@ int cmd_cut_pbf(const Args& args) {
             }
             buffer.commit();
         }
-        for (const auto& [id, w] : ways.found_) {
+        for (const auto& [id, w] : ways_found) {
             {
                 osmium::builder::WayBuilder builder{buffer};
                 builder.set_id(w.id);
@@ -293,7 +440,8 @@ int cmd_cut_pbf(const Args& args) {
             }
             buffer.commit();
         }
-        for (const auto& [id, r] : relations.found_) {
+        for (const auto rid : included_relations) {
+            const auto& r = all_relations.at(rid);
             {
                 osmium::builder::RelationBuilder builder{buffer};
                 builder.set_id(r.id);
@@ -304,9 +452,9 @@ int cmd_cut_pbf(const Args& args) {
                 {
                     osmium::builder::RelationMemberListBuilder rml{builder};
                     for (const auto& m : r.members) {
-                        if (m.type == OsmMemberType::Relation) continue; // dropped, see header comment
-                        const auto item_type =
-                            m.type == OsmMemberType::Way ? osmium::item_type::way : osmium::item_type::node;
+                        const auto item_type = m.type == OsmMemberType::Way     ? osmium::item_type::way
+                                                : m.type == OsmMemberType::Node ? osmium::item_type::node
+                                                                                : osmium::item_type::relation;
                         rml.add_member(item_type, m.ref, m.role);
                     }
                 }
@@ -316,8 +464,8 @@ int cmd_cut_pbf(const Args& args) {
         writer(std::move(buffer));
         writer.close();
 
-        std::cerr << "g2m_fixture_cut cut-pbf: wrote " << nodes.found_.size() << " nodes, " << ways.found_.size()
-                  << " ways, " << relations.found_.size() << " relations to " << *out_path << "\n";
+        std::cerr << "g2m_fixture_cut cut-pbf: wrote " << nodes_found.size() << " nodes, " << ways_found.size()
+                  << " ways, " << included_relations.size() << " relations to " << *out_path << "\n";
         return 0;
     } catch (const DecodeError& e) {
         std::cerr << "g2m_fixture_cut cut-pbf: " << e.what() << "\n";

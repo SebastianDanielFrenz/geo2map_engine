@@ -210,15 +210,36 @@ TEST_CASE("import: MemorySink collects put() calls keyed by (layer, key), last w
 TEST_CASE("import: find_admin locates the fixture's Stadtteil relation", "[import][io]") {
     const std::string pbf_path = fixtures_dir() + "/osm/frankfurt_hoechst.osm.pbf";
     std::vector<AdminCandidate> all = find_admin(pbf_path);
-    REQUIRE(all.size() == 1);
-    CHECK(all[0].relation_id == 4209939);
-    REQUIRE(all[0].admin_level.has_value());
-    CHECK(*all[0].admin_level == 10);
+    // The bbox-mode fixture cut (G1c I4 pre-item 2, testdata/fixtures/README.md)
+    // recurses relation membership upward: any boundary=administrative
+    // relation sharing so much as one member way with the (re-cut) bbox is
+    // now included, not just the target Stadtteil relation the earlier
+    // hand-trimmed fixture happened to contain alone. Neighbouring
+    // Stadtteile/Stadtbezirke whose own boundary ways run along Hoechst's
+    // edge are pulled in too - assert the target relation is present among
+    // however many candidates exist, not an exact singleton count.
+    const auto find_target = [](const std::vector<AdminCandidate>& v) {
+        return std::find_if(v.begin(), v.end(), [](const AdminCandidate& c) { return c.relation_id == 4209939; });
+    };
+    REQUIRE(all.size() >= 1);
+    const auto it = find_target(all);
+    REQUIRE(it != all.end());
+    CHECK(it->name == "H\xC3\xB6" "chst"); // "Höchst", UTF-8
+    REQUIRE(it->admin_level.has_value());
+    CHECK(*it->admin_level == 10);
 
     std::vector<AdminCandidate> by_level = find_admin(pbf_path, std::nullopt, 10);
-    REQUIRE(by_level.size() == 1);
-    CHECK(by_level[0].relation_id == 4209939);
+    // Committed against the fixture's actual content: 7 admin_level-10
+    // Stadtteil relations (Sindlingen, Schwanheim, Bonames, Hoechst, Nied,
+    // Sossenheim, Unterliederbach) whose boundary touches the bbox,
+    // including the target - a change here means the fixture was re-cut,
+    // not a pipeline regression; re-derive with a debug dump of `all`
+    // (relation id/name/admin_level) if it moves.
+    CHECK(by_level.size() == 7);
+    CHECK(find_target(by_level) != by_level.end());
 
+    // No admin_level-6 (kreisfreie Stadt / Landkreis) relation's own
+    // member ways happen to touch this small bbox.
     std::vector<AdminCandidate> by_level_miss = find_admin(pbf_path, std::nullopt, 6);
     CHECK(by_level_miss.empty());
 }
