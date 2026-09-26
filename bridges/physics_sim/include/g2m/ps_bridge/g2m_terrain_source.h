@@ -100,6 +100,11 @@ private:
 //     just inside the gate at the start of a tick is never evicted before
 //     TileManager can re-derive that it is still needed (r=400 -> 49,
 //     matching the plan's own worked example).
+//   - fills_per_tick: use 1. PLAN.md R2.2 1b's rule allows 2 only if one
+//     SetHeights(256^2) plus the weld stays under 1.0 ms; bench_bridge_fill
+//     (G8, bridge-release, dev box) measured update_heightfield_body(256^2)
+//     at ~2.26 ms mean - over budget on its own - against ~0.03 ms per
+//     fill_tile and ~0.006 ms/tick of weld overhead at pool 49.
 [[nodiscard]] ps::terrain::TerrainConfig make_terrain_config(double interest_radius_m, std::uint32_t fills_per_tick);
 
 } // namespace g2m::ps_bridge

@@ -188,6 +188,15 @@ geo2map_engine/
                                       synthetic L0 tiles from a per-cell height function (SyntheticTileCache,
                                       install_square), a fixed MMIX LCG, TempDir. Also links g2m_mesh and
                                       g2m_fixture_release (tests/support).
+                                      G8: test_seam_crossing.cpp (sliding sphere/box at 5/20/40 m/s over
+                                      the 255 m tiles vs ONE 1024-sample static heightfield on the same
+                                      lattice, flat + wavy field, +x and 4-tile-corner paths; physics_sim's
+                                      test_terrain_seam_crossing.cpp bounds, the 120 m/s^2 cap adapted on
+                                      the corner path). bench_bridge_fill.cpp -> bench_bridge_fill (plain
+                                      main, CTest smoke, labels bench;bridge, asserts no fill miss/starved
+                                      tile, never timing): ms per fill_tile, per update_heightfield_body at
+                                      pool 49, weld overhead per tick, end-to-end fill ticks at F 1/2, and
+                                      the plan-1b F decision (make_terrain_config's doc records it)
                                       Deliberately does not link tests/mesh/alloc_counter.cpp or
                                       tests/phys/alloc_counter.cpp (both override global operator new,
                                       which clashes with ps_core's own override)
