@@ -94,7 +94,31 @@ public:
         with_nul.push_back('\0');
         std::vector<std::byte> bytes(with_nul.size());
         std::memcpy(bytes.data(), with_nul.data(), with_nul.size());
-        add_external(tag, 2, with_nul.size(), bytes);
+        // TIFF6 "value fits in 4 bytes -> stored inline, not at an offset"
+        // (tiff_reader.cpp's read_ascii follows this exactly: it reads the
+        // raw 4-byte value/offset field itself as the string's bytes
+        // whenever count <= that field's size, never dereferencing it as an
+        // offset in that case). A short ASCII value - GDAL_NODATA "0" is
+        // the one every real WorldCover/DGM1 file in this project actually
+        // uses, count 2 incl. NUL - written externally here used to leave
+        // the reader interpreting a raw file offset as if it were the
+        // string's own bytes instead of following it, corrupting the value
+        // silently (found via test_import_landcover.cpp's synthetic
+        // all-zero-tile test surfacing "GDAL_NODATA must be \"0\" (got
+        // \"\")" - PLAN.md G1c I5).
+        if (bytes.size() <= 4) {
+            // Compute the count BEFORE the call: passing `bytes.size()` and
+            // `std::move(bytes)` as two arguments of the SAME call left the
+            // count argument reading a moved-from (empty) vector on this
+            // compiler - argument evaluation order is unspecified, and nothing
+            // stops the callee's by-value parameter from being move-
+            // constructed before a sibling argument expression is evaluated.
+            const auto count = static_cast<std::uint32_t>(bytes.size());
+            add_inline(tag, 2, count, std::move(bytes));
+        } else {
+            const auto count = with_nul.size();
+            add_external(tag, 2, count, std::move(bytes));
+        }
     }
 
     // Builds the full file: header + one IFD (entries added so far, plus
@@ -176,3 +200,4 @@ private:
 };
 
 } // namespace g2m::test_support
+

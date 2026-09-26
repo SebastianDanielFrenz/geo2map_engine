@@ -13,6 +13,15 @@ Code: `g2m/layer/region.h`, `src/layer/region.cpp`. Ring assembly itself
 (shared by region resolution) is `g2m/core/geom/ring_assembly.h` +
 `ring_set.h` + `exact.h`.
 
+**Datum** (PLAN.md section 4.1): OSM node coordinates (used by an
+`osm_admin` part) and every other geodetic source this project imports
+(e.g. `docs/formats/src_landcover.md`'s ESA WorldCover) are WGS84; this
+project's own UTM grid (`g2m::geo::Utm`/`project_e7_to_mm`) is GRS80/
+ETRS89. The two differ by up to ~0.5 m at this project's latitudes (a
+frame-realisation drift, not an ellipsoid shape difference), which every
+importer deliberately ignores as sub-metre - no reprojection or
+datum-shift step exists anywhere in region resolution or import.
+
 ## `regions.json` (`g2m.regions/1`)
 
 Canonical on write (object keys sorted, no whitespace - the same rules as

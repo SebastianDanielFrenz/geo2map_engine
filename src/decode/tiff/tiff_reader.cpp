@@ -367,8 +367,10 @@ TiffReader::TiffReader(std::shared_ptr<IByteSource> source) : source_(std::move(
             GeoTransform t;
             t.pixel_width = scale_x;
             t.pixel_height = scale_y;
-            t.origin_x = model_x - raster_i * scale_x + (area ? 0.5 * scale_x : 0.0);
-            t.origin_y = model_y + raster_j * scale_y - (area ? 0.5 * scale_y : 0.0);
+            t.corner_x = model_x - raster_i * scale_x;
+            t.corner_y = model_y + raster_j * scale_y;
+            t.origin_x = t.corner_x + (area ? 0.5 * scale_x : 0.0);
+            t.origin_y = t.corner_y - (area ? 0.5 * scale_y : 0.0);
             if (t.valid()) ifd.geo_transform = t;
         }
 

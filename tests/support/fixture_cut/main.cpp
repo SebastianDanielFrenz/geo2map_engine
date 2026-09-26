@@ -5,10 +5,9 @@
 // tool, D20).
 //
 // Subcommand implemented in I2: cut-pbf (a small resolvable OSM PBF
-// fixture, extracted from a full-size source extract). Later increments
-// (I3+) are expected to add cut-worldcover/repack-dgm1, reusing
-// tests/support/{zip_builder.h,tiff_builder.h} - not implemented here (out
-// of I2 scope).
+// fixture, extracted from a full-size source extract). repack-dgm1 (I3) and
+// cut-worldcover (I5) were added later, both reusing
+// tests/support/{zip_builder.h,tiff_builder.h}.
 //
 // cut-pbf --in PATH --relation ID [--relation ID...] [--bbox
 //          lon0,lat0,lon1,lat1] --out PATH
@@ -53,7 +52,10 @@
 #include "g2m/decode/byte_source.h"
 #include "g2m/decode/dgm1.h"
 #include "g2m/decode/osm/pbf_reader.h"
+#include "g2m/decode/tiff/tiff_reader.h"
 #include "g2m/decode/zip/zip_reader.h"
+#include "g2m/layer/region.h"
+#include "tiff_builder.h"
 #include "zip_builder.h"
 
 #include <osmium/builder/osm_object_builder.hpp>
@@ -69,9 +71,12 @@
 #include <osmium/osm/location.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -653,6 +658,296 @@ int cmd_repack_dgm1(const Args& args) {
     }
 }
 
+// WorldCover's own N=12000 factors as 2^5 * 3 * 5^3 = 32 * 375 - NOT a power
+// of two, so `num/12000` as a double generally does NOT round-trip back to
+// `num` through `(num/12000) * 12000` (the same reconstruction landcover.cpp's
+// own open_and_validate performs, `corner_x * n`): found via
+// test_import_landcover.cpp's own fixture-vs-source byte-equality check,
+// which failed because the naive quotient for this project's actual fixture
+// windows (e.g. 8.50875 for one window corner's longitude) reconstructs to
+// 102104.99999999999 - and a search over the surrounding representable
+// doubles (checked up to +-2000 ULPs) never lands on the exact integer
+// either: 102105.0 sits exactly BETWEEN the two representable reconstructed
+// products bracketing it (each one ULP-of-the-PRODUCT away, since the
+// product's own ULP at this magnitude, ~2^-52*2^17 =~ 2.9e-11, is coarser
+// than one ULP of the ~8.5-magnitude quotient scaled by 12000, ~2.1e-11) -
+// no double whose product with 12000 is correctly rounded can land on it,
+// so nudging the quotient can never work here, for ANY num not already
+// divisible by 375.
+//
+// The fix is therefore upstream, not at the tiepoint value itself: pick a
+// window whose corner IS divisible by 375 (`align_down_multiple`, used on
+// col_lo/row_lo below, before the `c0`/`c1` reference values - the real
+// source file's own tiepoint is a whole degree, 6.0/51.0, and 6*12000 =
+// 72000 = 375*192 is itself already a multiple of 375, so aligning col_lo/
+// row_lo to a multiple of 375 is exactly equivalent to aligning new_c0/
+// new_c1 to a multiple of 375). For such a value, num/12000 = (num/375)/32
+// - a division by a PURE power of two, which IEEE-754 double division
+// performs exactly (provided num/375 fits the mantissa, true here) - so the
+// value written round-trips bit-exactly, the same way the real source
+// file's own whole-degree tiepoint always has.
+constexpr std::int64_t kTiepointAlignment = 375;
+
+std::int64_t align_down_multiple(std::int64_t x, std::int64_t m) {
+    const std::int64_t r = ((x % m) + m) % m;
+    return x - r;
+}
+
+// cut-worldcover (PLAN.md G1c I5): cuts one uncompressed, stripped uint8
+// GeoTIFF window per CONNECTED CLUSTER of a resolved region's level-2 tile
+// footprint out of a real ESA WorldCover COG, for
+// tests/unit/test_import_landcover.cpp's fixture. testdata/fixtures/regions.json's
+// "fixture" region resolves (against the real hessen-latest.osm.pbf) to two
+// tile clusters about 11 km apart - the Höchst admin relation and the
+// separate utm_bbox part - so a single bounding window would need to be far
+// larger than either cluster on its own; this tool instead 8-connects the
+// resolved tile set into clusters (any gap larger than one tile ends a
+// cluster - the ~11 km gap here is nowhere close) and cuts one window per
+// cluster, in ascending (northing, easting) order, matching that many --out
+// PATHs supplied in the same order.
+//
+// Per cluster: the tile set's own UTM bounding box (TileKey::min_easting/
+// min_northing/size_m, no resampling - exact integer metres) is converted to
+// a lon/lat bounding box via the same g2m::geo::Utm::reverse the real
+// importer uses (D16: no new numerics), then widened by --margin-px source
+// pixels and mapped to the source file's own pixel grid using its
+// validated (N, C0, C1) - the identical col/row formula
+// import/landcover.cpp's own header comment documents (D17). The window is
+// decoded via TiffReader::decode_window_u8 and re-encoded as a fresh
+// classic TIFF (TiffBuilder: uncompressed, single strip, uint8) whose
+// ModelPixelScaleTag is unchanged and whose ModelTiepointTag is moved to the
+// window's own corner (new_C0 = col_lo + source C0, new_C1 = source C1 -
+// row_lo - both exact integers, and both multiples of 375 by construction,
+// see align_down_multiple's own comment above), so (new_C0|new_C1)/N
+// round-trips bit-exactly back through the same `corner_x * N` reconstruction
+// landcover.cpp's own open_and_validate performs (a plain division does NOT
+// do this in general for N=12000 - only for a multiple of 375).
+// GeoKeyDirectory carries just the two keys the reader consumes
+// (RasterTypeGeoKey=PixelIsArea, GeographicTypeGeoKey=4326) plus
+// GDAL_NODATA="0" - a byte-for-byte-minimal but fully self-describing
+// GeoTIFF, not a copy of the source file's own (possibly larger) tag set.
+int cmd_cut_worldcover(const Args& args) {
+    const auto in_path = args.get("in");
+    const auto resolved_path = args.get("resolved");
+    const auto out_paths = args.get_all("out");
+    if (!in_path || !resolved_path || out_paths.empty()) {
+        std::cerr << "g2m_fixture_cut cut-worldcover: --in, --resolved and at least one --out are required\n";
+        return 1;
+    }
+    int margin_px = 2;
+    if (const auto m = args.get("margin-px")) {
+        try {
+            margin_px = std::stoi(*m);
+        } catch (const std::exception&) {
+            std::cerr << "g2m_fixture_cut cut-worldcover: --margin-px must be an integer\n";
+            return 1;
+        }
+    }
+
+    try {
+        std::ifstream resolved_in(*resolved_path, std::ios::binary);
+        if (!resolved_in) {
+            std::cerr << "g2m_fixture_cut cut-worldcover: cannot read " << *resolved_path << "\n";
+            return 1;
+        }
+        std::ostringstream resolved_ss;
+        resolved_ss << resolved_in.rdbuf();
+        const auto resolved = g2m::parse_resolved_region(resolved_ss.str());
+        if (!resolved) {
+            std::cerr << "g2m_fixture_cut cut-worldcover: " << resolved.error().message << "\n";
+            return 1;
+        }
+        std::vector<g2m::TileKey> keys = g2m::tile_keys(*resolved);
+        if (keys.empty()) {
+            std::cerr << "g2m_fixture_cut cut-worldcover: resolved region has no tiles\n";
+            return 1;
+        }
+        std::sort(keys.begin(), keys.end());
+
+        // 8-connectivity union-find over the tile grid (x/y within 1 of an
+        // already-clustered tile joins its cluster) - a small O(n^2) pass is
+        // fine for the handful of tiles a fixture region resolves to.
+        std::vector<int> parent(keys.size());
+        for (std::size_t i = 0; i < keys.size(); ++i) parent[i] = static_cast<int>(i);
+        std::function<int(int)> find = [&](int i) {
+            while (parent[static_cast<std::size_t>(i)] != i) {
+                parent[static_cast<std::size_t>(i)] = parent[static_cast<std::size_t>(parent[static_cast<std::size_t>(i)])];
+                i = parent[static_cast<std::size_t>(i)];
+            }
+            return i;
+        };
+        auto unite = [&](int a, int b) {
+            a = find(a);
+            b = find(b);
+            if (a != b) parent[static_cast<std::size_t>(a)] = b;
+        };
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            for (std::size_t j = i + 1; j < keys.size(); ++j) {
+                if (keys[i].zone != keys[j].zone || keys[i].level != keys[j].level) continue;
+                if (std::abs(keys[i].x - keys[j].x) <= 1 && std::abs(keys[i].y - keys[j].y) <= 1) {
+                    unite(static_cast<int>(i), static_cast<int>(j));
+                }
+            }
+        }
+        std::map<int, std::vector<std::size_t>> clusters;
+        for (std::size_t i = 0; i < keys.size(); ++i) clusters[find(static_cast<int>(i))].push_back(i);
+
+        // Cluster order: ascending (min northing, min easting) of each
+        // cluster's own bbox - deterministic and independent of union-find's
+        // internal representative choice.
+        struct Cluster {
+            std::int64_t min_e, min_n, max_e, max_n;
+            g2m::geo::UtmZone zone;
+            std::size_t tile_count = 0;
+        };
+        std::vector<Cluster> cluster_list;
+        for (const auto& [_, idxs] : clusters) {
+            Cluster c;
+            c.zone = keys[idxs.front()].zone;
+            c.tile_count = idxs.size();
+            c.min_e = c.min_n = std::numeric_limits<std::int64_t>::max();
+            c.max_e = c.max_n = std::numeric_limits<std::int64_t>::min();
+            for (std::size_t i : idxs) {
+                const g2m::TileKey& k = keys[i];
+                c.min_e = std::min(c.min_e, k.min_easting());
+                c.max_e = std::max(c.max_e, k.min_easting() + k.size_m());
+                c.min_n = std::min(c.min_n, k.min_northing());
+                c.max_n = std::max(c.max_n, k.min_northing() + k.size_m());
+            }
+            cluster_list.push_back(c);
+        }
+        std::sort(cluster_list.begin(), cluster_list.end(),
+                  [](const Cluster& a, const Cluster& b) {
+                      if (a.min_n != b.min_n) return a.min_n < b.min_n;
+                      return a.min_e < b.min_e;
+                  });
+
+        if (cluster_list.size() != out_paths.size()) {
+            std::cerr << "g2m_fixture_cut cut-worldcover: resolved region has " << cluster_list.size()
+                      << " tile cluster(s) but " << out_paths.size() << " --out path(s) were given\n";
+            return 1;
+        }
+
+        auto src_source = std::make_shared<g2m::decode::FileByteSource>(*in_path);
+        g2m::decode::tiff::TiffReader src_reader(src_source);
+        if (src_reader.ifds().empty()) {
+            std::cerr << "g2m_fixture_cut cut-worldcover: " << *in_path << ": no IFD\n";
+            return 1;
+        }
+        const auto& src_ifd = src_reader.ifds()[0];
+        if (src_ifd.sample_format != g2m::decode::tiff::SampleFormat::UnsignedInt || src_ifd.bits_per_sample != 8 ||
+            src_ifd.samples_per_pixel != 1) {
+            std::cerr << "g2m_fixture_cut cut-worldcover: " << *in_path << ": IFD0 must be single-band uint8\n";
+            return 1;
+        }
+        if (!src_ifd.geo_transform) {
+            std::cerr << "g2m_fixture_cut cut-worldcover: " << *in_path << ": missing GeoTIFF georeference\n";
+            return 1;
+        }
+        const double sx = src_ifd.geo_transform->pixel_width;
+        if (!(sx > 0.0) || sx != src_ifd.geo_transform->pixel_height) {
+            std::cerr << "g2m_fixture_cut cut-worldcover: " << *in_path << ": ModelPixelScale must be square\n";
+            return 1;
+        }
+        const auto n = static_cast<std::int64_t>(std::floor(1.0 / sx + 0.5));
+        if (n <= 0 || 1.0 / static_cast<double>(n) != sx) {
+            std::cerr << "g2m_fixture_cut cut-worldcover: " << *in_path
+                      << ": ModelPixelScale is not an exact 1/N degree\n";
+            return 1;
+        }
+        const auto c0 = static_cast<std::int64_t>(src_ifd.geo_transform->corner_x * static_cast<double>(n));
+        const auto c1 = static_cast<std::int64_t>(src_ifd.geo_transform->corner_y * static_cast<double>(n));
+        const auto src_width = static_cast<std::int64_t>(src_ifd.width);
+        const auto src_height = static_cast<std::int64_t>(src_ifd.height);
+
+        const g2m::geo::Utm utm;
+        for (std::size_t ci = 0; ci < cluster_list.size(); ++ci) {
+            const Cluster& c = cluster_list[ci];
+            double min_lon = 180.0, max_lon = -180.0, min_lat = 90.0, max_lat = -90.0;
+            for (double e : {static_cast<double>(c.min_e), static_cast<double>(c.max_e)}) {
+                for (double nn : {static_cast<double>(c.min_n), static_cast<double>(c.max_n)}) {
+                    const auto rev = utm.reverse(c.zone, e, nn);
+                    min_lon = std::min(min_lon, rev.lon);
+                    max_lon = std::max(max_lon, rev.lon);
+                    min_lat = std::min(min_lat, rev.lat);
+                    max_lat = std::max(max_lat, rev.lat);
+                }
+            }
+            std::int64_t col_lo = static_cast<std::int64_t>(std::floor(min_lon * static_cast<double>(n))) - c0 - margin_px;
+            std::int64_t col_hi = static_cast<std::int64_t>(std::floor(max_lon * static_cast<double>(n))) - c0 + margin_px;
+            std::int64_t row_lo = c1 - 1 - static_cast<std::int64_t>(std::floor(max_lat * static_cast<double>(n))) - margin_px;
+            std::int64_t row_hi = c1 - 1 - static_cast<std::int64_t>(std::floor(min_lat * static_cast<double>(n))) + margin_px;
+            // Widen (never narrow - align DOWN only) col_lo/row_lo to the
+            // nearest multiple of kTiepointAlignment so the written tiepoint
+            // round-trips bit-exactly (see align_down_multiple's comment).
+            col_lo = align_down_multiple(col_lo, kTiepointAlignment);
+            row_lo = align_down_multiple(row_lo, kTiepointAlignment);
+            col_lo = std::max<std::int64_t>(col_lo, 0);
+            row_lo = std::max<std::int64_t>(row_lo, 0);
+            col_hi = std::min<std::int64_t>(col_hi, src_width - 1);
+            row_hi = std::min<std::int64_t>(row_hi, src_height - 1);
+            if (col_hi < col_lo || row_hi < row_lo) {
+                std::cerr << "g2m_fixture_cut cut-worldcover: cluster " << ci << " lies entirely outside " << *in_path
+                          << "\n";
+                return 1;
+            }
+            const int win_w = static_cast<int>(col_hi - col_lo + 1);
+            const int win_h = static_cast<int>(row_hi - row_lo + 1);
+
+            const auto window = src_reader.decode_window_u8(0, col_lo, row_lo, win_w, win_h);
+
+            const std::int64_t new_c0 = col_lo + c0;
+            const std::int64_t new_c1 = c1 - row_lo;
+            const double new_tiepoint_lon = static_cast<double>(new_c0) / static_cast<double>(n);
+            const double new_tiepoint_lat = static_cast<double>(new_c1) / static_cast<double>(n);
+
+            g2m::test_support::TiffBuilder b;
+            b.add_short(256, static_cast<std::uint16_t>(win_w));  // ImageWidth
+            b.add_short(257, static_cast<std::uint16_t>(win_h));  // ImageLength
+            b.add_short(258, 8);                                  // BitsPerSample
+            b.add_short(259, 1);                                  // Compression: none
+            b.add_short(262, 1);                                  // PhotometricInterpretation: BlackIsZero
+            b.add_short(277, 1);                                  // SamplesPerPixel
+            b.add_long(278, static_cast<std::uint32_t>(win_h));   // RowsPerStrip: one strip
+            b.add_short(284, 1);                                  // PlanarConfiguration: chunky
+            b.add_short(339, 1);                                  // SampleFormat: unsigned int
+            b.add_double_array(33550, {sx, sx, 0.0});             // ModelPixelScaleTag
+            b.add_double_array(33922, {0.0, 0.0, 0.0, new_tiepoint_lon, new_tiepoint_lat, 0.0}); // ModelTiepointTag
+            // GeoKeyDirectory: header{1,1,0,2} + RasterTypeGeoKey=1 (Area) +
+            // GeographicTypeGeoKey=4326 (WGS84) - the only two keys
+            // tiff_reader.cpp's second pass consumes (see this file's own
+            // header comment).
+            b.add_short_array(34735, {1, 1, 0, 2, 1025, 0, 1, 1, 2048, 0, 1, 4326});
+            b.add_ascii(42113, "0"); // GDAL_NODATA
+
+            std::vector<std::byte> strip(static_cast<std::size_t>(win_w) * static_cast<std::size_t>(win_h));
+            for (int r = 0; r < win_h; ++r)
+                for (int col = 0; col < win_w; ++col)
+                    strip[static_cast<std::size_t>(r) * win_w + col] = static_cast<std::byte>(window.at(col, r));
+
+            const auto bytes = b.build(strip);
+            std::ofstream out(out_paths[ci], std::ios::binary);
+            if (!out) {
+                std::cerr << "g2m_fixture_cut cut-worldcover: cannot write " << out_paths[ci] << "\n";
+                return 1;
+            }
+            out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            out.close();
+            std::cerr << "g2m_fixture_cut cut-worldcover: cluster " << ci << " (" << c.tile_count << " tile(s)) -> "
+                      << out_paths[ci] << ": window [" << col_lo << ".." << col_hi << "] x [" << row_lo << ".."
+                      << row_hi << "] = " << win_w << "x" << win_h << " (" << bytes.size() << " bytes), lon ["
+                      << min_lon << ".." << max_lon << "] lat [" << min_lat << ".." << max_lat << "]\n";
+        }
+        return 0;
+    } catch (const DecodeError& e) {
+        std::cerr << "g2m_fixture_cut cut-worldcover: " << e.what() << "\n";
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "g2m_fixture_cut cut-worldcover: " << e.what() << "\n";
+        return 1;
+    }
+}
+
 // write-unsorted-nodes (PLAN.md G1c I4): a tiny synthetic PBF whose node
 // ids are NOT strictly increasing (20, then 10, then 30 - a single
 // out-of-order pair is enough), for import::extract_region_set's own
@@ -716,6 +1011,8 @@ int usage() {
                  "commands:\n"
                  "  cut-pbf --in PATH --relation ID [--relation ID...] [--bbox lon0,lat0,lon1,lat1] --out PATH\n"
                  "  repack-dgm1 --out PATH --inner OUTER_ZIP#SUBSTRING [--inner ...] --key E,N [--key ...]\n"
+                 "  cut-worldcover --in PATH --resolved PATH [--margin-px N] --out PATH [--out PATH ...]\n"
+                 "                 (one --out per connected tile cluster, in ascending (northing,easting) order)\n"
                  "  write-unsorted-nodes --out PATH\n";
     return 1;
 }
@@ -728,6 +1025,7 @@ int main(int argc, char** argv) {
     const Args args = parse_args(argc, argv, 2);
     if (command == "cut-pbf") return cmd_cut_pbf(args);
     if (command == "repack-dgm1") return cmd_repack_dgm1(args);
+    if (command == "cut-worldcover") return cmd_cut_worldcover(args);
     if (command == "write-unsorted-nodes") return cmd_write_unsorted_nodes(args);
     std::cerr << "g2m_fixture_cut: unknown command '" << command << "'\n";
     return usage();

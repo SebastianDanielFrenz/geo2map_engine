@@ -6,8 +6,10 @@
 # bzip2-compressed ones and pulls in an undeclared bzlib.h dependency
 # cmake/deps_decoders.cmake never declares) - g2m_decode itself only ever
 # reads PBF.
+# cut-worldcover (G1c I5) additionally needs g2m_layers for
+# parse_resolved_region/tile_keys (region.h/region.cpp).
 add_executable(g2m_fixture_cut main.cpp)
-target_link_libraries(g2m_fixture_cut PRIVATE g2m_decode g2m_dep_libosmium g2m_warnings g2m_options
+target_link_libraries(g2m_fixture_cut PRIVATE g2m_decode g2m_layers g2m_dep_libosmium g2m_warnings g2m_options
                                                libdeflate::libdeflate_static)
 # repack-dgm1 (G1c I3) reuses tests/support/zip_builder.h (header-only).
 target_include_directories(g2m_fixture_cut PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)

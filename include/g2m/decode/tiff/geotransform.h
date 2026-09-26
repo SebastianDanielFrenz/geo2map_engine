@@ -26,6 +26,17 @@ struct GeoTransform {
     double origin_y = 0.0;   // world Y of sample (col=0, row=0)'s centre
     double pixel_width = 0.0;  // > 0
     double pixel_height = 0.0; // > 0 (row spacing magnitude; rows run north to south)
+    // World X/Y of the (col=0, row=0) sample's NW CORNER, i.e. origin_x/y
+    // before tiff_reader.cpp's PixelIsArea centre adjustment
+    // (corner_x = model_x - raster_i*scale_x, no +-0.5*scale term) - equal
+    // to origin_x/y outright for a PixelIsPoint tiepoint. Exposed
+    // separately (not reconstructed from origin_x/y) so a caller needing
+    // the exact tiepoint corner (G1c I5's WorldCover pixel-index rule,
+    // D17: col = floor(lon*N) - C0 with C0 = corner_x*N an exact integer)
+    // never round-trips through the +-0.5*scale_x adjustment, which is not
+    // guaranteed bit-exact to invert.
+    double corner_x = 0.0;
+    double corner_y = 0.0;
 
     bool valid() const { return pixel_width > 0.0 && pixel_height > 0.0; }
 };

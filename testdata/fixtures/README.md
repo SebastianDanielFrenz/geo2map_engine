@@ -109,6 +109,124 @@ bytes, SHA-256 `b9e460b72d896c4ea95e4bbba8c87489d9f01b30a99761cc6ea7a2ae194b3e48
   `regions.json`), well under the 8 MB fixture budget.
 - **SHA-256**: `8fddb6a1910e5ba90d295026ac802caab2745b7d8312d3dce5b037329c07f956`
 
+## worldcover/fixture_N50E008_hoechst.tif, worldcover/fixture_N50E008_bbox.tif
+
+- **Source**: ESA WorldCover 10 m 2021 v200, tile N48E006, staged read-only
+  at `S:\claude_code\geo2map_data\downloads\ESA_WorldCover_10m_2021_v200_N48E006_Map.tif`
+  (94,225,409 bytes) for this project. © ESA WorldCover project 2021 /
+  Contains modified Copernicus Sentinel data, licensed
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). This notice
+  constitutes the required attribution.
+- **Why two files**: `regions.json`'s `fixture` region (below) resolves,
+  against the real `hessen-latest.osm.pbf`, to TWO separate level-2 tile
+  clusters about 11 km apart - the Höchst admin relation's own irregular
+  footprint (16 tiles) and the separate `utm_bbox` part (8 tiles), widened
+  to full 1024 m tile boundaries by the region's own 200 m halo. A single
+  bounding window covering both would have to span the ~11 km gap between
+  them, far larger than either cluster on its own (this is a documented
+  deviation from PLAN.md G1c I5's own "~330x260 px, ~90 KB" single-window
+  estimate, which assumed one contiguous cluster) - `g2m_fixture_cut
+  cut-worldcover` therefore cuts one window per CONNECTED cluster (8-
+  connectivity over the tile grid) and this fixture ships both.
+- **Cut with** (`tests/support/fixture_cut/main.cpp`'s `cut-worldcover`
+  subcommand, G1c I5; `--resolved` is the `fixture` region resolved against
+  the real PBF - not committed, a one-off scratch artefact, reproducible via
+  `g2m_tiler resolve testdata/fixtures/regions.json#fixture --pbf
+  <hessen-latest.osm.pbf> --out <scratch path>`):
+  ```
+  g2m_fixture_cut cut-worldcover \
+    --in ESA_WorldCover_10m_2021_v200_N48E006_Map.tif \
+    --resolved <scratch>/fixture.resolved.json --margin-px 2 \
+    --out worldcover/fixture_N50E008_hoechst.tif \
+    --out worldcover/fixture_N50E008_bbox.tif
+  ```
+  Cluster order matches `tile_keys()`'s own ascending (northing, easting)
+  sort, so `--out` order above is stable across re-cuts. Both fixtures are
+  uncompressed, single-strip, single-band uint8 GeoTIFFs: same
+  `ModelPixelScaleTag` as the source (1/12000 deg), `ModelTiepointTag`
+  moved to the window's own corner, a minimal `GeoKeyDirectory`
+  (`GTRasterTypeGeoKey=1` PixelIsArea, `GeographicTypeGeoKey=4326`) and
+  `GDAL_NODATA="0"`.
+- **fixture_N50E008_hoechst.tif** (Höchst cluster, 16 tiles): window
+  col `[30000..30973]` x row `[10500..11110]` = 974x611 px (col_lo/row_lo
+  widened from the 2 px margin to the next lower multiple of 375, see the
+  tiepoint-alignment note below; col_hi/row_hi unaffected).
+  Lon `[8.50895..8.58097]`, lat `[50.0743..50.1206]`.
+  Size: 595,404 bytes.
+  SHA-256: `a81638668b11726e7a9e700af02b3f46ec6dde893461252fdf70b47f1675ff11`.
+- **fixture_N50E008_bbox.tif** (utm_bbox cluster, 8 tiles): window
+  col `[31125..32166]` x row `[9375..9778]` = 1042x404 px (same widening).
+  Lon `[8.62289..8.68041]`, lat `[50.1853..50.2038]`.
+  Size: 421,258 bytes.
+  SHA-256: `806c442100e789bb1d55f7342199f21ed6d7060efff4c96d65558dd1aeae37f1`.
+- **Geodetic note** (PLAN.md 4.1): ESA WorldCover's coordinates are WGS84;
+  this project's own UTM math uses GRS80/ETRS89, which differ from WGS84
+  by up to ~0.5 m at Hessen's latitude (frame-realisation drift, not an
+  ellipsoid shape difference). Sub-pixel at WorldCover's own ~10 m native
+  resolution and deliberately ignored - no reprojection/datum-shift step
+  exists anywhere in this import path (see `docs/formats/src_landcover.md`).
+- **Real product's own georeference** (recorded here for reference, not
+  fixture-specific): `ModelPixelScale` = `8.333333333333333e-05` (exactly
+  1/12000 deg), `ModelTiepoint` = `[0,0,0, 6.0, 51.0, 0.0]` (so
+  `lon0*N=72000`, `lat0*N=612000`, both exact integers), `GDAL_NODATA="0"`,
+  `GTRasterTypeGeoKey=1` (PixelIsArea), `GeographicTypeGeoKey=4326`.
+- Used by `test_import_landcover.cpp`'s `[real-data]` fixture-vs-source
+  window-equality test, gated on `G2M_DATA_DIR`.
+
+### `tests/support/tiff_builder.h`'s `add_ascii` fix (found while cutting this fixture)
+
+`TiffBuilder::add_ascii` used to always store its value at an external
+offset, but classic TIFF stores any value whose byte count (including the
+NUL terminator) fits in the 4-byte value/offset field INLINE instead, and
+`tiff_reader.cpp`'s `read_ascii` follows that convention exactly (it never
+dereferences the field as an offset when `count <= 4`). `GDAL_NODATA="0"`
+is exactly this short-value case (2 bytes incl. NUL) - every existing
+`add_ascii` call in this codebase before G1c I5 used `"-9999"` (6 bytes,
+unaffected), so nothing had exercised the bug until this fixture's own
+`GDAL_NODATA="0"` did. Fixed in `tiff_builder.h` (now writes inline for
+values <= 4 bytes) - this fixture was re-cut after the fix, so its checked-
+in bytes and the SHA-256s above are the CORRECT ones. A second, unrelated
+bug in the same fix's first attempt (reading `bytes.size()` in the same
+call expression as `std::move(bytes)` - unspecified argument evaluation
+order let the callee's by-value parameter move-construct, and thus empty
+`bytes`, before the sibling `bytes.size()` argument was evaluated on this
+compiler) is also fixed by computing the count into a local variable
+before the call.
+
+### `cut-worldcover`'s tiepoint round-trip fix (found by the fixture-vs-source byte-equality test)
+
+The first re-cut (after the `add_ascii` fix above) still failed
+`test_import_landcover.cpp`'s fixture-vs-source byte-equality test: the
+window's own re-derived corner was off by exactly one pixel from the true
+cut position. Root cause: WorldCover's `N=12000` factors as
+`2^5 * 3 * 5^3` - NOT a power of two - so `new_c0/N` (a plain double
+division of the window's integer corner by N, the way `cut-worldcover`
+computed the new `ModelTiepointTag` value) does not generally round-trip
+back to `new_c0` through `(new_c0/N)*N`, the exact reconstruction
+`landcover.cpp`'s own `open_and_validate` performs to recover a file's
+`(C0, C1)`. A ULP-level search for a nearby representable double that DOES
+round-trip (`std::nextafter`, checked out to +-2000 ULPs) never finds one
+for a `new_c0` not already divisible by 375: the target integer sits
+exactly BETWEEN the two representable reconstructed products bracketing
+it, one ULP-of-the-product apart, so no correctly-rounded multiplication
+can land on it. The real fix is upstream of the value itself: `cut-
+worldcover` now widens (never narrows) the cut window's `col_lo`/`row_lo`
+down to the nearest multiple of 375 (`kTiepointAlignment` in
+`fixture_cut/main.cpp`) before computing the new corner - since the real
+source file's own tiepoint (`6.0`/`51.0`, whole degrees) is itself already
+a multiple of 375 times N, this reduces the condition to `col_lo % 375 ==
+0`/`row_lo % 375 == 0`, at which point `new_c0/N = (new_c0/375)/32` is a
+division by a pure power of two, which IEEE-754 always performs exactly.
+This is why both fixture windows above are wider than the plan's own
+`--margin-px 2` alone would produce, and why both fixtures had to be
+re-cut and their sizes/hashes above updated again after this fix (the
+`add_ascii` fix alone was not sufficient - it fixed the GDAL_NODATA tag but
+not this separate tiepoint-precision defect). `test_import_landcover.cpp`
+also gained a direct guard: it checks `floor(corner*N) == corner*N` on the
+checked-in fixture's own tiepoint, matching `open_and_validate`'s own
+exactness requirement, so a future re-cut that reintroduces this defect
+fails loudly instead of only failing the byte-equality comparison.
+
 ## regions.json
 
 A `g2m.regions/1` document with one region, `fixture`, with two parts
