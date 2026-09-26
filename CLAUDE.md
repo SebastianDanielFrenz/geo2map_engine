@@ -383,6 +383,25 @@ end of `CMakeLists.txt`):
     1024, same pattern as `g2m_mesh_tests`), `g2m_fuzz_smoke_tests`,
     `g2m_golden_tests` (Catch2;
     tags become CTest labels through `ADD_TAGS_AS_LABELS`);
+  - `g2m_fixture_release` (STATIC, `tests/support/fixture_release.{h,cpp}`,
+    PLAN.md R2.2 section 1c/G5): `make_fixture_release(tmpdir)` builds the
+    PKT DGM1 fixture release (import -> store -> server) once, shared by
+    `test_derive_terrain.cpp` and the bridge tests below; PUBLIC
+    `g2m_layers`/`g2m_decode`/`g2m_import`/`g2m_server`/`g2m_client` +
+    `Catch2::Catch2` (`REQUIRE` inside `make_fixture_release` itself);
+  - `g2m_bridge_tests` and `bench_bridge_fill` (`bridges/physics_sim/tests/`,
+    PLAN.md R2.2 section 1c/4b, G5-G8 - **built only as part of the
+    `bridge-release` preset/leg**, see "Presets"/"CI" below): Catch2
+    `g2m_bridge_tests` (test_smoke.cpp, test_g2m_terrain_source.cpp,
+    test_render_vs_jolt.cpp, test_residency.cpp, test_determinism.cpp,
+    test_seam_crossing.cpp; links `g2m_ps_bridge` + `g2m_mesh` +
+    `g2m_fixture_release` + `g2m_test_catch_main`) and the plain-`main`
+    `bench_bridge_fill` (CTest smoke only, label `bench;bridge`; links
+    `g2m_ps_bridge` + `g2m_headless_env`) - see the "Layout" entry above for
+    what each test file covers. Deliberately does not link
+    `tests/mesh/alloc_counter.cpp` or `tests/phys/alloc_counter.cpp` (both
+    override global operator new/delete, which would clash with `ps_core`'s
+    own override);
   - `g2m_golden` (STATIC, links g2m_layers + g2m_server + g2m_mesh) and
     `g2m_golden_dump` (exe; sets: `g0`, `g1`, `g1c`, `g2`, `g2mesh`);
   - `g2m_fuzz_run`, `g2m_fuzz_seeds_lib` (STATIC);

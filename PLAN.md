@@ -1148,6 +1148,124 @@ The carve-in wins for v1 because it adds no new seam or streaming risk. Bridges 
 - It also ships a `g2m SurfaceKind/LandClass -> surface name` table.
 - Ids are resolved by name at load. The haptics surface table is name-keyed too (PHYS-042), so new surfaces only need rows.
 
+### 8.5 G2.4 as built: the physics_sim bridge (R2.2 G1-G8, 2026-09-26) - **done**
+
+Implemented against the separate, coordinator-approved plan
+`racing_game/PLAN.md` R2.2 section 1 (commits `c2f3959`..`584fb91`, milestone
+schedule item R2.2 G1-G8). This subsection is the "as built" record 8.1-8.3
+described in advance; the normative code comments are on the headers cited
+below.
+
+**What exists:**
+- `g2m_phys` (ps-free, `include/g2m/phys/`, `src/phys/`, built unconditionally
+  on every leg): `PhysicsTileGrid` (255 m / 256-sample physics tiles anchored
+  on DGM1 cell centres, `physics_grid.h`), `ResidentHeightSet` (sorted-cache
+  of loaded `HeightTile`s with an owner-thread-only mutation contract,
+  `resident_heights.h`), `fill_physics_heights<Real>` (header-only,
+  allocation-free fill from the resident set, `fill_physics_heights.h`),
+  `HeightTileLoader` + `TransportHeightTileFetch` + `DelayedFetch` (async
+  fetch/decode/retry, `height_tile_loader.h`), `PhysicsTerrainStreamer`
+  (gate/keep/evict + the clock-freeze `GateStatus`, `physics_streamer.h`).
+- `g2m_ps_bridge` (`bridges/physics_sim/`, opt-in behind
+  `if(TARGET ps_core)`/`G2M_PS_SOURCE_DIR`): `G2mTerrainSource :
+  ps::terrain::ITerrainSource` and `make_terrain_config(interest_radius_m,
+  fills_per_tick)` (`include/g2m/ps_bridge/g2m_terrain_source.h`).
+- The `bridge-release` CI leg (`CMakePresets.json`, `tools/ci.ps1`, reachable
+  only via `-Only bridge-release`): builds and tests the bridge against a
+  local, offline clone of physics_sim pinned by `bridges/physics_sim/
+  physics_sim.pin` (`5c648a5`, equal to racing_game's own submodule sha).
+
+**Measured acceptance (PLAN.md 4a/4b numbers, `g2m_phys_tests` +
+`g2m_bridge_tests`, bridge-release leg):**
+- **Render vs Jolt** (`test_render_vs_jolt.cpp`): synthetic checkerboard
+  saddle max 0.506 mm (bound <= 2 mm; the wrong triangle diagonal is off by
+  388.6 mm, kept as a negative control >= 100 mm); the PKT DGM1 fixture max
+  2.913 mm / p99 1.279 mm (bound <= 5 mm / <= 2 mm).
+- **Determinism** (`test_determinism.cpp`): a box + 16 spheres pushed across
+  physics-tile seams for 2400 ticks give the identical per-tick state_hash
+  sequence (final `e1a5c9079787bd41`) at 1/4/10 workers, and between
+  up-front installs and gated delayed installs (one tile released per 3
+  frozen attempts behind a test-local racing_game-style gate); `fill_miss_
+  count() == 0` throughout.
+- **Residency** (`test_residency.cpp`): on the fixture at r = 255 m, after
+  priming, `starved`/`relief_overflow`/`fill_miss` are all 0; a 404 area
+  120 m from the northern coverage edge installs as Absent (holes in both
+  Jolt and `fill_tile`) with no freeze.
+- **Seam vs seamless** (`test_seam_crossing.cpp`): a sliding sphere/box at
+  5/20/40 m/s over the tiled 255 m ground vs one 1024-sample seamless
+  ground, `+x` and 4-tile-corner paths, physics_sim's own
+  `test_terrain_seam_crossing.cpp` bounds (`|az| <= 2*seamless + 30` and
+  `<= 120 m/s^2`). Passes on the `+x` path; on the corner path the seamless
+  reference itself reaches up to ~175 m/s^2 (1/256 m-quantised terrain,
+  diagonal at 40 m/s), so the absolute cap there is relaxed to
+  `max(120, seamless + 30)` (a corner-path-only change, `abs_bound()` in the
+  test) - see the "deviations" bullet below.
+- **`bench_bridge_fill`** and the **F decision**: `fill_tile` 0.030 ms;
+  `update_heightfield_body(256^2)` (Jolt `SetHeights`/`SetMaterials`) 2.262 ms
+  mean at pool 49; cross-tile weld overhead 0.006 ms/tick; end-to-end fill
+  ticks 2.41 ms at F = 1 vs up to 5.0 ms at F = 2. Plan 1b's rule (F = 2 only
+  if one `SetHeights` + weld stays under 1.0 ms) gives 2.268 ms >= 1.0 ms, so
+  **F stays 1**; `make_terrain_config`'s own header records the decision.
+
+**Deviations from the plan:**
+- **Margin interpretation** (`physics_streamer.h`/`.cpp`, section 1a step
+  3): the plan left open which radius the look-ahead square uses. The
+  implementation uses the *gate* radius (TileManager's own `r` +
+  `gate_margin_tiles`), not TileManager's bare radius, around
+  `p + v*min(lookahead_s, lookahead_cap_m)` - chosen so the default
+  `max_resident_l0 = 160` still leaves headroom over gate + prefetch + look-
+  ahead at the plan's own worked radii.
+- **Failed-key memory + `retry_failed()`** (section 1a step 1/4): a key
+  whose loader outcome is `Failed` is remembered and reported in
+  `GateStatus::failed` rather than either (a) re-requested every tick
+  (would hammer a failing server) or (b) installed as an `Absent` hole
+  (would silently create a hole where coverage genuinely exists). It is
+  forgotten, and so retried, once it leaves the keep set, or on an explicit
+  `PhysicsTerrainStreamer::retry_failed()` call - not specified in the
+  original plan text.
+- **Corner-path seam cap** (`test_seam_crossing.cpp`, section 4b): the
+  plan's literal seam-vs-seamless bound (`<= 2*seamless + 30` and
+  `<= 120 m/s^2`, copied from physics_sim's own test) is relaxed to
+  `max(120, seamless + 30)` on the 4-tile-corner path only, because the
+  *seamless* reference itself exceeds 120 m/s^2 there (terrain
+  quantisation, not the bridge's own weld) - flagged for the physics
+  session as a candidate follow-up (weld behaviour at a 4-tile corner at
+  low speed), not fixed here.
+- **All ten `FETCHCONTENT_SOURCE_DIR_*` overrides, not two** (section 1c,
+  `tools/ci.ps1`): `FETCHCONTENT_FULLY_DISCONNECTED` is a configure-global
+  CMake switch, not scoped to the two dependencies the bridge itself needs
+  (JoltPhysics, nlohmann_json, from physics_sim's own `_deps`). The
+  `bridge-release` leg therefore also redirects geo2map_engine's own eight
+  FetchContent dependencies (Catch2, zstd, SQLite, nlohmann_json,
+  libdeflate, zlib-ng, protozero, libosmium) at this repo's own `release`
+  preset's `_deps`, and fails with an actionable message if any of the ten
+  is missing, rather than a bare FetchContent network error.
+- **Pool size 49, not "~40"**: 8.1's estimate is superseded by
+  `make_terrain_config`'s exact formula, `(2*ceil(r/255)+3)^2`; at the
+  plan's own r = 400 m example this is 49, not ~40.
+
+**What remains for racing_game (R1 onward, unchanged from the R2.2 plan,
+section 6):** bump the physics_sim/geo2map_engine submodules to this
+commit and link `g2m_phys` + `g2m_ps_bridge` into `rg_core` (R1);
+`FixedRateLoop` (R2); `WorldConfig::physics` and
+`WorldTerrain::height_tile_shared` (R3); `Session`'s terrain mode - the
+`try_step` gate, start-up priming and spawn-ray-cast, `StreamingStatus`
+(R4); `DriveScript`/autopilot and `tools/terrain_drive` (R5); `[realdata]`
+render-vs-physics and seam acceptance (R6); the `RgSimulation`/
+`RgTerrainView` Godot API (R7); `TerrainViewStreamer` + `RenderChunk::key`
+render-LOD-follows-the-car (R8); the `--drive` scene, HUD and smoke tests
+(R9); R10's measurements and its own "R2.2 as built" note in
+`racing_game/PLAN.md`.
+
+**Deferred to R2.3+** (R2.2 plan section 4c, unchanged): the 30 km MTK/HTK
+scripted drive; streaming at 100 m/s (tested here only up to a 100 m/s
+random-walk interest point in the queued-key invariant test, never as an
+acceptance bound); land-class surfaces (`G2mTerrainSource` writes one fixed
+`ps::SurfaceId` per instance, default `"asphalt"`, resolved by the caller
+through `SurfaceTable` - see 8.4); an LRU for the `WorldTerrain` decoded-tile
+cache; the PHYS-045 mesh-spike follow-up implied by the corner-path
+deviation above.
+
 ---
 
 ## 13. Downloads and installs for owner approval
