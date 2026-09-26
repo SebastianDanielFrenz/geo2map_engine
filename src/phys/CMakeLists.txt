@@ -8,6 +8,7 @@ set(G2M_PHYS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/physics_grid.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/resident_heights.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/height_tile_loader.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/physics_streamer.cpp
   CACHE INTERNAL "g2m_phys sources"
 )
 

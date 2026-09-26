@@ -132,8 +132,16 @@ geo2map_engine/
                                       HeightTileLoader (worker pool; request() replaces the want-list,
                                       dedups vs in-flight/done; poll() sorted by key; retry/backoff;
                                       destructor joins). Status mapping and threading contract in the header
+    physics_streamer.h                InterestPoint, StreamerConfig, GateStatus, PhysicsTerrainStreamer:
+                                      update() (owner thread, between steps) polls/installs completions,
+                                      builds the gate set (physics_sim TileManager's square
+                                      r = ceil(radius/ts) + gate_margin_tiles around index_for_local) and
+                                      keep set (+ prefetch square + look-ahead square), retain_only(keep)
+                                      only over max_resident_l0 (gate keys never evicted), requests missing
+                                      keys gate-first by distance/key, reports ready; remembers Failed keys
+                                      (retry_failed()); gate_keys()/keep_keys() accessors
   src/phys/                           g2m_phys implementation: physics_grid.cpp, resident_heights.cpp,
-                                      height_tile_loader.cpp
+                                      height_tile_loader.cpp, physics_streamer.cpp
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
                                       src_landcover, src_osm, pack, release_manifest, protocol, cache_db
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)
@@ -274,7 +282,8 @@ end of `CMakeLists.txt`):
   other dependency - no rendering-engine or third-party type anywhere in
   `include/g2m/mesh/`.
 - `g2m_phys` (STATIC, PLAN.md R2.2 section 1a): `src/phys/*.cpp`
-  (physics_grid.cpp, resident_heights.cpp, height_tile_loader.cpp -
+  (physics_grid.cpp, resident_heights.cpp, height_tile_loader.cpp,
+  physics_streamer.cpp -
   fill_physics_heights.h is a header-only template, no .cpp of its own);
   PUBLIC `g2m_client` (transitively `g2m_server` / `g2m_layers` /
   `g2m_core`, for `HeightTile` and `ITransport`), PRIVATE `Threads::Threads`.
@@ -301,7 +310,10 @@ end of `CMakeLists.txt`):
     `g2m_phys_tests` (tests/phys, PLAN.md R2.2 section 1a/4a -
     test_physics_grid.cpp, test_resident_heights.cpp,
     test_fill_physics_heights.cpp, test_height_tile_loader.cpp (scripted
-    fetch + fake ITransport, no network/store files); also its own `alloc_counter.cpp` for
+    fetch + fake ITransport, no network/store files),
+    test_physics_streamer.cpp (incl. a TileManager pending-queue model for
+    the queued-key invariant, plus a gate_margin_tiles = 0 negative
+    control); also its own `alloc_counter.cpp` for
     `fill_physics_heights`'s zero-allocation check at samples = 256 and
     1024, same pattern as `g2m_mesh_tests`), `g2m_fuzz_smoke_tests`,
     `g2m_golden_tests` (Catch2;
