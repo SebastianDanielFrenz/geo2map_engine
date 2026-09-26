@@ -181,6 +181,16 @@ TEST_CASE("build_chunk: second call with the same shape makes zero allocations",
 
     g2m_test::ScopedAllocCounter counter;
     build_chunk(key, window, nullptr, mesh); // second call: must not allocate
+
+    if (!g2m_test::kAllocCounterAvailable) {
+        // ASan/TSan builds gate alloc_counter.cpp's global operator new/delete
+        // overrides off entirely (they would duplicate-symbol-clash with the
+        // sanitizer runtime's own overrides at link time - see that file's
+        // header comment), so counter.count() would always read 0 here
+        // regardless of whether build_chunk actually allocated. Say so
+        // explicitly rather than let a meaningless 0 == 0 pass silently.
+        SKIP("allocation counting unavailable under a sanitizer build (G2M_SANITIZER_BUILD)");
+    }
     CHECK(counter.count() == 0);
 }
 

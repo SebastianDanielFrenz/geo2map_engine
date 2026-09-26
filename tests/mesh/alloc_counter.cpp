@@ -2,6 +2,19 @@
 // new/delete overrides, scoped to this one executable (g2m_mesh_tests):
 // route through std::malloc/std::free directly (never recurse back into
 // operator new/delete) and count allocations while `g_armed` is set.
+//
+// The override block below is compiled out entirely when G2M_SANITIZER_BUILD
+// is set (the asan/linux-asan-ubsan/linux-tsan presets): ASan's/TSan's own
+// runtimes (clang_rt.asan_cxx / clang_rt.tsan_cxx) already define these same
+// global operator new/delete symbols, so a second definition in this
+// translation unit is a duplicate-symbol LINK ERROR (lld-link/ld.lld both
+// reject two definitions of e.g. `operator delete(void*)`) - not a silently
+// shadowed/ignored override. There is also nothing useful to count under a
+// sanitizer build even if it linked: ASan's redzone/quarantine allocator is
+// the one actually servicing every `new`, entirely separate from this file's
+// bookkeeping. AllocCounter::count() therefore always reads 0 when gated off
+// - see alloc_counter.h's kAllocCounterAvailable, which callers must check
+// rather than trust a bare zero count.
 #include "alloc_counter.h"
 
 #include <cstdlib>
@@ -19,6 +32,8 @@ void AllocCounter::disarm() { g_armed = false; }
 std::size_t AllocCounter::count() { return g_count; }
 
 } // namespace g2m_test
+
+#if !G2M_SANITIZER_BUILD
 
 namespace {
 
@@ -49,3 +64,5 @@ void operator delete(void* p, std::size_t) noexcept { counted_free(p); }
 void operator delete[](void* p, std::size_t) noexcept { counted_free(p); }
 void operator delete(void* p, const std::nothrow_t&) noexcept { counted_free(p); }
 void operator delete[](void* p, const std::nothrow_t&) noexcept { counted_free(p); }
+
+#endif // !G2M_SANITIZER_BUILD

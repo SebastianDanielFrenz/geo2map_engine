@@ -3,18 +3,31 @@
 // test_terrain_chunk.cpp's "build_chunk's second call allocates nothing"
 // check (PLAN.md G2.3). Single-threaded test code only - no thread-safety
 // attempted, unlike physics_sim's own debug_alloc (which must be job-system
-// safe); see alloc_counter.cpp for the actual operator new/delete overrides.
+// safe); see alloc_counter.cpp for the actual operator new/delete overrides,
+// GATED OFF entirely on a sanitizer build - see kAllocCounterAvailable below.
 #pragma once
 
 #include <cstddef>
 
+#ifndef G2M_SANITIZER_BUILD
+#error "G2M_SANITIZER_BUILD is not defined - this target must link g2m_options"
+#endif
+
 namespace g2m_test {
+
+// False under a sanitizer build (ASan/UBSan/TSan): alloc_counter.cpp does
+// NOT override global operator new/delete there (doing so is a duplicate-
+// symbol LINK ERROR against the sanitizer runtime's own overrides), so
+// AllocCounter::count() always reads 0 regardless of what actually
+// allocated. A caller must check this before trusting a zero count - never
+// assume a bare `count() == 0` means "nothing allocated" without it.
+inline constexpr bool kAllocCounterAvailable = !G2M_SANITIZER_BUILD;
 
 struct AllocCounter {
     static void reset();
     static void arm();
     static void disarm();
-    static std::size_t count(); // allocations observed while armed, since the last reset()
+    static std::size_t count(); // allocations observed while armed, since the last reset() - meaningful only when kAllocCounterAvailable
 };
 
 // RAII: arms on construction, disarms on destruction.

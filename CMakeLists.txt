@@ -140,6 +140,17 @@ else()
   target_compile_options(g2m_options INTERFACE -mavx2 -mfma -ffp-contract=off)
 endif()
 
+# Always-defined G2M_SANITIZER_BUILD=0/1 compile definition (mirrors
+# physics_sim's own PS_SANITIZER_BUILD pattern) for any of our own targets
+# that need to know at compile time whether they are built under ASan/UBSan/
+# TSan (set ON by the asan/linux-asan-ubsan/linux-tsan presets above) - e.g.
+# tests/mesh/alloc_counter.cpp, whose global operator new/delete overrides
+# must be compiled out under a sanitizer build (they would otherwise
+# duplicate-symbol-clash with the sanitizer runtime's own overrides at link
+# time). $<BOOL:...> turns the cached ON/OFF option into a literal 0/1 so
+# `#if G2M_SANITIZER_BUILD` works without an extra defined()/IS_ON check.
+target_compile_definitions(g2m_options INTERFACE G2M_SANITIZER_BUILD=$<BOOL:${G2M_SANITIZER_BUILD}>)
+
 # G1a: zstd / SQLite / nlohmann (cmake/deps_core.cmake) and the layer, server
 # and client libraries (src/layer, src/server, src/client).
 include(cmake/deps_core.cmake)
