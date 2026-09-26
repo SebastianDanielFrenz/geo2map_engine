@@ -68,8 +68,12 @@ geo2map_engine/
                                       to_hex / content_hash_from_hex
     pack.h                            PackDirectory/PackEntry/PackTileState, pack_of/pack_tile, encode/decode_pack
   include/g2m/server/                 public API of g2m_server (PLAN.md 3.1-3.4)
-    tile_store.h                      TileStore (SQLite + blob files; CONCURRENCY CONTRACT in the header), TileStoreConfig,
-                                      TileAddress, StoredTile, stats/check_consistency
+    tile_store.h                      TileStore (SQLite + blob files; CONCURRENCY CONTRACT in the header), TileStoreConfig
+                                      (incl. read_only - G2.0: SQLite immutable-mode URI, no directory creation, no
+                                      write-path pragmas, every mutator rejected -> ErrorCode::ReadOnly),
+                                      TileAddress, StoredTile, stats/check_consistency, index() (TileIndexEntry{layer,
+                                      key, body_hash}, sorted by (layer, key) - G2.0's diff-scopes merge-diffs two
+                                      calls' output directly, no extra sort needed)
     protocol.h                        protocol v1 request/response objects, Status, ResponseMeta, ServerManifest JSON,
                                       to_path / parse_path
     transport.h                       ITransport
@@ -117,7 +121,11 @@ geo2map_engine/
   src/core/geom/                       implementation (exact.cpp, ring_set.cpp, ring_assembly.cpp; project.h is header-only);
                                        compiled into g2m_core, listed in src/CMakeLists.txt
   include/g2m/layer/region.h           g2m.regions/1 (OsmAdminPart/UtmBboxPart RegionSpec) and g2m.resolved_region/1
-                                       (ResolvedRegion: tile_count/interior runs/parts/geometry_hash) - milestone G1c I1/I2
+                                       (ResolvedRegion: tile_count/interior runs/parts/geometry_hash) - milestone G1c I1/I2;
+                                       interior_tile_keys(ResolvedRegion) (G2.0: the interior/halo tile keys a
+                                       verification pass needs - added after "interior tiles have full DEM coverage"
+                                       turned out to be an unverified, and false, claim - see PLAN.md's "G2.0
+                                       correction" addendum and check-dem-nodata below)
   src/layer/osm_clip_index.cpp         OsmClipIndex (milestone G1c I4): per-tile OSM selection index ~1000x cheaper
                                        than calling clip_osm() (osm_clip.cpp, unchanged, kept as the byte-for-byte oracle)
   include/g2m/import/                  public API of g2m_import (milestone G1c I2-I6); importers stay free of
@@ -129,7 +137,12 @@ geo2map_engine/
     ordered_parallel.h                ordered_for: fan produce(i) over up to `jobs` worker threads, deliver to
                                        consume(i, ...) in ascending index order - importer output is --jobs-independent
     dem.h                             DGM1 -> g2m.src.elev.dgm1 (I3): DemImportReport incl. tiles_written/partial/
-                                       skipped_nocov/skipped_allnodata and dup_keys/dup_copies/dup_identical/dup_differing
+                                       skipped_nocov/skipped_allnodata and dup_keys/dup_copies/dup_identical/dup_differing;
+                                       dgm1_km_span(min_m, extent_m) -> KmSpan{lo, hi} (G2.0 fix): a level-2 tile can
+                                       span up to THREE DGM1 1 km squares per axis (km-remainder 977..999), not two -
+                                       the importer visits the full [lo,hi]x[lo,hi] rectangle (up to 3x3=9 squares),
+                                       not just a 2x2 box's 4 corners (the old code's bug - see PLAN.md's "G2.0
+                                       correction" addendum)
     osm.h                             PBF -> g2m.src.osm (I4): two-stage extract (own sorted-SoA node-location index,
                                        D13) + per-tile clip (OsmClipIndex), OsmExtractReport (nodes/ways/ways_incomplete)
     landcover.h                       ESA WorldCover COG -> g2m.src.landcover (I5)
@@ -138,9 +151,19 @@ geo2map_engine/
   apps/g2m_tiler/                      offline importer CLI (milestone G1c I2-I7)
     main.cpp                          subcommands: find-admin, resolve, import-dem, import-osm, import-landcover,
                                        import (all three layers via one resolved region), stats (+ check_consistency,
-                                       G1c I7), index-hash (per-layer + "all" FNV-1a64 over the store index, G1c I7)
+                                       G1c I7), index-hash (per-layer + "all" FNV-1a64 over the store index, G1c I7),
+                                       diff-scopes --a DIR:SCOPE --b DIR:SCOPE (G2.0: per-tile complement to
+                                       index-hash - merge-diffs two stores'/scopes' sorted TileStore::index() output
+                                       into per-layer added/removed/changed/unchanged counts + per-tile lines),
+                                       check-dem-nodata --store DIR --scope SCOPE --resolved PATH [--interior-only]
+                                       (G2.0: decodes real g2m.src.elev.dgm1 bodies and counts actual NoData samples -
+                                       exit 1 on any interior-tile NoData; see PLAN.md's "G2.0 correction" addendum
+                                       for why stats/index-hash alone could not catch this)
     cli_args.h                        header-only argv parser (Args/parse_args) - extracted in I7 so a unit test can
-                                       include it directly; `bool_flags` makes a flag (e.g. --pin) a presence-only switch
+                                       include it directly; `bool_flags` makes a flag (e.g. --pin) a presence-only switch;
+                                       split_dir_scope(s) (G2.0: splits a "DIR:SCOPE" argument on the LAST ':' so a
+                                       Windows drive letter's own colon doesn't confuse the split) - also header-only
+                                       for the same direct-unit-test reason
     rss.h+.cpp                        peak resident-set-size sampling for each subcommand's own diagnostic summary line
   testdata/fixtures/                   committed small REAL cuts for import tests (milestone G1c I6, D19): dgm1/
                                        (PKT_fixture.zip), osm/ (frankfurt_hoechst.osm.pbf relation-closure cut,
@@ -248,6 +271,16 @@ end of `CMakeLists.txt`):
 ## CMake options
 
 - `G2M_BUILD_TESTS` (ON): Catch2 v3.16.0 via FetchContent, plus `tests/`.
+- `G2M_BUILD_IMPORT` (ON, G2.0): gates the whole decoder/importer stack -
+  `cmake/deps_decoders.cmake`'s FetchContent (libdeflate/zlib-ng/protozero/
+  libosmium), `src/decode`, `src/import`, `apps/g2m_tiler` - behind one
+  switch, for a future pure consumer of the tile-serving stack (e.g. a
+  game bridge, see `bridges/physics_sim` above) that never needs it.
+  `G2M_BUILD_APPS`/`G2M_BUILD_TESTS` both `FATAL_ERROR` if ON while this is
+  OFF (both need `apps/g2m_tiler`/its tests). The `consumer-check` preset
+  (below) proves OFF actually builds - only `g2m_core`/`g2m_layers`/
+  `g2m_server`/`g2m_client` and their own deps (zstd, SQLite, nlohmann_json)
+  compile, no Catch2/decoder deps fetched.
 - `G2M_BUILD_REFGEN` (OFF): fetches GeographicLib v2.7
   (`GEOGRAPHICLIB_PRECISION=3`, long double) and builds `tools/refgen`.
   - Only on Linux x86-64, because it needs an 80-bit long double.
@@ -278,6 +311,11 @@ end of `CMakeLists.txt`):
 - Windows (Ninja, from a VS 2022 Build Tools environment):
   - `debug`, `release`, `relwithdebinfo`, `asan` (clang-cl);
   - `msvc-debug`, `msvc-release` (cl);
+  - `consumer-check` (clang-cl, G2.0): `CMAKE_BUILD_TYPE=Release`,
+    `G2M_BUILD_IMPORT=OFF`, `G2M_BUILD_TESTS=OFF`, `G2M_BUILD_APPS=OFF` -
+    proves a pure consumer configuration builds `g2m_layers`/`g2m_server`/
+    `g2m_client` alone; `tools/ci.ps1`'s own leg builds exactly those three
+    targets and nothing else.
   - build dirs are `out/build/<preset>`.
 - WSL (clang + lld):
   - `linux-release`, `linux-asan-ubsan`, `linux-tsan`;
@@ -392,7 +430,10 @@ tools\ci.ps1 -Only release,linux-release   # named legs only
 
 - **Legs:** `debug`, `release`, `asan`, `msvc-release` (Windows);
   `linux-release`, `linux-asan-ubsan`, `linux-tsan` (WSL). The legs run one
-  after another.
+  after another. A `consumer-check` step (G2.0) runs right after the
+  Windows legs: configures+builds the `consumer-check` preset
+  (`G2M_BUILD_IMPORT=OFF`), only `g2m_layers`/`g2m_server`/`g2m_client` -
+  no `ctest`/golden dump (tests are OFF in that configuration).
 - **Per leg:** configure, build, `ctest` (every test), then
   `g2m_golden_dump <set>` into `out/ci_golden/<leg>.<set>.txt` for each set
   (g0, g1). On `linux-release` and `linux-asan-ubsan` the ctest run includes

@@ -621,7 +621,7 @@ under `S:\claude_code\geo2map_data` (read-only), store
 | Tile count | 1085 ± 15 | **1085** | exact |
 | Interior tiles | >= 520 | **533** (51 interior runs) | matches I2/I3's own dress-rehearsal figure exactly |
 | DEM full / partial / no-coverage | ~900 / ~100 / ~85 | **850 / 150 / 85** | no-coverage exact; full/partial split off by 50 tiles each (~4.6%) - see below |
-| DEM NoData in interior tiles | 0 | **0** | `tiles_skipped_allnodata=0`; interior tiles all have full km-tile coverage (plan's own measured input) |
+| DEM NoData in interior tiles | 0 | **0** | `tiles_skipped_allnodata=0` (no tile was ALL NoData) - but the stronger claim this row was read as, "interior tiles all have full km-tile coverage", was never actually checked (neither `stats` nor `index-hash` decodes a tile body) and was **false**: see the "G2.0 correction" addendum below - 29 of the 533 interior tiles carried a real ~97.7%-NoData stripe. |
 | DEM duplicate keys / needed km tiles | ~412 keys | **412 keys**, `km_decoded=1176` | both match the plan's measured inputs exactly (412 needed keys duplicated; home needs 1176 km tiles) |
 | DEM dup_copies / dup_identical / dup_differing | "~1490 copies", dup_differing reported | **490 extra copies** (902 total copies over the 412 dup keys), **396 identical**, **16 differing** | differing copies are logged by name (PKT source + inner-zip entry); see Deviations below for the "1490" reconciliation |
 | OSM ways_incomplete | 0 | **0** | matches I4 exactly |
@@ -687,9 +687,10 @@ two runs - the importer's output is `--jobs`-independent, as designed
 
 **Open items.**
 - Unify (or formally keep) the two height quantisers (Q3) - undecided.
-- The DGM1 halo gaps (85 no-coverage L2 tiles, ~150 partial, all in the
-  2 km halo; interior tiles have full coverage) are accepted until GLO-30
-  fills them in G2 (Q2) - not fixed here.
+- The DGM1 halo gaps (85 no-coverage L2 tiles, 99 partial as of the G2.0
+  fix below, genuinely all in the 2 km halo - see the "G2.0 correction"
+  addendum) are accepted until GLO-30 fills them in G2 (Q2) - not fixed
+  here.
 - 5.5 steps 4-5 (GLO-30/WorldCover on-demand derivation via range-reads,
   `g2m_cli prebake`) and `apps/g2m_server`/`apps/g2m_cli` themselves remain
   unbuilt; only step 3 (the tiler import) is done - see the 5.5 annotation
@@ -698,6 +699,66 @@ two runs - the importer's output is `--jobs`-independent, as designed
   catches an exception by reference and calls `.what()` on it (TOOL-019
   hazard) - inert because it never runs under ASan in CI, left as-is per
   I6's own notes.
+
+**G2.0 correction (2026-09-26): the "interior tiles have full coverage"
+claim above was false.** A level-2 tile (1024 m) can span THREE DGM1 1 km
+squares on an axis, not just two, whenever its west/south edge falls in
+km-remainder 977..999 - the DEM importer (`src/import/dem.cpp`) computed
+the correct min/max square span (`e0`/`e1`, unchanged by this fix) but only
+ever fetched the 2x2 box's 4 CORNER squares, silently skipping the middle
+square for every 3-square-span tile. Those corner squares each only
+overlap a thin sliver (1-23 columns/rows) of the destination raster at the
+tile's own edges - the middle square supplies essentially the entire tile
+- so an affected tile came out ~97.7% NoData (1,024,000/1,048,576 samples)
+while nothing checked or reported that: `stats`'s `check_consistency` only
+checks ref counts and blob presence, and `index-hash` fingerprints
+`(layer, key, body_hash)` - neither decodes a tile body or counts NoData
+samples, so the "0 NoData" measurement above never actually looked.
+
+Fixed via `dgm1_km_span()`/`KmSpan` (`include/g2m/import/dem.h`,
+`src/import/dem.cpp`): the importer now visits the full `[lo, hi] x [lo,
+hi]` rectangle, up to 3x3 = 9 squares, instead of the 2x2 box's 4 corners.
+Two new regression tools guard against this class of bug recurring
+silently: `ResolvedRegion::interior_tile_keys()`
+(`include/g2m/layer/region.h`) plus `g2m_tiler check-dem-nodata --store DIR
+--scope SCOPE --resolved PATH [--interior-only]`, which decodes every real
+`g2m.src.elev.dgm1` body and counts actual NoData samples (exit 1 on any
+interior-tile NoData); and `g2m_tiler diff-scopes --a DIR:SCOPE --b
+DIR:SCOPE`, a per-tile complement to `index-hash` (two differing hashes
+say only that something changed, never what) that merge-diffs two stores'/
+scopes' sorted `TileStore::index()` output into per-layer added/removed/
+changed/unchanged counts.
+
+Confirmed against the real existing home store (`S:\claude_code\geo2map_cache\home`,
+scope `home-2026-09`, read-only - never modified by this investigation):
+`check-dem-nodata --interior-only` found exactly **29 of the 533 interior
+tiles** affected (x=446-452 at y=5416, plus x=458 at y=5424 and
+y=5427-5447), each 1,024,000/1,048,576 NoData samples
+(`total_nodata_samples=29,696,000`, exactly 29 x 1,024,000) - precisely the
+bug's predicted signature.
+
+**Re-import with the fix** (same inputs/region/`--jobs 12`, new store
+`S:\claude_code\geo2map_cache\home-r1`, scope `home-2026-09r1` - the old
+store above was left untouched):
+
+| Measurement | Old (buggy) | New (fixed) | Note |
+|---|---|---|---|
+| DEM full / partial / no-coverage | 850 / 150 / 85 | **901 / 99 / 85** | no-coverage unchanged (a square's coverage existence doesn't depend on this fix); 51 tiles moved partial -> full - their middle square *was* covered all along, just never fetched |
+| DEM NoData in interior tiles (`check-dem-nodata --interior-only`) | **29 tiles**, 29,696,000 samples - FAILED | **0 tiles**, 0 samples (533 checked, 558,891,008 total samples) - OK | the fix's whole point; now a regression-guarded pass/fail |
+| `diff-scopes` old vs. new | - | `g2m.src.elev.dgm1 added=0 removed=0 changed=51 unchanged=949`; landcover/osm both `changed=0` (untouched by this fix); `total changed=51` | the 51 changed DEM tiles are exactly the full/partial-split delta above, and are a superset of the 29 visibly-NoData ones (all lie along the same x=441-456@y=5416 row and x=458@y=5417-5451 column - a DGM1 km-grid seam) |
+| `body_bytes` | 771,279,516 | **807,912,301** (+36.6 MB) | real height data replacing former NoData-stamped bytes in the 51 changed tiles |
+| Wall time (jobs 12, total) | 126.96 s | **131.18 s** | dem sub-step 58.3 s -> 61.8 s (visiting up to 9 vs. 4 km squares); resolve/osm/landcover unchanged |
+| Peak RSS | 1873 MiB | **1872 MiB** | unchanged |
+| `stats` | `tiles=3170 pinned_tiles=3170` OK | `tiles=3170 pinned_tiles=3170` OK | unchanged shape |
+| `index-hash` (jobs 12) | (superseded) | `g2m.src.elev.dgm1 1000 76f8296375013744` / `g2m.src.landcover 1085 358b31f4156733cd` / `g2m.src.osm 1085 788472aac3d7543d` / `all 3170 ecd52efb1294e764` | landcover/osm hashes identical to the old store (as `diff-scopes` also shows), confirming the fix touches DEM only |
+| `--jobs 1` vs `--jobs 12` index-hash | - | **identical** (all layers and `all`) | second import, same inputs, `--jobs 1` (486.2 s wall vs. 131.2 s at `--jobs 12` - single-threaded DEM decode dominates), into a scratch store under `geo2map_engine/out/scratch_home_jobs1` (deleted immediately after this comparison); `stats` identical too (`tiles=3170 body_bytes=807912301 pinned_tiles=3170`, `check_consistency OK`; report's own `tiles_partial=99` matches); every layer hash and `all` bit-identical to the jobs-12 run above - the fix did not disturb `ordered_for`'s `--jobs`-independence (D12) |
+
+Spot-checked 3 of the originally-affected keys (`utm32n/2/446/5416`,
+`utm32n/2/458/5424`, `utm32n/2/458/5440`) individually against
+`diff-scopes`' per-tile output (all three `changed`) and against the new
+store's `check-dem-nodata --interior-only` result (0 tiles with NoData
+across all 533 interior tiles, so these three specifically now read
+0/1,048,576 NoData) - consistent with the aggregate numbers above.
 
 ---
 
