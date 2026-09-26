@@ -42,7 +42,13 @@ public:
 // adds no locking of its own.
 class StoreSink final : public ITileSink {
 public:
-    StoreSink(TileStore& store, std::string scope) : store_(store), scope_(std::move(scope)) {}
+    // `pin`: forwarded as-is to every TileStore::put this sink makes
+    // (G1c I6 item E - an importer building a pinned, never-evicted local
+    // release needs every tile it writes to survive the store's own
+    // eviction). Default false keeps every pre-I6 call site's behaviour
+    // unchanged.
+    StoreSink(TileStore& store, std::string scope, bool pin = false)
+        : store_(store), scope_(std::move(scope)), pin_(pin) {}
 
     Result<void> put(const std::string& layer, const TileKey& key, TileHeader header,
                       std::span<const std::uint8_t> body) override;
@@ -50,6 +56,7 @@ public:
 private:
     TileStore& store_;
     std::string scope_;
+    bool pin_;
 };
 
 // Collects every put() in memory, keyed by (layer, key) - last write wins

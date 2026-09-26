@@ -1,7 +1,11 @@
 # g2m_unit_tests: Catch2 v3. Every test carries a topic tag ([math],
 # [geo], [tile], [raster], [hash], [decode], [import]); tags become CTest
 # labels. test_import_resolve.cpp reads testdata/fixtures/ (committed
-# fixture PBF, G1c I2) via G2M_SOURCE_DIR below.
+# fixture PBF, G1c I2) via G2M_SOURCE_DIR below. test_import_e2e.cpp (G1c
+# I6 item E) additionally needs g2m_server/g2m_client (TileStore, Server,
+# ClientCache, the in-process transport) - no other test in this binary
+# does, but pulling both in here is simpler than a second executable just
+# for one test file.
 add_executable(g2m_unit_tests
   test_det_math.cpp
   test_tm_reference.cpp
@@ -20,9 +24,12 @@ add_executable(g2m_unit_tests
   test_osm_clip_index.cpp
   test_import_osm.cpp
   test_import_landcover.cpp
+  test_fixtures.cpp
+  test_import_e2e.cpp
 )
-target_link_libraries(g2m_unit_tests PRIVATE g2m_core g2m_decode g2m_import g2m_test_catch_main g2m_warnings
-                                              g2m_options libdeflate::libdeflate_static)
+target_link_libraries(g2m_unit_tests PRIVATE g2m_core g2m_decode g2m_import g2m_server g2m_client
+                                              g2m_test_catch_main g2m_warnings g2m_options
+                                              libdeflate::libdeflate_static)
 target_compile_definitions(g2m_unit_tests PRIVATE G2M_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 include(Catch)

@@ -11,7 +11,7 @@ Result<void> StoreSink::put(const std::string& layer, const TileKey& key, TileHe
     header.layer = layer;
     header.key = key;
     const TileAddress addr{scope_, layer, key};
-    return store_.put(addr, std::move(header), body, /*pin=*/false);
+    return store_.put(addr, std::move(header), body, pin_);
 }
 
 Result<void> MemorySink::put(const std::string& layer, const TileKey& key, TileHeader header,
