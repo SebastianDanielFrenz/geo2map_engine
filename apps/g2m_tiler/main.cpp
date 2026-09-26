@@ -42,12 +42,23 @@
 //          own comment for why the G1c "0 NoData in interior tiles" claim
 //          needed this. --interior-only restricts to the region's interior
 //          tiles and fails (exit 1) if any of them carry NoData)
+//   bake --store DIR --scope SCOPE --derived DIR --layers L[,L...]
+//        [--levels LO-HI] [--jobs N] [--pin]
+//        (PLAN.md G2.2: prebakes one or more built-in terrain layers -
+//        currently g2m.terrain.height - of `scope`'s local release, level-
+//        major, into a separate derived store at --derived. `--store` is
+//        opened read-only when the store supports it (see g2m/import/
+//        bake.h's own comment); `--levels` defaults to 0-6, a bare "N"
+//        means "N-N". Every tile goes through the same Server::tile()
+//        resolver an on-demand server would use (PLAN.md decision 10), so
+//        the result is deterministic across --jobs.)
 //
 // Exit codes: 0 success, 1 usage/runtime error, 2 "not implemented yet".
 #include "cli_args.h"
 #include "rss.h"
 
 #include "g2m/decode/dgm1.h"
+#include "g2m/import/bake.h"
 #include "g2m/import/dem.h"
 #include "g2m/import/landcover.h"
 #include "g2m/import/osm.h"
@@ -160,7 +171,9 @@ int usage() {
                  "  stats --store DIR [--scope SCOPE]\n"
                  "  index-hash --store DIR --scope SCOPE\n"
                  "  diff-scopes --a DIR:SCOPE --b DIR:SCOPE\n"
-                 "  check-dem-nodata --store DIR --scope SCOPE --resolved PATH [--interior-only]\n";
+                 "  check-dem-nodata --store DIR --scope SCOPE --resolved PATH [--interior-only]\n"
+                 "  bake --store DIR --scope SCOPE --derived DIR --layers L[,L...]\n"
+                 "       [--levels LO-HI] [--jobs N] [--pin]\n";
     return 1;
 }
 
@@ -1102,6 +1115,127 @@ int cmd_check_dem_nodata(const Args& args) {
     return 0;
 }
 
+// bake --store DIR --scope SCOPE --derived DIR --layers L[,L...]
+//      [--levels LO-HI] [--jobs N] [--pin] (PLAN.md G2.2)
+std::vector<std::string> split_comma(const std::string& s) {
+    std::vector<std::string> out;
+    std::size_t pos = 0;
+    while (pos <= s.size()) {
+        const std::size_t comma = s.find(',', pos);
+        const std::size_t end = comma == std::string::npos ? s.size() : comma;
+        if (end > pos) out.push_back(s.substr(pos, end - pos));
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    return out;
+}
+
+// "LO-HI" or a bare "N" (== "N-N").
+bool parse_level_range(const std::string& s, int& lo, int& hi) {
+    const std::size_t dash = s.find('-', s[0] == '-' ? 1 : 0);
+    try {
+        if (dash == std::string::npos) {
+            lo = hi = std::stoi(s);
+        } else {
+            lo = std::stoi(s.substr(0, dash));
+            hi = std::stoi(s.substr(dash + 1));
+        }
+    } catch (...) {
+        return false;
+    }
+    return lo <= hi;
+}
+
+int cmd_bake(const Args& args) {
+    const auto store_dir = args.get("store");
+    const auto scope = args.get("scope");
+    const auto derived_dir = args.get("derived");
+    const auto layers_arg = args.get("layers");
+    if (!store_dir || !scope || !derived_dir || !layers_arg) {
+        std::cerr << "g2m_tiler bake: --store, --scope, --derived and --layers are required\n";
+        return 1;
+    }
+    const std::vector<std::string> layers = split_comma(*layers_arg);
+    if (layers.empty()) {
+        std::cerr << "g2m_tiler bake: --layers must name at least one layer\n";
+        return 1;
+    }
+
+    g2m::import::BakeOptions options;
+    options.layers = layers;
+    if (const auto levels = args.get("levels")) {
+        if (!parse_level_range(*levels, options.min_level, options.max_level)) {
+            std::cerr << "g2m_tiler bake: --levels must be \"LO-HI\" or \"N\"\n";
+            return 1;
+        }
+    }
+    if (const auto jobs = args.get("jobs")) {
+        try {
+            options.jobs = std::stoi(*jobs);
+        } catch (...) {
+            std::cerr << "g2m_tiler bake: --jobs must be an integer\n";
+            return 1;
+        }
+    }
+    options.pin = args.flag("pin");
+
+    // Opened read_only (PLAN.md G2.0's TileStoreConfig::read_only): a bake
+    // source is a finished, --pin'd release scope (never a store still
+    // being imported into), and bake() itself never calls a mutating
+    // TileStore method on it either way (see bake.h's own comment).
+    g2m::TileStoreConfig source_config;
+    source_config.dir = *store_dir;
+    source_config.read_only = true;
+    auto sources = g2m::TileStore::open(source_config);
+    if (!sources) {
+        std::cerr << "g2m_tiler bake: --store: " << sources.error().message << "\n";
+        return 1;
+    }
+    g2m::TileStoreConfig derived_config;
+    derived_config.dir = *derived_dir;
+    auto derived = g2m::TileStore::open(derived_config);
+    if (!derived) {
+        std::cerr << "g2m_tiler bake: --derived: " << derived.error().message << "\n";
+        return 1;
+    }
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto report = g2m::import::bake(**sources, **derived, *scope, options);
+    const auto t1 = std::chrono::steady_clock::now();
+    if (!report) {
+        std::cerr << "g2m_tiler bake: " << report.error().message << "\n";
+        return 1;
+    }
+    const double wall_s = std::chrono::duration<double>(t1 - t0).count();
+    const std::uint64_t peak_rss = g2m_tiler::peak_rss_bytes();
+
+    std::ostringstream json;
+    json << "{\"format\":\"g2m.bake_report/1\",\"scope\":\"" << json_escape(*scope) << "\",\"release_id\":\""
+         << report->release_id_hex << "\",\"wall_s\":" << wall_s << ",\"peak_rss_mib\":" << (peak_rss / (1024 * 1024))
+         << ",\"layers\":[";
+    for (std::size_t li = 0; li < report->layers.size(); ++li) {
+        const auto& l = report->layers[li];
+        if (li > 0) json << ",";
+        json << "{\"layer\":\"" << json_escape(l.layer) << "\",\"tiles_total\":" << l.tiles_total
+             << ",\"container_bytes_total\":" << l.container_bytes_total << ",\"levels\":[";
+        for (std::size_t vi = 0; vi < l.levels.size(); ++vi) {
+            const auto& lv = l.levels[vi];
+            if (vi > 0) json << ",";
+            json << "{\"level\":" << lv.level << ",\"tiles\":" << lv.tiles
+                 << ",\"container_bytes\":" << lv.container_bytes << "}";
+        }
+        json << "]}";
+    }
+    json << "]}";
+    std::cout << json.str() << "\n";
+
+    std::cerr << "g2m_tiler bake: scope=" << *scope << " release_id=" << report->release_id_hex
+              << " layers=" << layers.size() << " levels=[" << options.min_level << "," << options.max_level
+              << "] jobs=" << options.jobs << " wall=" << wall_s << "s peak RSS " << (peak_rss / (1024 * 1024))
+              << " MiB\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1119,6 +1253,7 @@ int main(int argc, char** argv) {
     if (command == "index-hash") return cmd_index_hash(args);
     if (command == "diff-scopes") return cmd_diff_scopes(args);
     if (command == "check-dem-nodata") return cmd_check_dem_nodata(args);
+    if (command == "bake") return cmd_bake(args);
     if (command == "--help" || command == "-h" || command == "help") return usage(), 0;
     std::cerr << "g2m_tiler: unknown command '" << command << "'\n";
     return usage();

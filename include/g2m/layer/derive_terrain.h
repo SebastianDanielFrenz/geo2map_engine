@@ -1,7 +1,8 @@
-// g2m/layer/derive_terrain.h - the built-in terrain derivers (PLAN.md G2.1):
-// ElevBaseDeriver (g2m.elev.base, level 0 only) and TerrainHeightDeriver
-// (g2m.terrain.height; level 0 only in this increment - PLAN.md G2.2 adds
-// the mean-of-4 pyramid for levels 1-6).
+// g2m/layer/derive_terrain.h - the built-in terrain derivers: ElevBaseDeriver
+// (g2m.elev.base, level 0 only, PLAN.md G2.1) and TerrainHeightDeriver
+// (g2m.terrain.height, level 0 byte-identical passthrough of g2m.elev.base
+// PLAN.md G2.1, levels 1-6 a mean-of-4 half-even downsample pyramid over its
+// own 4 children PLAN.md G2.2 - see height_tile.h's downsample_2x2()).
 //
 // Both are pure/thread-safe per IDeriver's contract (deriver.h): derive()
 // depends only on its inputs, config_hash() and the target key, and may be
@@ -46,8 +47,12 @@ private:
 
 // g2m.terrain.height: level 0 is byte-identical to its g2m.elev.base input
 // (the store therefore dedups the two tiles' bodies). Levels 1-6 (PLAN.md
-// G2.2's mean-of-4 downsample pyramid) are NOT implemented here:
-// inputs_for()/derive() both treat any other level as absent/an error.
+// G2.2) are a mean-of-4 half-even downsample of the 4 same-layer children
+// (SW, SE, NW, NE - height_tile.h's downsample_2x2()); a missing child
+// (out of coverage) counts as all-NoData for its whole quadrant, never an
+// error - the resolver's own Coverage::covers() (release.h) is what turns
+// "no L2 tile anywhere under this key" into a 404 before derive() is ever
+// called. Levels above kTerrainMaxLevel (6) are rejected.
 class TerrainHeightDeriver final : public IDeriver {
 public:
     TerrainHeightDeriver();

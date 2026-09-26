@@ -1,7 +1,7 @@
-// g2m/layer/terrain_layers.h - the terrain L0 layer descriptors (PLAN.md
-// G2.1): g2m.elev.base (native DGM1 resolution, level 0 only) and
-// g2m.terrain.height (the height pyramid, L0-L6 - only L0 is derived in
-// this increment, G2.2 adds the mean-of-4 downsample for L1-L6).
+// g2m/layer/terrain_layers.h - the terrain layer descriptors (PLAN.md G2.1/
+// G2.2): g2m.elev.base (native DGM1 resolution, level 0 only) and
+// g2m.terrain.height (the height pyramid, L0-L6 - L0 a byte-identical
+// passthrough of g2m.elev.base, L1-L6 the mean-of-4 downsample pyramid).
 // g2m.terrain.class (the surface-classification pyramid) is declared here
 // too, for the layer name/slot to exist, but has no deriver until G2.5.
 //
@@ -30,8 +30,9 @@ inline constexpr int kTerrainMaxLevel = 6;
 // (native ~1 m DGM1 resolution), level 0 only.
 LayerDesc elev_base_desc();
 // g2m.terrain.height: the mean-of-4 height pyramid, levels 0-6. Level 0 is
-// byte-identical to g2m.elev.base (TerrainHeightDeriver, derive_terrain.h);
-// levels 1-6 are PLAN.md G2.2, not implemented by this increment's deriver.
+// byte-identical to g2m.elev.base; levels 1-6 are the half-even mean-of-4
+// downsample of their own 4 same-layer children (TerrainHeightDeriver,
+// derive_terrain.h; height_tile.h's downsample_2x2() - PLAN.md G2.2).
 LayerDesc terrain_height_desc();
 // g2m.terrain.class: surface classification (g2m.landclass.v1 scheme),
 // levels 0-6. No deriver until PLAN.md G2.5 - declared here so the layer

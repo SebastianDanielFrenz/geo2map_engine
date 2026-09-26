@@ -17,6 +17,7 @@ add_executable(g2m_layer_tests
   test_pack.cpp
   test_region.cpp
   test_derive_terrain.cpp
+  test_terrain_pyramid.cpp
 )
 target_link_libraries(g2m_layer_tests PRIVATE
   g2m_layers g2m_decode g2m_import g2m_server

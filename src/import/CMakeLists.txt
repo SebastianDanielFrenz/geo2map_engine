@@ -11,6 +11,7 @@ add_library(g2m_import STATIC
   dem.cpp
   osm.cpp
   landcover.cpp
+  bake.cpp
 )
 target_include_directories(g2m_import PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(g2m_import

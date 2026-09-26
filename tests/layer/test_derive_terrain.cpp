@@ -586,3 +586,62 @@ TEST_CASE("terrain: self-input (a deriver reading its own output layer) is accep
     CHECK(self_deriver.calls_inputs_for.load() == 17);
     CHECK(self_deriver.calls_derive.load() == 0);
 }
+
+TEST_CASE("terrain: Server resolve of an L6 g2m.terrain.height tile (depth 7: 6 same-layer hops plus one to "
+         "g2m.elev.base) equals downsample_2x2 applied out of band to its own L5 children (PLAN.md G2.2)",
+         "[layer][terrain][server]") {
+    Fixture fx;
+    const std::vector<TileKey> targets = level0_targets(fx.region);
+    REQUIRE_FALSE(targets.empty());
+
+    TileKey l6 = targets.front();
+    while (l6.level < kTerrainMaxLevel) l6 = l6.parent();
+    REQUIRE(l6.level == kTerrainMaxLevel);
+
+    const TileResponse l6_resp = fetch(*fx.server, fx.rid, std::string(kTerrainHeightLayer), l6);
+    REQUIRE(l6_resp.meta.status == Status::Ok);
+    Result<ContainerView> l6_view = parse_container(l6_resp.container);
+    REQUIRE(l6_view.ok());
+    Result<TileBody> l6_body = decode_body(l6_view->body);
+    REQUIRE(l6_body.ok());
+    HeightTile l6_tile;
+    REQUIRE(decode_height_tile(*l6_body, l6, l6_tile).ok());
+
+    // Independently fetch each of the 4 same-layer L5 children (from the
+    // SAME Server - already warm in cache after the L6 fetch above, since
+    // every successful Derive step caches unconditionally, server.cpp) and
+    // rebuild L6 from them by calling downsample_2x2 directly, out of band.
+    // A child outside the fixture's own tiny footprint 404s - treated the
+    // same way TerrainHeightDeriver::derive() itself treats a missing input
+    // (nullptr, i.e. "this whole quadrant is NoData"), never as a test
+    // failure: only at least one of the 4 is guaranteed covered (whichever
+    // one Coverage::covers() used to answer the L6 fetch above Ok).
+    // Heap-allocated: 4 stack-local HeightTiles (~1 MiB) plus this
+    // function's other HeightTile locals is enough to blow a default 1 MiB
+    // thread stack (STATUS_STACK_OVERFLOW, found the hard way - see
+    // test_terrain_pyramid.cpp's own version of this comment).
+    std::vector<HeightTile> children(4);
+    const int dx[4] = {0, 1, 0, 1};
+    const int dy[4] = {0, 0, 1, 1};
+    const HeightTile* child_ptrs[4] = {nullptr, nullptr, nullptr, nullptr};
+    for (int i = 0; i < 4; ++i) {
+        const TileKey ck = l6.child(dx[i], dy[i]);
+        const TileResponse resp = fetch(*fx.server, fx.rid, std::string(kTerrainHeightLayer), ck);
+        if (resp.meta.status == Status::NotFound) continue;
+        REQUIRE(resp.meta.status == Status::Ok);
+        Result<ContainerView> view = parse_container(resp.container);
+        REQUIRE(view.ok());
+        Result<TileBody> body = decode_body(view->body);
+        REQUIRE(body.ok());
+        REQUIRE(decode_height_tile(*body, ck, children[i]).ok());
+        child_ptrs[i] = &children[i];
+    }
+    REQUIRE((child_ptrs[0] || child_ptrs[1] || child_ptrs[2] || child_ptrs[3]));
+
+    HeightTile rebuilt;
+    rebuilt.key = l6;
+    downsample_2x2(child_ptrs[0], child_ptrs[1], child_ptrs[2], child_ptrs[3], rebuilt);
+
+    CHECK(rebuilt.has_nodata == l6_tile.has_nodata);
+    CHECK(rebuilt.h == l6_tile.h);
+}

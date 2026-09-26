@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <system_error>
@@ -148,6 +149,19 @@ std::unique_ptr<g2m::TileStore> open_store(const TempDir& d, const std::string& 
     return must(g2m::TileStore::open(c), "TileStore::open");
 }
 
+// Every distinct level-`level` ancestor of `level0` (PLAN.md G2.2's L1-L6
+// pyramid golden entries below), in ascending TileKey order (a std::set
+// sorts via TileKey::operator<=>, so no separate sort step is needed).
+std::vector<g2m::TileKey> ancestors_at(const std::vector<g2m::TileKey>& level0, int level) {
+    std::set<g2m::TileKey> uniq;
+    for (const g2m::TileKey& t : level0) {
+        g2m::TileKey cur = t;
+        while (cur.level < level) cur = cur.parent();
+        uniq.insert(cur);
+    }
+    return std::vector<g2m::TileKey>(uniq.begin(), uniq.end());
+}
+
 } // namespace
 
 std::vector<Entry> compute_g2() {
@@ -207,6 +221,28 @@ std::vector<Entry> compute_g2() {
             }
         }
         out.push_back(a.done("g2." + std::string(layer)));
+    }
+
+    // PLAN.md G2.2: one entry per pyramid level 1-6, over every distinct
+    // level-L ancestor of `targets` (the same L0 target set above,
+    // collapsed upward) - g2.g2m.elev.base and g2.g2m.terrain.height above
+    // are untouched (still L0-only, byte-identical to G2.1), so this is
+    // additive: it changes only the "all" combined entry below, never the
+    // two existing per-layer entries.
+    for (int level = 1; level <= kTerrainMaxLevel; ++level) {
+        const std::vector<TileKey> level_targets = ancestors_at(targets, level);
+        Acc a;
+        for (const TileKey& target : level_targets) {
+            const TileResponse resp =
+                server.tile(TileRequest{manifest.rid, std::string(kTerrainHeightLayer), target, std::nullopt});
+            a.u(static_cast<std::uint64_t>(resp.meta.status));
+            if (resp.meta.etag) {
+                a.bytes(std::span<const std::uint8_t>(resp.meta.etag->data(), resp.meta.etag->size()));
+            } else {
+                a.u(0);
+            }
+        }
+        out.push_back(a.done("g2.g2m.terrain.height.L" + std::to_string(level)));
     }
 
     Fnv1a64 all;

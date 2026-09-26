@@ -1,3 +1,9 @@
 g2.g2m.elev.base 192 63016a60e70e412f
 g2.g2m.terrain.height 192 63016a60e70e412f
-all 384 47c880c15e619f83
+g2.g2m.terrain.height.L1 48 332252a7104814d6
+g2.g2m.terrain.height.L2 12 b931b2c8d9fda0db
+g2.g2m.terrain.height.L3 8 ce9199b255dc036b
+g2.g2m.terrain.height.L4 4 39d14df855ea6a05
+g2.g2m.terrain.height.L5 4 da21753ad5972bd1
+g2.g2m.terrain.height.L6 4 6bcdebeca808e60a
+all 464 8e78f188e74f92e8
