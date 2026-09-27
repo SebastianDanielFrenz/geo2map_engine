@@ -68,7 +68,7 @@ TEST_CASE("fill_physics_surfaces: a road segment paints only its own cell's cent
     const TileKey key{k32N, 0, 0, 0};
     resident.install(key, make_tile(key), roads_of({seg}));
 
-    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/0, {{LandClass::PavedRoad, 111}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/0, {{LandClass::PavedRoad, static_cast<std::uint16_t>(111)}});
     std::vector<std::uint16_t> out(static_cast<std::size_t>(cells) * static_cast<std::size_t>(cells), 0xBEEF);
     const RoadBlockStats stats = fill_physics_surfaces(grid, index, resident, lut, /*off_road=*/0, out);
 
@@ -121,7 +121,7 @@ TEST_CASE("fill_physics_surfaces: a 2x2 L0 straddle paints each quadrant from it
 
     const RoadValueLut lut = RoadValueLut::by_land_class(
         /*off_road=*/0,
-        {{LandClass::PavedRoad, 111}, {LandClass::UnpavedRoad, 222}, {LandClass::Rail, 333}, {LandClass::Water, 444}});
+        {{LandClass::PavedRoad, static_cast<std::uint16_t>(111)}, {LandClass::UnpavedRoad, static_cast<std::uint16_t>(222)}, {LandClass::Rail, static_cast<std::uint16_t>(333)}, {LandClass::Water, static_cast<std::uint16_t>(444)}});
     std::vector<std::uint16_t> out(static_cast<std::size_t>(cells) * static_cast<std::size_t>(cells));
     const RoadBlockStats stats = fill_physics_surfaces(grid, index, resident, lut, /*off_road=*/0, out);
 
@@ -146,7 +146,7 @@ TEST_CASE("fill_physics_surfaces: an Absent L0 tile paints off_road and is not c
     ResidentHeightSet resident;
     resident.install(TileKey{k32N, 0, 0, 0}, nullptr); // confirmed 404, no roads
 
-    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/7, {{LandClass::PavedRoad, 111}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/7, {{LandClass::PavedRoad, static_cast<std::uint16_t>(111)}});
     std::vector<std::uint16_t> out(static_cast<std::size_t>(cells) * static_cast<std::size_t>(cells), 0xBEEF);
     const RoadBlockStats stats = fill_physics_surfaces(grid, index, resident, lut, /*off_road=*/7, out);
 
@@ -165,7 +165,7 @@ TEST_CASE("fill_physics_surfaces: an uninstalled L0 tile paints off_road and is 
 
     ResidentHeightSet resident; // nothing installed at all
 
-    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/7, {{LandClass::PavedRoad, 111}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/7, {{LandClass::PavedRoad, static_cast<std::uint16_t>(111)}});
     std::vector<std::uint16_t> out(static_cast<std::size_t>(cells) * static_cast<std::size_t>(cells), 0xBEEF);
     const RoadBlockStats stats = fill_physics_surfaces(grid, index, resident, lut, /*off_road=*/7, out);
 
@@ -187,7 +187,7 @@ TEST_CASE("fill_physics_surfaces: a resident tile with a null roads list paints 
     ResidentHeightSet resident;
     resident.install(key, make_tile(key)); // 2-arg install: heights resident, roads left null
 
-    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/7, {{LandClass::PavedRoad, 111}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/7, {{LandClass::PavedRoad, static_cast<std::uint16_t>(111)}});
     std::vector<std::uint16_t> out(static_cast<std::size_t>(cells) * static_cast<std::size_t>(cells), 0xBEEF);
     const RoadBlockStats stats = fill_physics_surfaces(grid, index, resident, lut, /*off_road=*/7, out);
 
@@ -209,7 +209,7 @@ TEST_CASE("fill_physics_surfaces: a resident tile with a non-null empty roads li
     ResidentHeightSet resident;
     resident.install(key, make_tile(key), std::make_shared<const std::vector<RoadSegment>>());
 
-    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/7, {{LandClass::PavedRoad, 111}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/7, {{LandClass::PavedRoad, static_cast<std::uint16_t>(111)}});
     std::vector<std::uint16_t> out(static_cast<std::size_t>(cells) * static_cast<std::size_t>(cells), 0xBEEF);
     const RoadBlockStats stats = fill_physics_surfaces(grid, index, resident, lut, /*off_road=*/7, out);
 
@@ -242,7 +242,7 @@ TEST_CASE("fill_physics_surfaces: allocates nothing", "[phys][fill][roads][alloc
         resident.install(key, make_tile(key), roads_of({seg}));
     }
 
-    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/0, {{LandClass::PavedRoad, 111}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(/*off_road=*/0, {{LandClass::PavedRoad, static_cast<std::uint16_t>(111)}});
     std::vector<std::uint16_t> out(static_cast<std::size_t>(cells) * static_cast<std::size_t>(cells));
 
     // Warm-up call outside the counter (first-touch page faults etc.).

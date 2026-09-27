@@ -13,6 +13,7 @@
 #include "g2m/core/geo/utm.h"
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/height_tile.h"
+#include "g2m/layer/osm_roads.h"
 #include "g2m/layer/terrain_layers.h"
 #include "g2m/phys/physics_grid.h"
 #include "g2m/phys/resident_heights.h"
@@ -90,6 +91,26 @@ inline void install_square(const g2m::phys::PhysicsTileGrid& grid, g2m::phys::Re
     std::vector<g2m::TileKey> keys;
     grid.l0_keys_for_square(centre, r, keys);
     for (const auto& key : keys) resident.install(key, cache.get(key));
+}
+
+// Same square as install_square above, but WITH `roads` attached to every
+// installed L0 key (PLAN.md G2.5a-grip section 5/6, commit G-c) - the
+// road-mode counterpart fill_physics_surfaces-backed tests need. Giving
+// every owning L0 key the SAME (unclipped) segment list is equivalent to a
+// real per-tile-clipped extraction: paint_road_blocks (osm_roads.cpp's
+// for_each_block) only ever paints a block's own sub-rectangle of `out`,
+// never anything a segment's geometry reaches beyond it, so a segment
+// extending past a given L0 tile's own footprint is simply never painted
+// there regardless of whether the caller clipped it first. `roads` may be
+// empty (a genuine "no drivable ways" tile, still not a fill_miss - see
+// fill_physics_surfaces.h's own Outcomes table) but must not be null (a
+// null roads on an otherwise-Resident key IS a fill_miss there).
+inline void install_square_with_roads(const g2m::phys::PhysicsTileGrid& grid, g2m::phys::ResidentHeightSet& resident,
+                                      g2m::phys::PhysTileIndex centre, int r, SyntheticTileCache& cache,
+                                      std::shared_ptr<const std::vector<g2m::RoadSegment>> roads) {
+    std::vector<g2m::TileKey> keys;
+    grid.l0_keys_for_square(centre, r, keys);
+    for (const auto& key : keys) resident.install(key, cache.get(key), roads);
 }
 
 // Knuth's MMIX 64-bit LCG; the top 53 bits give a uniform double in [0, 1).

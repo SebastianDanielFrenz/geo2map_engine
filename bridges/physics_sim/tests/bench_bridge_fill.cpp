@@ -8,6 +8,10 @@
 // Measured (synthetic DGM1 L0 tiles, never cache/; 256-sample / 255 m tiles;
 // pool 49 = make_terrain_config(400, F)):
 //   A. ms per G2mTerrainSource::fill_tile (single thread).
+//   A-road. PLAN.md G2.5a-grip section 4/6 (commit G-c): the same fill_tile
+//      measurement in road mode (RoadSurfaceConfig, fill_physics_surfaces
+//      instead of a flat fill) over a resident set carrying a handful of
+//      road segments per tile - the extra per-fill cost budget is ~0.25 ms.
 //   B. ms per IRigidBackend::update_heightfield_body (Jolt SetHeights +
 //      SetMaterials incl. the backend's row reversal/conversion) on a 256^2
 //      heightfield body in a World that also holds the 49-slot pool.
@@ -23,6 +27,7 @@
 #include "bridge_test_support.h"
 #include "headless_env.h"
 
+#include "g2m/layer/osm_roads.h"
 #include "g2m/phys/fill_physics_heights.h"
 #include "g2m/ps_bridge/g2m_terrain_source.h"
 
@@ -159,6 +164,47 @@ int main() {
     expect(source->fill_miss_count() == 0, "A: fill_tile touched a missing L0 tile");
     const Stats a = stats_of(fill_ms);
 
+    // ---- A-road. fill_tile, road mode (PLAN.md G2.5a-grip section 4/6, G-c) ---
+    // A separate resident set (same heights, same D-path footprint) that also
+    // carries roads: two segments per L0 tile (one paved, one unpaved, at
+    // different angles/ranks) - representative density, not a worst case
+    // (paint_road_blocks' own cost is dominated by its block partitioning,
+    // not segment count - see osm_roads.cpp's for_each_block).
+    auto road_resident = std::make_shared<ResidentHeightSet>();
+    std::vector<g2m::RoadSegment> road_segs;
+    for (int ix = 1; ix <= 11; ++ix) {
+        const std::int64_t x0 = kE0 + static_cast<std::int64_t>(ix - 1) * 255;
+        road_segs.push_back(g2m::RoadSegment{{x0 * 1000, (kN0 + 380) * 1000},
+                                             {(x0 + 255) * 1000, (kN0 + 380) * 1000},
+                                             /*half_width_mm=*/3000, g2m::LandClass::PavedRoad, g2m::SurfaceKind::Asphalt,
+                                             /*rank=*/3});
+        road_segs.push_back(g2m::RoadSegment{{(x0 + 60) * 1000, (kN0 + 100) * 1000},
+                                             {(x0 + 60) * 1000, (kN0 + 660) * 1000},
+                                             /*half_width_mm=*/1500, g2m::LandClass::UnpavedRoad, g2m::SurfaceKind::Gravel,
+                                             /*rank=*/1});
+    }
+    auto road_segs_ptr = std::make_shared<const std::vector<g2m::RoadSegment>>(std::move(road_segs));
+    for (int ix = 1; ix <= 11; ++ix) install_square_with_roads(grid, *road_resident, PhysTileIndex{ix, 1}, 3, cache, road_segs_ptr);
+
+    const g2m::RoadValueLut road_lut = g2m::RoadValueLut::by_land_class(
+        /*off_road=*/0, {{g2m::LandClass::PavedRoad, static_cast<std::uint16_t>(5)}, {g2m::LandClass::UnpavedRoad, static_cast<std::uint16_t>(9)}});
+    auto road_source = std::make_shared<G2mTerrainSource>(grid, road_resident,
+                                                           g2m::ps_bridge::RoadSurfaceConfig{road_lut, /*off_road=*/0});
+    ps::terrain::TileSample road_sample = make_sample(n);
+    std::vector<double> road_fill_ms;
+    for (int rep = 0; rep < 5; ++rep) {
+        for (int iy = -2; iy <= 4; ++iy) {
+            for (int ix = -2; ix <= 4; ++ix) {
+                const ps::terrain::TileKey key{PhysicsTileGrid::pack(PhysTileIndex{ix, iy})};
+                const auto t0 = Clock::now();
+                road_source->fill_tile(key, road_sample);
+                road_fill_ms.push_back(ms_since(t0));
+            }
+        }
+    }
+    expect(road_source->fill_miss_count() == 0, "A-road: fill_tile touched a missing L0 tile");
+    const Stats a_road = stats_of(road_fill_ms);
+
     // ---- B. update_heightfield_body (SetHeights) at pool 49 -------------------
     Stats b;
     {
@@ -293,6 +339,10 @@ int main() {
 
     std::printf("A. G2mTerrainSource::fill_tile (256^2, single thread)\n");
     print_stats("fill_tile", a);
+    std::printf("A-road. G2mTerrainSource::fill_tile, road mode (256^2, single thread)\n");
+    print_stats("fill_tile (road)", a_road);
+    std::printf("  road-mode extra cost per fill: mean %.4f ms %s budget 0.25 ms\n", a_road.mean - a.mean,
+                (a_road.mean - a.mean) < 0.25 ? "<" : ">=");
     std::printf("B. update_heightfield_body 256^2 (SetHeights+SetMaterials), World with pool 49\n");
     print_stats("update_heightfield_body", b);
     std::printf("C. World::step, 17 resting bodies on seams vs none (weld overhead)\n");

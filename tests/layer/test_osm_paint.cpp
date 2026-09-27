@@ -61,7 +61,7 @@ TEST_CASE("osm paint: RoadValueLut index/at/by_land_class", "[layer][osm]") {
     CHECK(RoadValueLut::index(LandClass::UnpavedRoad, SurfaceKind::Dirt) == 40); // 2*16 + 8
 
     const RoadValueLut lut =
-        RoadValueLut::by_land_class(/*off_road=*/9, {{LandClass::PavedRoad, 1}, {LandClass::UnpavedRoad, 2}});
+        RoadValueLut::by_land_class(/*off_road=*/9, {{LandClass::PavedRoad, static_cast<std::uint16_t>(1)}, {LandClass::UnpavedRoad, static_cast<std::uint16_t>(2)}});
     // Every SurfaceKind slot of a listed LandClass is overwritten - the LUT
     // is keyed by LandClass alone (roads_plan.md's "unpaved by LandClass
     // only" default).
@@ -129,7 +129,7 @@ TEST_CASE("osm paint: row-stride sub-rectangle writes stay within their own regi
     const std::vector<RoadSegment> segs{seg};
 
     const Lattice lattice{-3000, -3000, 1000, 11, 7};
-    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, 42}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, static_cast<std::uint16_t>(42)}});
 
     // Reference: a contiguous buffer, row_stride == nx.
     std::vector<std::uint16_t> reference(static_cast<std::size_t>(lattice.nx) * static_cast<std::size_t>(lattice.ny), 0);
@@ -197,7 +197,7 @@ TEST_CASE("osm paint: paint_road_blocks derives the owner L2 tile at block_level
     // both blocks' own y=195 span [49920, 50176) m): i=0 is block x=103,
     // i=1..3 are block x=104.
     const Lattice lattice{26623000, 49999000, 1000, 4, 1};
-    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, 111}, {LandClass::UnpavedRoad, 222}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, static_cast<std::uint16_t>(111)}, {LandClass::UnpavedRoad, static_cast<std::uint16_t>(222)}});
     std::vector<std::uint16_t> out(4, 0xFFFF);
 
     const RoadBlockStats stats =
@@ -226,7 +226,7 @@ TEST_CASE("osm paint: a block's own output does not depend on any other block's 
     RoadSegment seg_b2{{26600000, 50000000}, {26650000, 50000000}, 20000, LandClass::UnpavedRoad, SurfaceKind::Gravel, 5};
 
     const Lattice lattice{26623000, 50000000, 1000, 4, 1}; // i=0 -> A (x=25), i=1..3 -> B (x=26)
-    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, 111}, {LandClass::UnpavedRoad, 222}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, static_cast<std::uint16_t>(111)}, {LandClass::UnpavedRoad, static_cast<std::uint16_t>(222)}});
 
     TestLookupCtx ctx1;
     ctx1.add(owner_a, {RoadBlockStatus::Segments, std::span<const RoadSegment>(&seg_a, 1)});
@@ -354,7 +354,7 @@ TEST_CASE("osm paint: clamps - 0.71 m minimum and the 128 m halo maximum", "[lay
         CHECK(std::all_of(land_class.begin(), land_class.end(),
                            [](std::uint8_t v) { return v == static_cast<std::uint8_t>(LandClass::Unknown); }));
 
-        const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, 7}});
+        const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, static_cast<std::uint16_t>(7)}});
         std::vector<std::uint16_t> painted(9, 0);
         paint_road_segments(segs, lattice, RasterParams{}, lut, painted, 3);
         CHECK(painted[0 * 3 + 1] == 7); // y=600 <= 710: covered
@@ -381,7 +381,7 @@ TEST_CASE("osm paint: clamps - 0.71 m minimum and the 128 m halo maximum", "[lay
         rasterize_road_segments(segs, lattice, RasterParams{}, lc, sf);
         CHECK(lc[0] == static_cast<std::uint8_t>(LandClass::PavedRoad)); // unclamped: 200 m <= 500 m
 
-        const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, 7}});
+        const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, static_cast<std::uint16_t>(7)}});
         std::vector<std::uint16_t> painted(1, 0);
         paint_road_segments(segs, lattice, RasterParams{}, lut, painted, 1);
         CHECK(painted[0] == 0); // clamped to 128 m: 200 m is NOT covered
@@ -456,7 +456,7 @@ TEST_CASE("osm paint: paint_road_blocks/rasterize_road_blocks allocate nothing",
                             LandClass::UnpavedRoad, SurfaceKind::Dirt, 5};
 
     const Lattice lattice{26623000, 50000000, 1000, 4, 1}; // i=0 -> A, i=1..3 -> B
-    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, 1}, {LandClass::UnpavedRoad, 2}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, static_cast<std::uint16_t>(1)}, {LandClass::UnpavedRoad, static_cast<std::uint16_t>(2)}});
     std::vector<std::uint16_t> out(4, 0);
     std::vector<std::uint8_t> land_class(4, 0), surface(4, 0);
 

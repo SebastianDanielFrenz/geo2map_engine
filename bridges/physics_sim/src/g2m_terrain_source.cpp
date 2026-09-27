@@ -1,17 +1,31 @@
 #include "g2m/ps_bridge/g2m_terrain_source.h"
 
 #include "g2m/phys/fill_physics_heights.h"
+#include "g2m/phys/fill_physics_surfaces.h"
 
 #include "ps/backend/shape_desc.h"
+#include "ps/types.h"
 
 #include <algorithm>
 #include <cmath>
+#include <type_traits>
 
 namespace g2m::ps_bridge {
+
+// fill_physics_surfaces (g2m/phys/fill_physics_surfaces.h) writes into a
+// std::span<std::uint16_t>; passing out.cell_surface_ids (a
+// std::vector<ps::SurfaceId>) straight through relies on the two types being
+// the same width - guarded here rather than in ps/types.h itself, since this
+// is the one place g2m_phys's road painting meets ps::SurfaceId.
+static_assert(std::is_same_v<ps::SurfaceId, std::uint16_t>, "ps::SurfaceId must stay uint16_t for fill_physics_surfaces");
 
 G2mTerrainSource::G2mTerrainSource(g2m::phys::PhysicsTileGrid grid,
                                    std::shared_ptr<const g2m::phys::ResidentHeightSet> resident, ps::SurfaceId surface)
     : grid_(std::move(grid)), resident_(std::move(resident)), surface_(surface) {}
+
+G2mTerrainSource::G2mTerrainSource(g2m::phys::PhysicsTileGrid grid,
+                                   std::shared_ptr<const g2m::phys::ResidentHeightSet> resident, RoadSurfaceConfig road)
+    : grid_(std::move(grid)), resident_(std::move(resident)), surface_(road.off_road), road_(std::move(road)) {}
 
 ps::real G2mTerrainSource::tile_size_m() const { return static_cast<ps::real>(grid_.tile_size_m()); }
 
@@ -41,16 +55,31 @@ void G2mTerrainSource::fill_tile(ps::terrain::TileKey key, ps::terrain::TileSamp
     const g2m::phys::FillResult result =
         g2m::phys::fill_physics_heights<ps::real>(grid_, index, *resident_, out.heights.data(), ps::kHeightfieldNoCollision);
 
-    // Every cell gets the same single surface (PLAN.md R2.2 1b) - `out`'s
-    // vector is already sized by the caller, this only overwrites content.
-    std::fill(out.cell_surface_ids.begin(), out.cell_surface_ids.end(), surface_);
+    if (road_) {
+        // Road mode (PLAN.md G2.5a-grip section 5, commit G-c): per-cell
+        // grip from OSM roads instead of one flat surface. `out`'s vector is
+        // already sized by the caller (ITerrainSource::fill_tile's own
+        // contract) - fill_physics_surfaces only overwrites content, same as
+        // the std::fill below in uniform mode.
+        const g2m::RoadBlockStats road_stats =
+            g2m::phys::fill_physics_surfaces(grid_, index, *resident_, road_->lut, road_->off_road, out.cell_surface_ids);
+        if (road_stats.missing_blocks > 0) fill_miss_count_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        // Every cell gets the same single surface (PLAN.md R2.2 1b) - `out`'s
+        // vector is already sized by the caller, this only overwrites content.
+        std::fill(out.cell_surface_ids.begin(), out.cell_surface_ids.end(), surface_);
+    }
 
     out.samples_per_tile = samples_per_tile();
     out.tile_size_m = tile_size_m();
     out.tile_origin_xy = tile_origin_xy(key);
 
     // Priority matches g2m::phys::FillResult's own documented priority:
-    // MissingTile over HadNoData.
+    // MissingTile over HadNoData. Road mode's own missing_blocks fold into
+    // the SAME fill_miss_count_ above (fill_tile's doc comment) - a
+    // MissingTile height result on top of a road-side miss double-counts by
+    // one, which is fine: this counter is a witness ("did anything go
+    // missing this fill"), not an exact per-cause tally.
     if (result == g2m::phys::FillResult::MissingTile) {
         fill_miss_count_.fetch_add(1, std::memory_order_relaxed);
     } else if (result == g2m::phys::FillResult::HadNoData) {

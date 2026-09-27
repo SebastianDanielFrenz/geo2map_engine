@@ -1129,6 +1129,15 @@ happens in this step (open question, roads_plan.md).
   - copies samples from the resident immutable `terrain.height` tiles (up to 4 g2m tiles per physics tile);
   - writes ABSOLUTE heights (orthometric, session frame). physics_sim's TileManager chooses a per-tile datum itself (R1, physics_sim 1f1e0f8: the midpoint of the tile's range snapped to 128 m, subtracted before upload, added back via the body pose) and counts tiles with more than ±200 m of local relief (`World::terrain_relief_overflow_count`). Measured at 1 m spacing: exact on flat ground, ≤ 1.15 mm on a 30 % slope, a 5 mm step kept to ~10 µm. Error grows with local relief inside a Jolt block, not with absolute height;
   - maps `SurfaceKind`/`LandClass` to `SurfaceId` by name through the game's table.
+  - **G-c (PLAN.md G2.5a-grip, roads_plan.md):** a second constructor,
+    `G2mTerrainSource(grid, resident, RoadSurfaceConfig{lut, off_road})`,
+    gives `fill_tile` per-cell `SurfaceId` from OSM roads instead of one
+    fixed value - it defers to `g2m::phys::fill_physics_surfaces` (cell-
+    centre classification against the same resident tiles' road segment
+    lists) rather than `fill_physics_heights`'s flat fill. A road block's
+    own `Missing` count folds into the existing `fill_miss_count()` (never
+    a silent fall-back to grass/off-road). The uniform (flat `SurfaceId`)
+    constructor and its `fill_tile` path are unchanged - see 8.5.
 - `TerrainConfig`:
   - `suppress_terrain_under_static_geometry = false`;
   - `max_resident_tiles` sized from the radius (~40 at 400 m);
@@ -1271,9 +1280,45 @@ scripted drive; streaming at 100 m/s (tested here only up to a 100 m/s
 random-walk interest point in the queued-key invariant test, never as an
 acceptance bound); land-class surfaces (`G2mTerrainSource` writes one fixed
 `ps::SurfaceId` per instance, default `"asphalt"`, resolved by the caller
-through `SurfaceTable` - see 8.4); an LRU for the `WorldTerrain` decoded-tile
-cache; the PHYS-045 mesh-spike follow-up implied by the corner-path
-deviation above.
+through `SurfaceTable` - see 8.4, now superseded for road mode by G-c
+below - the uniform-mode constructor is still exactly this); an LRU for the
+`WorldTerrain` decoded-tile cache; the PHYS-045 mesh-spike follow-up implied
+by the corner-path deviation above.
+
+**G2.5a-grip G-c as built: per-cell grip from OSM roads in the bridge
+(roads_plan.md, 2026-09-27) - done.** Builds on G-a/G-b (`346ad50`,
+`bddc238`: `g2m::paint_road_segments`/`paint_road_blocks`/
+`rasterize_road_blocks`, `ResidentHeightSet`'s road-carrying `find`/`install`
+overloads, `g2m::phys::fill_physics_surfaces`) with the bridge-side seam:
+
+- `G2mTerrainSource`'s second (road-mode) constructor and `RoadSurfaceConfig`
+  - see 8.1's own new bullet.
+- **Tests** (`g2m_bridge_tests`, bridge-release leg):
+  `test_g2m_terrain_source_roads.cpp` (a real `World`/`TileManager`/Jolt
+  heightfield shape-cast reads the paved id on-road and `off_road` 30 m off;
+  `fill_tile` allocation-free in road mode across concurrent
+  `ps::jobs::JobSystem::parallel_batches` jobs, plus its negative control),
+  `test_render_vs_physics_roads.cpp` (the render-vs-physics cell invariant:
+  every physics cell `fill_physics_surfaces` paints as road has a same-class
+  render-L0 corner among `rasterize_road_blocks`'s own output at
+  `raster_params_for_render_level(0)`, and vice versa - a physics cell's own
+  classification point, an integer metre, sits exactly at the shared corner
+  of its 4 render-L0/DGM1-sample cells), and a second `test_determinism.cpp`
+  `TEST_CASE` (road mode at 1/4/10 workers, gated delayed installs via the
+  same `TokenFetch`/`HeightTileLoader`/`PhysicsTerrainStreamer` machinery as
+  the existing heights-only case, `LoaderConfig::require_roads = true`):
+  since generic rigid-body dynamics do not depend on `SurfaceId` (no
+  per-surface friction/combine code in `jolt_backend.cpp`), this samples
+  `ps::ShapeCastHit::surface` at fixed on-/off-road points directly rather
+  than relying on `state_hash` divergence. The existing uniform-mode
+  determinism `TEST_CASE` (final hash `e1a5c9079787bd41`, 8.5 above) is
+  unchanged.
+- **`bench_bridge_fill`'s new A-road case**: `fill_tile` in road mode over a
+  resident set carrying two road segments per L0 tile; measured extra cost
+  per fill over the uniform-mode A case: mean 0.0068 ms (A 0.0414 ms ->
+  A-road 0.0481 ms), well under the ~0.25 ms budget - no pre-filter
+  contingency needed.
+- **Deviations:** none from the approved scope.
 
 ---
 

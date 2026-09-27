@@ -168,7 +168,15 @@ geo2map_engine/
                                       for the streaming determinism witness (PLAN.md R2.2 section 2).
                                       make_terrain_config(interest_radius_m, fills_per_tick) builds a
                                       ps::terrain::TerrainConfig with suppression/precompute off and
-                                      max_resident_tiles = (2*ceil(r/255)+3)^2
+                                      max_resident_tiles = (2*ceil(r/255)+3)^2.
+                                      Second constructor, road mode (PLAN.md G2.5a-grip, G-c):
+                                      G2mTerrainSource(grid, resident, RoadSurfaceConfig{lut, off_road}) -
+                                      fill_tile instead defers to g2m::phys::fill_physics_surfaces (per-cell
+                                      SurfaceId from OSM roads riding on the same ResidentHeightSet entries);
+                                      a road block's own Missing count folds into the same
+                                      fill_miss_count(). static_assert(ps::SurfaceId == uint16_t) guards the
+                                      LUT's value type. The uniform (flat SurfaceId) constructor and its
+                                      fill_tile path are unchanged
     src/                               version.cpp, g2m_terrain_source.cpp
     tests/                             g2m_bridge_tests (bridge-release leg only): test_smoke.cpp (links
                                       against ps_core/Jolt and g2m_phys), test_g2m_terrain_source.cpp
@@ -200,10 +208,28 @@ geo2map_engine/
                                       main, CTest smoke, labels bench;bridge, asserts no fill miss/starved
                                       tile, never timing): ms per fill_tile, per update_heightfield_body at
                                       pool 49, weld overhead per tick, end-to-end fill ticks at F 1/2, and
-                                      the plan-1b F decision (make_terrain_config's doc records it)
+                                      the plan-1b F decision (make_terrain_config's doc records it), plus an
+                                      A-road case (G-c): the same fill_tile measurement in road mode, budget
+                                      ~0.25 ms extra per fill over the uniform-mode A case.
                                       Deliberately does not link tests/mesh/alloc_counter.cpp or
                                       tests/phys/alloc_counter.cpp (both override global operator new,
                                       which clashes with ps_core's own override)
+                                      G-c (PLAN.md G2.5a-grip): test_g2m_terrain_source_roads.cpp (road-mode
+                                      shape cast through a real World/TileManager/Jolt heightfield reads the
+                                      paved id on-road and off_road 30 m off; fill_tile zero-alloc in road
+                                      mode across concurrent jobs, plus its negative control),
+                                      test_render_vs_physics_roads.cpp (render-vs-physics cell invariant:
+                                      every physics cell fill_physics_surfaces paints as road has a
+                                      same-class render-L0 corner among rasterize_road_blocks's own output,
+                                      and vice versa - no physics_sim/Jolt type, pure g2m_phys/g2m_layer
+                                      comparison). test_determinism.cpp additionally covers road-mode
+                                      determinism (gated delayed installs, roads riding on the same
+                                      TokenFetch/HeightTileLoader/PhysicsTerrainStreamer machinery,
+                                      LoaderConfig::require_roads = true): sampled ps::ShapeCastHit::surface
+                                      at fixed on-road/off-road points identical at 1/4/10 workers - generic
+                                      rigid-body dynamics do not depend on SurfaceId, so state_hash alone
+                                      would not catch a road-painting bug. bridge_test_support.h gained
+                                      install_square_with_roads (install_square's road-carrying counterpart).
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
                                       src_landcover, src_osm, pack, release_manifest, protocol, cache_db
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)

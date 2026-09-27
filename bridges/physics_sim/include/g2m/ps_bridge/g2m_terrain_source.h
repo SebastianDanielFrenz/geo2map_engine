@@ -22,6 +22,7 @@
 // terrain representations meet.
 #pragma once
 
+#include "g2m/layer/osm_roads.h"
 #include "g2m/phys/physics_grid.h"
 #include "g2m/phys/resident_heights.h"
 
@@ -32,8 +33,21 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace g2m::ps_bridge {
+
+// Road mode's own config (PLAN.md G2.5a-grip section 5, commit G-c): the
+// road-value LUT fill_tile resolves every painted cell through
+// (g2m::phys::fill_physics_surfaces, itself g2m::phys::detail::surface_lookup
+// over the ResidentHeightSet's road lists) plus the id an off-road cell
+// gets. No RasterParams field - fill_physics_surfaces hardcodes
+// RasterParams{} (its own paint_road_blocks call), so there is nothing here
+// for a caller to override yet.
+struct RoadSurfaceConfig {
+    g2m::RoadValueLut lut;
+    ps::SurfaceId off_road = ps::kInvalidSurfaceId;
+};
 
 class G2mTerrainSource final : public ps::terrain::ITerrainSource {
 public:
@@ -47,6 +61,16 @@ public:
     // are R2.3).
     G2mTerrainSource(g2m::phys::PhysicsTileGrid grid, std::shared_ptr<const g2m::phys::ResidentHeightSet> resident,
                       ps::SurfaceId surface);
+
+    // Road mode (PLAN.md G2.5a-grip section 1/5, commit G-c): fill_tile
+    // resolves cell_surface_ids from `resident`'s own road lists via
+    // g2m::phys::fill_physics_surfaces instead of one flat SurfaceId - per-
+    // cell grip from OSM roads. Heights are unaffected (still
+    // g2m::phys::fill_physics_heights, same as the constructor above).
+    // `road.off_road` is what every non-road cell gets, whether or not the
+    // height side of the same fill_tile call also missed.
+    G2mTerrainSource(g2m::phys::PhysicsTileGrid grid, std::shared_ptr<const g2m::phys::ResidentHeightSet> resident,
+                      RoadSurfaceConfig road);
 
     [[nodiscard]] ps::real tile_size_m() const override;
     [[nodiscard]] std::uint32_t samples_per_tile() const override;
@@ -63,7 +87,10 @@ public:
     // the per-tile datum, not this source). A NoData sample, or one from a
     // confirmed-absent (404) L0 tile, becomes ps::kHeightfieldNoCollision
     // (a hole) - see g2m::phys::fill_physics_heights's own FillResult
-    // documentation for exactly which case is which.
+    // documentation for exactly which case is which. cell_surface_ids comes
+    // from g2m::phys::fill_physics_surfaces in road mode (constructed with a
+    // RoadSurfaceConfig), or is filled uniformly with `surface_` otherwise -
+    // both branches are the same allocation-free/lock-free contract.
     void fill_tile(ps::terrain::TileKey key, ps::terrain::TileSample& out) const override;
 
     // Diagnostic counters (PLAN.md R2.2 1b), relaxed atomics incremented
@@ -71,7 +98,12 @@ public:
     // fill that touched at least one L0 key never installed in the
     // ResidentHeightSet (g2m::phys::FillResult::MissingTile - the runtime
     // witness that streaming/gating failed to keep up, see the plan's
-    // "Determinism argument"). nodata_fill_count() counts a fill that hit a
+    // "Determinism argument"). In road mode it ALSO counts a fill whose
+    // surface side touched a Missing L0 key (a non-resident key, or a
+    // resident one with no roads list at all - g2m::phys::RoadBlockStats::
+    // missing_blocks > 0, fill_physics_surfaces.h's own Outcomes table) -
+    // one shared counter, never silently grass either way.
+    // nodata_fill_count() counts a fill that hit a
     // genuine in-coverage NoData sample (FillResult::HadNoData) -
     // informational only, never a correctness signal on its own (a
     // confirmed-absent/404 L0 tile does NOT count here, see
@@ -83,6 +115,7 @@ private:
     g2m::phys::PhysicsTileGrid grid_;
     std::shared_ptr<const g2m::phys::ResidentHeightSet> resident_;
     ps::SurfaceId surface_;
+    std::optional<RoadSurfaceConfig> road_; // road mode iff set (PLAN.md G2.5a-grip section 5)
     mutable std::atomic<std::uint64_t> fill_miss_count_{0};
     mutable std::atomic<std::uint64_t> nodata_fill_count_{0};
 };

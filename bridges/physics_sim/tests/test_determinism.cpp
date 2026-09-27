@@ -15,8 +15,18 @@
 // This is plan section 2's determinism argument made executable: residency
 // only changes WHEN a tick runs, never WHAT it computes.
 // fill_miss_count() == 0 is the runtime witness.
+//
+// PLAN.md G2.5a-grip section 6 (commit G-c): a second TEST_CASE below covers
+// road mode's own determinism the same way - gated delayed installs (roads
+// riding along with heights on the SAME TokenFetch/streamer machinery above)
+// at 1/4/10 workers. Generic rigid-body dynamics do not depend on SurfaceId
+// (no per-surface friction/combine code in jolt_backend.cpp), so
+// World::state_hash alone would not be sensitive to a road-painting bug;
+// that TEST_CASE instead samples ps::ShapeCastHit::surface at fixed points
+// directly and compares those sequences across worker counts.
 #include "bridge_test_support.h"
 
+#include "g2m/layer/osm_roads.h"
 #include "g2m/phys/height_tile_loader.h"
 #include "g2m/phys/physics_streamer.h"
 #include "g2m/ps_bridge/g2m_terrain_source.h"
@@ -38,6 +48,10 @@
 #include <vector>
 
 using namespace g2m_bridge_test;
+using g2m::LandClass;
+using g2m::RoadSegment;
+using g2m::RoadValueLut;
+using g2m::SurfaceKind;
 using g2m::TileKey;
 using g2m::phys::GateStatus;
 using g2m::phys::HeightTileLoader;
@@ -48,6 +62,7 @@ using g2m::phys::PhysTileIndex;
 using g2m::phys::ResidentHeightSet;
 using g2m::ps_bridge::G2mTerrainSource;
 using g2m::ps_bridge::make_terrain_config;
+using g2m::ps_bridge::RoadSurfaceConfig;
 
 namespace {
 
@@ -76,7 +91,12 @@ SyntheticTileCache& wavy_cache() {
 // (vault TOOL-031).
 class TokenFetch final : public g2m::phys::IHeightTileFetch {
 public:
-    explicit TokenFetch(SyntheticTileCache& cache) : cache_(cache) {}
+    // `roads` (PLAN.md G2.5a-grip section 3, commit G-c) rides on every
+    // served tile unchanged - defaulted null, so every existing call site
+    // (the heights-only run() below) keeps returning FetchResult{Ok, tile,
+    // nullptr} exactly as before.
+    explicit TokenFetch(SyntheticTileCache& cache, std::shared_ptr<const std::vector<g2m::RoadSegment>> roads = nullptr)
+        : cache_(cache), roads_(std::move(roads)) {}
 
     g2m::phys::FetchResult fetch(const TileKey& key) override {
         {
@@ -85,8 +105,12 @@ public:
             if (!open_) --tokens_;
             ++served_;
         }
-        return g2m::phys::FetchResult{g2m::Status::Ok, cache_.get(key), nullptr};
+        return g2m::phys::FetchResult{g2m::Status::Ok, cache_.get(key), roads_};
     }
+    // True iff constructed with a roads list - lets a road-mode caller set
+    // LoaderConfig::require_roads (a null roads_ here would otherwise be
+    // indistinguishable from "no roads at this tile", never retried).
+    bool provides_roads() const override { return roads_ != nullptr; }
     void grant(int n) {
         {
             std::lock_guard<std::mutex> lk(m_);
@@ -108,6 +132,7 @@ public:
 
 private:
     SyntheticTileCache& cache_;
+    std::shared_ptr<const std::vector<g2m::RoadSegment>> roads_;
     mutable std::mutex m_;
     std::condition_variable cv_;
     int tokens_ = 0;
@@ -296,6 +321,106 @@ void check_run(const RunResult& r) {
     CHECK(r.box_end.iy >= r.box_start.iy + 1); // crossed y = 255.5
 }
 
+// PLAN.md G2.5a-grip section 6 (commit G-c): road-mode determinism. One
+// long paved capsule, installed via the SAME TokenFetch/HeightTileLoader/
+// PhysicsTerrainStreamer gate as run() above (roads riding along with
+// heights on every completion - LoaderConfig::require_roads makes a
+// completion wait for both, physics_streamer.cpp's own install() call
+// already forwards roads through unchanged). Giving every fetched L0 tile
+// the SAME (unclipped) segment list is equivalent to a real per-tile-
+// clipped extraction: paint_road_blocks/rasterize_road_blocks
+// (osm_roads.cpp's for_each_block) only ever paint a block's own sub-
+// rectangle, never anything a segment's geometry reaches beyond it.
+constexpr std::uint16_t kRoadOffRoadId = 1, kRoadPavedId = 5;
+constexpr double kRoadY = kStartY + 40.0;        // the capsule's own local y
+constexpr int kRoadStepTicks = kPrimeTicks + 10; // gate should be ready well before this (K = 26 at F = 1)
+
+std::shared_ptr<const std::vector<RoadSegment>> straight_road_det() {
+    const std::int64_t y_mm = (kN0 + static_cast<std::int64_t>(kRoadY)) * 1000;
+    const RoadSegment seg{{(kE0 + static_cast<std::int64_t>(kStartX) - 2000) * 1000, y_mm},
+                         {(kE0 + static_cast<std::int64_t>(kStartX) + 2000) * 1000, y_mm},
+                         /*half_width_mm=*/3000, LandClass::PavedRoad, SurfaceKind::Asphalt, /*rank=*/1};
+    return std::make_shared<const std::vector<RoadSegment>>(std::vector<RoadSegment>{seg});
+}
+
+struct RoadRunResult {
+    std::vector<ps::SurfaceId> samples;
+    std::uint64_t fill_miss = 0;
+    std::size_t max_starved = 0;
+    int frozen_attempts = 0;
+    std::uint64_t tiles_served = 0;
+};
+
+// A static interest point at kStartX/kStartY (no bodies - road painting is
+// what is under test, not vehicle dynamics), gated exactly like run()'s own
+// Mode::Gated: World::step is withheld while the streamer reports not
+// ready, so residency only ever changes between ticks, never mid-tick -
+// "installs spread across steps" without ever letting fill_tile see a
+// still-loading key (fill_miss_count() == 0 below is the witness, same as
+// run()'s own).
+RoadRunResult run_roads(int workers) {
+    RoadRunResult out;
+    const PhysicsTileGrid grid(test_frame());
+    auto resident = std::make_shared<ResidentHeightSet>();
+
+    auto fetch = std::make_shared<TokenFetch>(wavy_cache(), straight_road_det());
+    HeightTileLoader loader(fetch, g2m::phys::LoaderConfig{/*workers=*/2, /*max_attempts=*/4,
+                                                          /*backoff=*/std::chrono::milliseconds{50},
+                                                          /*require_roads=*/true});
+    PhysicsTerrainStreamer streamer(grid, *resident, loader, g2m::phys::StreamerConfig{});
+    OpenOnExit open_guard; // declared after loader/streamer, so destroyed first - see run()'s own comment
+    open_guard.fetch = fetch.get();
+
+    auto source = std::make_shared<G2mTerrainSource>(
+        grid, resident, RoadSurfaceConfig{RoadValueLut::by_land_class(kRoadOffRoadId, {{LandClass::PavedRoad, kRoadPavedId}}),
+                                          kRoadOffRoadId});
+    ps::WorldConfig cfg;
+    cfg.tick_rate_hz = 240.0;
+    cfg.job_workers = workers;
+    ps::World world(cfg);
+    world.set_terrain_source(source, make_terrain_config(kRadius, 1));
+
+    auto try_step = [&]() -> bool {
+        const ps::Vec3 p{kStartX, kStartY, 0.0};
+        const InterestPoint ip{0, p.x, p.y, 0.0, 0.0, kRadius};
+        const GateStatus status = streamer.update({&ip, 1});
+        world.set_terrain_interest_point(0, p, kRadius);
+        if (!status.ready) return false; // frozen: the World is untouched
+        world.step();
+        return true;
+    };
+
+    int stepped = 0;
+    while (stepped < kRoadStepTicks) {
+        if (try_step()) {
+            ++stepped;
+        } else {
+            ++out.frozen_attempts;
+            if (out.frozen_attempts % 3 == 0) fetch->grant(1); // one tile per 3 frozen attempts
+            spin_for(std::chrono::microseconds(150));
+            if (out.frozen_attempts > 200000) break; // reported by the caller (fill_miss/samples below)
+        }
+        out.max_starved = std::max(out.max_starved, world.terrain_starved_tile_count());
+    }
+
+    out.fill_miss = source->fill_miss_count();
+    out.tiles_served = fetch->served();
+
+    ps::IRigidBackend& backend = world.backend();
+    auto cast = [&](double x, double y) {
+        const ps::Pose start{ps::Vec3{x, y, 300.0}, ps::Quat::identity()};
+        const ps::ShapeCastHit hit = backend.shape_cast(ps::SphereShape{0.05}, start, ps::Vec3{0, 0, -1}, 400.0);
+        return hit.hit ? hit.surface : ps::kInvalidSurfaceId;
+    };
+    const double xs[3] = {kStartX - 30.0, kStartX, kStartX + 30.0};
+    for (const double x : xs) {
+        out.samples.push_back(cast(x, kRoadY));         // on the road's own line
+        out.samples.push_back(cast(x, kRoadY - 30.0));  // 30 m off, one side
+        out.samples.push_back(cast(x, kRoadY + 30.0));  // 30 m off, the other side
+    }
+    return out;
+}
+
 } // namespace
 
 TEST_CASE("determinism: per-tick state_hash identical at 1/4/10 workers and up-front vs gated delayed installs",
@@ -330,4 +455,41 @@ TEST_CASE("determinism: per-tick state_hash identical at 1/4/10 workers and up-f
     CHECK(gated4.freezes_after_spawn >= 1);
     CHECK(gated10.freezes_after_spawn >= 1);
     CHECK(up1.frozen_attempts == 0);
+}
+
+TEST_CASE("road-mode determinism: per-tick sampled surface ids identical at 1/4/10 workers, gated delayed installs",
+         "[bridge][terrain][determinism][roads]") {
+    const RoadRunResult r1 = run_roads(1);
+    const RoadRunResult r4 = run_roads(4);
+    const RoadRunResult r10 = run_roads(10);
+
+    std::printf("road determinism: workers 1/4/10 fill_miss %llu/%llu/%llu, max starved %zu/%zu/%zu, tiles served "
+                "%llu/%llu/%llu, frozen attempts %d/%d/%d\n",
+                static_cast<unsigned long long>(r1.fill_miss), static_cast<unsigned long long>(r4.fill_miss),
+                static_cast<unsigned long long>(r10.fill_miss), r1.max_starved, r4.max_starved, r10.max_starved,
+                static_cast<unsigned long long>(r1.tiles_served), static_cast<unsigned long long>(r4.tiles_served),
+                static_cast<unsigned long long>(r10.tiles_served), r1.frozen_attempts, r4.frozen_attempts,
+                r10.frozen_attempts);
+
+    REQUIRE(r1.samples.size() == r4.samples.size());
+    REQUIRE(r1.samples.size() == r10.samples.size());
+    CHECK(r1.fill_miss == 0);
+    CHECK(r4.fill_miss == 0);
+    CHECK(r10.fill_miss == 0);
+    CHECK(r1.max_starved == 0);
+    CHECK(r4.max_starved == 0);
+    CHECK(r10.max_starved == 0);
+    CHECK(r1.samples == r4.samples);
+    CHECK(r1.samples == r10.samples);
+
+    // The samples really distinguish road from off-road (a vacuous
+    // all-off_road result would pass the equality checks above for the
+    // wrong reason).
+    bool saw_paved = false, saw_off_road = false;
+    for (const ps::SurfaceId id : r1.samples) {
+        if (id == kRoadPavedId) saw_paved = true;
+        if (id == kRoadOffRoadId) saw_off_road = true;
+    }
+    CHECK(saw_paved);
+    CHECK(saw_off_road);
 }

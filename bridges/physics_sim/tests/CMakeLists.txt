@@ -14,7 +14,9 @@
 add_executable(g2m_bridge_tests
   test_smoke.cpp
   test_g2m_terrain_source.cpp
+  test_g2m_terrain_source_roads.cpp
   test_render_vs_jolt.cpp
+  test_render_vs_physics_roads.cpp
   test_residency.cpp
   test_determinism.cpp
   test_seam_crossing.cpp

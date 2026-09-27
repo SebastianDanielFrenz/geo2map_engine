@@ -113,7 +113,7 @@ Entry painted_entry() {
     const std::vector<RoadSegment> segs = g2m::extract_road_segments(set, zone, RoadStyle::default_style());
     const Lattice lat = lattice_for(segs, /*spacing_mm=*/1000);
 
-    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, 100}, {LandClass::UnpavedRoad, 50}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, static_cast<std::uint16_t>(100)}, {LandClass::UnpavedRoad, static_cast<std::uint16_t>(50)}});
     std::vector<std::uint16_t> painted(static_cast<std::size_t>(lat.nx) * static_cast<std::size_t>(lat.ny), 0);
     g2m::paint_road_segments(segs, lat, RasterParams{}, lut, painted, static_cast<std::size_t>(lat.nx));
 
@@ -172,7 +172,7 @@ Lattice block_lattice() {
     lat.origin_e_mm = 100 * 1024 * 1000; // tile 100's west edge, exactly
     lat.origin_n_mm = 200 * 1024 * 1000; // tile *00's south edge, exactly
     lat.spacing_mm = 8000;
-    lat.nx = (3 * 1024 * 1000) / lat.spacing_mm; // 100..103*1024 m: the whole 3-tile span
+    lat.nx = static_cast<int>((3 * 1024 * 1000) / lat.spacing_mm); // 100..103*1024 m: the whole 3-tile span
     lat.ny = 8;
     return lat;
 }
@@ -181,7 +181,7 @@ Entry paint_blocks_entry(const char* name, int block_level) {
     BlockCtx ctx = build_block_ctx();
     const geo::UtmZone zone{32, geo::Hemisphere::North};
     const Lattice lat = block_lattice();
-    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, 100}, {LandClass::UnpavedRoad, 50}});
+    const RoadValueLut lut = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, static_cast<std::uint16_t>(100)}, {LandClass::UnpavedRoad, static_cast<std::uint16_t>(50)}});
     std::vector<std::uint16_t> out(static_cast<std::size_t>(lat.nx) * static_cast<std::size_t>(lat.ny), 0xFFFF);
 
     const RoadBlockStats stats =
