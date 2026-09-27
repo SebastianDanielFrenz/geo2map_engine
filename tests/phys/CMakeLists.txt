@@ -9,6 +9,7 @@ add_executable(g2m_phys_tests
   test_physics_grid.cpp
   test_resident_heights.cpp
   test_fill_physics_heights.cpp
+  test_fill_physics_surfaces.cpp
   test_height_tile_loader.cpp
   test_physics_streamer.cpp
   alloc_counter.cpp

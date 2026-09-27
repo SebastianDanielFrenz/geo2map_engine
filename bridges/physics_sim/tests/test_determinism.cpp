@@ -85,7 +85,7 @@ public:
             if (!open_) --tokens_;
             ++served_;
         }
-        return g2m::phys::FetchResult{g2m::Status::Ok, cache_.get(key)};
+        return g2m::phys::FetchResult{g2m::Status::Ok, cache_.get(key), nullptr};
     }
     void grant(int n) {
         {

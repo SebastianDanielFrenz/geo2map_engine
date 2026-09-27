@@ -19,6 +19,7 @@
 
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/height_tile.h"
+#include "g2m/layer/osm_roads.h"
 
 #include <cstddef>
 #include <memory>
@@ -39,12 +40,32 @@ public:
     // Lookup above) so a caller can read it unconditionally.
     Lookup find(const TileKey& key, const HeightTile** out) const noexcept;
 
-    // Installs (or replaces) `key`'s entry. `tile == nullptr` records a
+    // Same lookup, additionally writing the entry's roads (PLAN.md
+    // G2.5a-grip section 3) into `*roads_out` - null for Missing/Absent, and
+    // for Resident whatever install() last stored for this key (itself null
+    // unless the 3-arg install() overload below was used - see
+    // fill_physics_surfaces.h for how a null roads on an otherwise-Resident
+    // key is treated). A separate overload rather than a default parameter
+    // on the 2-arg find() above, so every existing heights-only call site
+    // keeps compiling unchanged.
+    Lookup find(const TileKey& key, const HeightTile** out,
+                std::shared_ptr<const std::vector<RoadSegment>>* roads_out) const noexcept;
+
+    // Installs (or replaces) `key`'s entry, roads left null (heights-only -
+    // the pre-G2.5a-grip behaviour, unchanged: replacing an entry always
+    // replaces its roads too, never merges). `tile == nullptr` records a
     // confirmed Absent (the loader's 404 outcome) - a deliberately different
     // state from "not installed at all" (Missing): once a key is installed,
     // find() never reports Missing for it again until a retain_only() call
     // evicts it.
     void install(const TileKey& key, std::shared_ptr<const HeightTile> tile);
+
+    // Same, additionally installing `roads` (PLAN.md G2.5a-grip section 3) -
+    // the owner L2 tile's own road segment list, riding on this L0 entry
+    // (null if roads were never attempted for this key; a non-null empty
+    // list is a confirmed "no drivable ways", see fill_physics_surfaces.h).
+    void install(const TileKey& key, std::shared_ptr<const HeightTile> tile,
+                 std::shared_ptr<const std::vector<RoadSegment>> roads);
 
     // Keeps only the entries whose key appears in `keep_sorted` (which must
     // already be sorted ascending by TileKey::packed(), duplicates allowed);
@@ -58,7 +79,8 @@ public:
 private:
     struct Entry {
         TileKey key;
-        std::shared_ptr<const HeightTile> tile; // nullptr => Absent
+        std::shared_ptr<const HeightTile> tile;                    // nullptr => Absent
+        std::shared_ptr<const std::vector<RoadSegment>> roads;      // see the 3-arg install() above
     };
     // Sorted ascending by key.packed(), unique by key.
     std::vector<Entry> entries_;

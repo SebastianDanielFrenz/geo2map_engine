@@ -31,10 +31,17 @@
 // exception thrown out of fetch() are both treated like a 500. Failed is
 // reported, never turned into Absent: an Absent install would silently put
 // holes where coverage exists.
+//
+// PLAN.md G2.5a-grip section 3: with LoaderConfig::require_roads set, a 200
+// Ok with a tile but a null FetchResult::roads is ALSO treated like a 500
+// (retried, then Failed after the budget) - the same "never silently
+// missing" rule, extended to roads. require_roads defaults false, so
+// heights-only behaviour (every existing caller) is unchanged.
 #pragma once
 
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/height_tile.h"
+#include "g2m/layer/osm_roads.h"
 #include "g2m/layer/release.h"
 #include "g2m/layer/terrain_layers.h"
 #include "g2m/server/protocol.h"
@@ -56,9 +63,16 @@ namespace g2m::phys {
 
 // One fetch's outcome. `tile` is set only when status == Status::Ok. Heap
 // only: a HeightTile is 256 KiB (vault TOOL-039 - never a value/stack copy).
+// `roads` (PLAN.md G2.5a-grip section 3) is that L0 key's owner L2 tile's own
+// road segment list - null unless the fetch is road-aware (provides_roads())
+// and the underlying data actually has one; a non-null-but-empty list is a
+// confirmed "no drivable ways" (RoadBlockStatus::None downstream,
+// fill_physics_surfaces.h), distinct from null ("never even attempted" /
+// "load failed", RoadBlockStatus::Missing downstream).
 struct FetchResult {
     Status status = Status::Internal;
     std::shared_ptr<const HeightTile> tile;
+    std::shared_ptr<const std::vector<RoadSegment>> roads;
 };
 
 // Fetches one DGM1 L0 height tile. Blocking; must be thread-safe (called
@@ -67,6 +81,13 @@ class IHeightTileFetch {
 public:
     virtual ~IHeightTileFetch() = default;
     virtual FetchResult fetch(const TileKey& key) = 0;
+
+    // True iff this fetch populates FetchResult::roads (PLAN.md G2.5a-grip
+    // section 3) - a capability query a caller enabling LoaderConfig::
+    // require_roads should check before construction (racing_game's own
+    // hard-error list, out of this library's scope). Default false:
+    // heights-only by default, like TransportHeightTileFetch below.
+    virtual bool provides_roads() const { return false; }
 };
 
 // Fetches through a g2m ITransport (in-process server now, HTTP later):
@@ -101,6 +122,8 @@ class DelayedFetch final : public IHeightTileFetch {
 public:
     DelayedFetch(std::shared_ptr<IHeightTileFetch> inner, std::chrono::milliseconds base, std::uint32_t seed);
     FetchResult fetch(const TileKey& key) override;
+    // Forwards `inner`'s own capability (PLAN.md G2.5a-grip section 3).
+    bool provides_roads() const override { return inner_->provides_roads(); }
 
     // The delay fetch(key) sleeps for (exposed for tests).
     std::chrono::milliseconds delay_for(const TileKey& key) const;
@@ -121,6 +144,7 @@ struct LoadedHeightTile {
     TileKey key;
     LoadOutcome outcome = LoadOutcome::Failed;
     std::shared_ptr<const HeightTile> tile;
+    std::shared_ptr<const std::vector<RoadSegment>> roads; // set only when outcome == Ready (see FetchResult::roads)
     int attempts = 0;    // fetch() calls made for this completion (>= 1)
     Status last_status = Status::Internal; // status of the last attempt (diagnostics)
 };
@@ -131,6 +155,12 @@ struct LoaderConfig {
     // Wait before retry n (n = 1, 2, ...) is backoff * 2^(n-1): 50/100/200 ms
     // at the defaults. Interrupted at once by the destructor.
     std::chrono::milliseconds backoff{50};
+    // PLAN.md G2.5a-grip section 3: a 200 Ok with a tile but a null
+    // FetchResult::roads is treated like a 500 (Retry, then Failed after
+    // max_attempts) instead of Ready - the same "never silently missing"
+    // rule as a 200 without a tile at all. false (the default) keeps
+    // heights-only behaviour bit-identical.
+    bool require_roads = false;
 };
 
 struct LoaderStats {

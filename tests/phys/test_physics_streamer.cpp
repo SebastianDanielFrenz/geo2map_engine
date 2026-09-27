@@ -34,6 +34,7 @@
 #include <thread>
 #include <vector>
 
+using g2m::RoadSegment;
 using g2m::Status;
 using g2m::TileKey;
 using g2m::geo::Hemisphere;
@@ -79,6 +80,18 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         failing_.clear();
     }
+    // PLAN.md G2.5a-grip section 3: every OTHER 200 response carries a real
+    // (if empty) roads list by default (empty_roads_ below); a key marked
+    // here gets FetchResult::roads left null on every 200 instead - the
+    // require_roads "never silently missing" freeze case.
+    void set_no_roads(const TileKey& key) {
+        std::lock_guard<std::mutex> lk(m_);
+        no_roads_.insert(key.packed());
+    }
+    void clear_no_roads(const TileKey& key) {
+        std::lock_guard<std::mutex> lk(m_);
+        no_roads_.erase(key.packed());
+    }
     void open() {
         {
             std::lock_guard<std::mutex> lk(m_);
@@ -101,11 +114,12 @@ public:
         order_.push_back(key);
         cv_.wait(lk, [this] { return open_; });
         ++calls_[key.packed()];
-        if (failing_.count(key.packed()) != 0) return FetchResult{Status::Unavailable, nullptr};
+        if (failing_.count(key.packed()) != 0) return FetchResult{Status::Unavailable, nullptr, nullptr};
         if (has_coverage_ && (key.x < x0_ || key.x > x1_ || key.y < y0_ || key.y > y1_)) {
-            return FetchResult{Status::NotFound, nullptr};
+            return FetchResult{Status::NotFound, nullptr, nullptr};
         }
-        return FetchResult{Status::Ok, tile_};
+        if (no_roads_.count(key.packed()) != 0) return FetchResult{Status::Ok, tile_, nullptr}; // roads left null
+        return FetchResult{Status::Ok, tile_, empty_roads_};
     }
 
 private:
@@ -113,9 +127,11 @@ private:
     std::condition_variable cv_;
     bool open_;
     std::shared_ptr<const g2m::HeightTile> tile_;
+    std::shared_ptr<const std::vector<RoadSegment>> empty_roads_ = std::make_shared<const std::vector<RoadSegment>>();
     bool has_coverage_ = false;
     std::int32_t x0_ = 0, y0_ = 0, x1_ = 0, y1_ = 0;
     std::set<std::uint64_t> failing_;
+    std::set<std::uint64_t> no_roads_;
     std::map<std::uint64_t, int> calls_;
     std::vector<TileKey> order_;
 };
@@ -357,6 +373,73 @@ TEST_CASE("PhysicsTerrainStreamer: a Failed gate key freezes, is reported and no
     CHECK(s.failed == 0);
     CHECK(set.contains(bad));
     CHECK(fetch->calls(bad) == 3);
+}
+
+TEST_CASE("PhysicsTerrainStreamer: a roads-required key with no roads keeps the gate frozen; "
+         "retry_failed unfreezes with an identical fill",
+         "[phys][streamer]") {
+    // Same shape as the plain-Failed freeze test above, but the key never
+    // fails at the transport level (every fetch is a 200) - it fails
+    // require_roads instead (PLAN.md G2.5a-grip section 3), the same
+    // "never silently missing" rule extended to roads.
+    const PhysicsTileGrid grid = make_grid();
+    ResidentHeightSet set;
+    auto fetch = std::make_shared<SyntheticFetch>();
+    const std::vector<TileKey> gate = expected_gate(grid, 1000.0, 1000.0, 400.0, 1);
+    const TileKey bad = gate[gate.size() / 2];
+    fetch->set_no_roads(bad); // every other key's 200 carries a real (empty) roads list
+
+    LoaderConfig config = fast_loader(); // max_attempts 2
+    config.require_roads = true;
+    HeightTileLoader loader(fetch, config);
+    PhysicsTerrainStreamer streamer(grid, set, loader, StreamerConfig{});
+    const std::vector<InterestPoint> points{ip_at(1000.0, 1000.0)};
+
+    GateStatus s{};
+    const auto deadline = std::chrono::steady_clock::now() + 20s;
+    do {
+        std::this_thread::sleep_for(1ms);
+        s = streamer.update(points);
+    } while (!(s.failed == 1 && s.inflight == 0) && std::chrono::steady_clock::now() < deadline);
+    CHECK(s.failed == 1);
+    CHECK_FALSE(s.ready);
+    CHECK(s.missing_required == 1);
+    CHECK_FALSE(set.contains(bad)); // a roads-required Failed is never installed either
+    CHECK(fetch->calls(bad) == 2);  // exactly max_attempts, every one a 200 without roads
+
+    for (int i = 0; i < 20; ++i) {
+        s = streamer.update(points);
+        std::this_thread::sleep_for(1ms);
+    }
+    CHECK(fetch->calls(bad) == 2); // remembered: not re-requested every tick
+    CHECK_FALSE(s.ready);
+
+    // The freeze is per-key, not all-or-nothing: every other gate key became
+    // resident with a real roads list while frozen on `bad` alone.
+    for (const TileKey& k : gate) {
+        if (k == bad) continue;
+        const g2m::HeightTile* t = nullptr;
+        std::shared_ptr<const std::vector<RoadSegment>> roads;
+        CAPTURE(k.x, k.y);
+        CHECK(set.find(k, &t, &roads) == ResidentHeightSet::Lookup::Resident);
+        CHECK(roads != nullptr);
+    }
+
+    fetch->clear_no_roads(bad);
+    streamer.retry_failed();
+    s = settle(streamer, points[0]);
+    CHECK(s.ready);
+    CHECK(s.failed == 0);
+    CHECK(fetch->calls(bad) == 3);
+
+    // "Identical fill": now resident exactly like every other gate key - a
+    // real (empty) roads list, indistinguishable from one that had succeeded
+    // on its very first attempt.
+    const g2m::HeightTile* t = nullptr;
+    std::shared_ptr<const std::vector<RoadSegment>> roads;
+    CHECK(set.find(bad, &t, &roads) == ResidentHeightSet::Lookup::Resident);
+    REQUIRE(roads != nullptr);
+    CHECK(roads->empty());
 }
 
 TEST_CASE("PhysicsTerrainStreamer: requests gate keys first, each group by distance then key", "[phys][streamer]") {

@@ -10,13 +10,21 @@ std::uint64_t packed_of(const TileKey& key) { return key.packed(); }
 } // namespace
 
 ResidentHeightSet::Lookup ResidentHeightSet::find(const TileKey& key, const HeightTile** out) const noexcept {
+    return find(key, out, nullptr);
+}
+
+ResidentHeightSet::Lookup ResidentHeightSet::find(const TileKey& key, const HeightTile** out,
+                                                   std::shared_ptr<const std::vector<RoadSegment>>* roads_out) const
+    noexcept {
     const auto packed = packed_of(key);
     const auto it = std::lower_bound(entries_.begin(), entries_.end(), packed,
                                      [](const Entry& e, std::uint64_t p) { return e.key.packed() < p; });
     if (it == entries_.end() || it->key.packed() != packed) {
         *out = nullptr;
+        if (roads_out) *roads_out = nullptr;
         return Lookup::Missing;
     }
+    if (roads_out) *roads_out = it->roads;
     if (!it->tile) {
         *out = nullptr;
         return Lookup::Absent;
@@ -26,14 +34,20 @@ ResidentHeightSet::Lookup ResidentHeightSet::find(const TileKey& key, const Heig
 }
 
 void ResidentHeightSet::install(const TileKey& key, std::shared_ptr<const HeightTile> tile) {
+    install(key, std::move(tile), nullptr);
+}
+
+void ResidentHeightSet::install(const TileKey& key, std::shared_ptr<const HeightTile> tile,
+                                 std::shared_ptr<const std::vector<RoadSegment>> roads) {
     const auto packed = packed_of(key);
     const auto it = std::lower_bound(entries_.begin(), entries_.end(), packed,
                                      [](const Entry& e, std::uint64_t p) { return e.key.packed() < p; });
     if (it != entries_.end() && it->key.packed() == packed) {
         it->tile = std::move(tile);
+        it->roads = std::move(roads);
         return;
     }
-    entries_.insert(it, Entry{key, std::move(tile)});
+    entries_.insert(it, Entry{key, std::move(tile), std::move(roads)});
 }
 
 void ResidentHeightSet::retain_only(std::span<const TileKey> keep_sorted) {

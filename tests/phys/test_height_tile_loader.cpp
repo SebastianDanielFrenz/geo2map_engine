@@ -31,6 +31,7 @@
 #include <variant>
 #include <vector>
 
+using g2m::RoadSegment;
 using g2m::Status;
 using g2m::TileKey;
 using g2m::geo::Hemisphere;
@@ -74,6 +75,21 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         scripts_[key.packed()] = std::move(statuses);
     }
+    // PLAN.md G2.5a-grip section 3: a key with roads set here rides along on
+    // every 200 Ok response for it; a key never given one answers with
+    // FetchResult::roads left null (the default "never attempted" case).
+    void set_roads(const TileKey& key, std::shared_ptr<const std::vector<RoadSegment>> roads) {
+        std::lock_guard<std::mutex> lk(m_);
+        roads_[key.packed()] = std::move(roads);
+    }
+    void set_provides_roads(bool v) {
+        std::lock_guard<std::mutex> lk(m_);
+        provides_roads_ = v;
+    }
+    bool provides_roads() const override {
+        std::lock_guard<std::mutex> lk(m_);
+        return provides_roads_;
+    }
     void open() {
         {
             std::lock_guard<std::mutex> lk(m_);
@@ -107,19 +123,24 @@ public:
         if (it != scripts_.end() && !it->second.empty()) {
             const Status s = it->second.front();
             it->second.erase(it->second.begin());
-            if (s != Status::Ok) return FetchResult{s, nullptr};
+            if (s != Status::Ok) return FetchResult{s, nullptr, nullptr};
         }
+        std::shared_ptr<const std::vector<RoadSegment>> roads;
+        const auto rit = roads_.find(key.packed());
+        if (rit != roads_.end()) roads = rit->second;
         lk.unlock();
-        return FetchResult{Status::Ok, make_tile(key, key.x)};
+        return FetchResult{Status::Ok, make_tile(key, key.x), std::move(roads)};
     }
 
 private:
     mutable std::mutex m_;
     std::condition_variable cv_;
     bool open_;
+    bool provides_roads_ = false;
     int entered_ = 0;
     std::map<std::uint64_t, std::vector<Status>> scripts_;
     std::map<std::uint64_t, int> calls_;
+    std::map<std::uint64_t, std::shared_ptr<const std::vector<RoadSegment>>> roads_;
 };
 
 // Polls until `want` completions have arrived in total (or 20 s pass).
@@ -408,6 +429,70 @@ TEST_CASE("DelayedFetch: deterministic per-key jitter in [base, 2*base]", "[phys
     }
     CHECK(any_differs_by_key);
     CHECK(any_differs_by_seed);
+}
+
+// ---- require_roads / roads forwarding (PLAN.md G2.5a-grip section 3) ----
+
+TEST_CASE("HeightTileLoader: require_roads treats a roads-less 200 like a 500 (Retry, then Failed)",
+         "[phys][loader]") {
+    auto fetch = std::make_shared<ScriptedFetch>();
+    const TileKey k = key_at(4, 4);
+    // Never scripted with a status and never given roads via set_roads():
+    // every call is a plain 200 Ok with a tile, FetchResult::roads left null.
+    LoaderConfig config = fast_config();
+    config.require_roads = true;
+    HeightTileLoader loader(fetch, config);
+    const std::vector<TileKey> want{k};
+    loader.request(want);
+    const auto out = poll_until(loader, 1);
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].outcome == LoadOutcome::Failed);
+    CHECK_FALSE(out[0].tile);
+    CHECK_FALSE(out[0].roads);
+    CHECK(out[0].attempts == config.max_attempts);
+    CHECK(out[0].last_status == Status::Ok); // gave up on a roads-less 200, not a transport error
+    CHECK(fetch->calls(k) == config.max_attempts);
+    const auto st = loader.stats();
+    CHECK(st.failed == 1);
+    CHECK(st.ready == 0);
+    CHECK(st.retries == static_cast<std::uint64_t>(config.max_attempts - 1));
+}
+
+TEST_CASE("HeightTileLoader: require_roads is Ready once roads are attached", "[phys][loader]") {
+    auto fetch = std::make_shared<ScriptedFetch>();
+    const TileKey k = key_at(5, 6);
+    auto roads = std::make_shared<const std::vector<RoadSegment>>();
+    fetch->set_roads(k, roads);
+    LoaderConfig config = fast_config();
+    config.require_roads = true;
+    HeightTileLoader loader(fetch, config);
+    const std::vector<TileKey> want{k};
+    loader.request(want);
+    const auto out = poll_until(loader, 1);
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].outcome == LoadOutcome::Ready);
+    REQUIRE(out[0].tile);
+    CHECK(out[0].roads == roads);
+    CHECK(out[0].attempts == 1);
+    CHECK(fetch->calls(k) == 1);
+}
+
+TEST_CASE("DelayedFetch: forwards roads and provides_roads()", "[phys][loader]") {
+    auto inner = std::make_shared<ScriptedFetch>();
+    const TileKey k = key_at(9, -1);
+    auto roads = std::make_shared<const std::vector<RoadSegment>>(1, RoadSegment{});
+    inner->set_roads(k, roads);
+
+    CHECK_FALSE(DelayedFetch(inner, 0ms, 1u).provides_roads());
+    inner->set_provides_roads(true);
+    CHECK(DelayedFetch(inner, 0ms, 1u).provides_roads());
+
+    DelayedFetch f(inner, 0ms, 1u);
+    const FetchResult r = f.fetch(k);
+    REQUIRE(r.status == Status::Ok);
+    REQUIRE(r.tile);
+    REQUIRE(r.roads);
+    CHECK(r.roads == roads);
 }
 
 // ---- TransportHeightTileFetch over a scripted ITransport ----

@@ -19,18 +19,20 @@ TransportHeightTileFetch::TransportHeightTileFetch(ITransport& transport, Releas
 FetchResult TransportHeightTileFetch::fetch(const TileKey& key) {
     const Response response = transport_.send(Request{TileRequest{rid_, layer_, key, std::nullopt}});
     const auto* tile_response = std::get_if<TileResponse>(&response);
-    if (tile_response == nullptr) return FetchResult{Status::Internal, nullptr};
-    if (tile_response->meta.status != Status::Ok) return FetchResult{tile_response->meta.status, nullptr};
+    if (tile_response == nullptr) return FetchResult{Status::Internal, nullptr, nullptr};
+    if (tile_response->meta.status != Status::Ok) return FetchResult{tile_response->meta.status, nullptr, nullptr};
 
     const Result<ContainerView> view = parse_container(tile_response->container);
-    if (!view) return FetchResult{Status::Internal, nullptr};
-    if (view->header.layer != layer_ || !(view->header.key == key)) return FetchResult{Status::Internal, nullptr};
+    if (!view) return FetchResult{Status::Internal, nullptr, nullptr};
+    if (view->header.layer != layer_ || !(view->header.key == key)) {
+        return FetchResult{Status::Internal, nullptr, nullptr};
+    }
     const Result<TileBody> body = decode_body(view->body);
-    if (!body) return FetchResult{Status::Internal, nullptr};
+    if (!body) return FetchResult{Status::Internal, nullptr, nullptr};
 
     // Heap from the start: HeightTile is 256 KiB (vault TOOL-039).
     auto tile = std::make_shared<HeightTile>();
-    if (!decode_height_tile(*body, key, *tile)) return FetchResult{Status::Internal, nullptr};
+    if (!decode_height_tile(*body, key, *tile)) return FetchResult{Status::Internal, nullptr, nullptr};
 
     const std::int32_t offset = view->header.height_offset;
     if (offset != 0) {
@@ -39,12 +41,15 @@ FetchResult TransportHeightTileFetch::fetch(const TileKey& key) {
             const std::int64_t v = static_cast<std::int64_t>(h) + offset;
             if (v <= static_cast<std::int64_t>(kHeightNoData) ||
                 v > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max())) {
-                return FetchResult{Status::Internal, nullptr};
+                return FetchResult{Status::Internal, nullptr, nullptr};
             }
             h = static_cast<std::int32_t>(v);
         }
     }
-    return FetchResult{Status::Ok, std::move(tile)};
+    // TransportHeightTileFetch stays heights-only (PLAN.md G2.5a-grip
+    // section 3) - roads is always null; provides_roads() (default false)
+    // reflects this.
+    return FetchResult{Status::Ok, std::move(tile), nullptr};
 }
 
 // ---- DelayedFetch ----
@@ -84,10 +89,12 @@ FetchResult DelayedFetch::fetch(const TileKey& key) {
 namespace {
 enum class Disposition { Ready, Absent, Retry, Fail };
 
-Disposition classify(const FetchResult& r) {
+Disposition classify(const FetchResult& r, bool require_roads) {
     switch (r.status) {
     case Status::Ok:
-        return r.tile ? Disposition::Ready : Disposition::Retry; // 200 without a tile: treat like a 500
+        if (!r.tile) return Disposition::Retry; // 200 without a tile: treat like a 500
+        if (require_roads && !r.roads) return Disposition::Retry; // PLAN.md G2.5a-grip section 3: ditto for roads
+        return Disposition::Ready;
     case Status::NotFound:
         return Disposition::Absent;
     case Status::Internal:
@@ -195,16 +202,17 @@ void HeightTileLoader::worker_main() {
             try {
                 fr = fetch_->fetch(key);
             } catch (...) {
-                fr = FetchResult{Status::Internal, nullptr}; // an escaping exception would terminate the process
+                fr = FetchResult{Status::Internal, nullptr, nullptr}; // an escaping exception would terminate the process
             }
             lk.lock();
 
             result.attempts = attempt;
             result.last_status = fr.status;
-            const Disposition d = classify(fr);
+            const Disposition d = classify(fr, config_.require_roads);
             if (d == Disposition::Ready) {
                 result.outcome = LoadOutcome::Ready;
                 result.tile = std::move(fr.tile);
+                result.roads = std::move(fr.roads);
                 break;
             }
             if (d == Disposition::Absent) {
