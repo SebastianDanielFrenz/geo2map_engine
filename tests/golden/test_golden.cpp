@@ -74,6 +74,14 @@ TEST_CASE("G2roads golden hashes match testdata/golden/g2roads_golden.txt", "[go
     check_against("g2roads_golden.txt", g2m_golden::compute_g2roads());
 }
 
+// G2.5a-grip commit G-a: g2m::paint_road_segments/paint_road_blocks/
+// rasterize_road_blocks/RoadValueLut/raster_params_for_render_level
+// (golden_g2paint.cpp) - a separate golden set from "g2roads" above, for
+// everything G-a added on top of it.
+TEST_CASE("G2paint golden hashes match testdata/golden/g2paint_golden.txt", "[golden]") {
+    check_against("g2paint_golden.txt", g2m_golden::compute_g2paint());
+}
+
 // dem.h/osm.h/landcover.h all document their sink output as independent of
 // `jobs` (only DemImportReport's scheduling-dependent counters are not, and
 // the fixture's 2 unique 1km DGM1 keys never evict from the default 256-

@@ -3,28 +3,34 @@
 // 2026-09-27; see roads_plan.md, approach (a')). racing_game calls
 // extract_road_segments/rasterize_road_segments per render chunk and writes
 // the result into g2m::mesh::build_chunk's existing ClassWindow / land_class
-// path (racing_game currently passes nullptr there). Unchanged later, the
-// SAME two functions feed G2.5's TerrainClassDeriver and the physics
-// bridge's cell_surface_ids - which is why SurfaceKind extraction and the
+// path (racing_game currently passes nullptr there). The physics bridge's
+// cell_surface_ids (G2.5a-grip) instead uses paint_road_segments/
+// paint_road_blocks below, which share rasterize_road_segments' own inner
+// loop and clamps - which is why SurfaceKind extraction and the
 // paved/unpaved LandClass split must be correct now even though grip is not
 // wired to either until that step (open question, roads_plan.md).
 //
-// Determinism: both functions must be byte-identical Windows/Linux
-// (tests/golden's "g2roads" set proves it). geom::project_e7_to_mm's own
-// floor-to-mm projection is the only floating-point step; every geometric
-// DECISION after that (rasterize_road_segments' inside test) is exact
-// integer arithmetic (g2m::geom::sign_diff_products, PLAN G1c I1) - no
+// Determinism: every function here must be byte-identical Windows/Linux
+// (tests/golden's "g2roads"/"g2paint" sets prove it). geom::project_e7_to_mm's
+// own floor-to-mm projection is the only floating-point step; every
+// geometric DECISION after that (rasterize_road_segments' inside test) is
+// exact integer arithmetic (g2m::geom::sign_diff_products, PLAN G1c I1) - no
 // floating point anywhere in the decision.
 #pragma once
 
 #include "g2m/core/geo/utm.h"
 #include "g2m/core/geom/exact.h"
+#include "g2m/core/tile_key.h"
 #include "g2m/layer/classifier.h"
 #include "g2m/layer/osm_data.h"
 
+#include <array>
 #include <cstdint>
+#include <initializer_list>
+#include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace g2m {
@@ -200,5 +206,149 @@ struct RasterParams {
 // Allocation-free apart from `land_class`/`surface` (owned by the caller).
 void rasterize_road_segments(std::span<const RoadSegment> segs, const Lattice& lattice, const RasterParams& params,
                               std::span<std::uint8_t> land_class, std::span<std::uint8_t> surface);
+
+// A row-major (LandClass, SurfaceKind) -> resolved-surface-id lookup table,
+// index = land_class * 16 + surface_kind (both enums are fixed at <= 16
+// values by the g2m.terrain.class encoding, classifier.h's own "never
+// renumber, only append" rule) - a physics-side caller's SurfaceTable
+// resolution (paved -> "asphalt" id, unpaved -> "dirt" id, ...) folded into
+// one flat array so `paint_road_segments` below never branches on the enum
+// values themselves.
+struct RoadValueLut {
+    // Bumps here mean classifier.h grew past 16 LandClass or SurfaceKind
+    // values - index() then needs a wider field (17 would already collide
+    // with the next land_class's surface 1).
+    static_assert(static_cast<int>(LandClass::SnowIce) < 16, "LandClass grew past 16 values");
+    static_assert(static_cast<int>(SurfaceKind::Water) < 16, "SurfaceKind grew past 16 values");
+
+    std::array<std::uint16_t, 256> v{};
+
+    static constexpr std::size_t index(LandClass land_class, SurfaceKind surface) {
+        return static_cast<std::size_t>(land_class) * 16 + static_cast<std::size_t>(surface);
+    }
+    std::uint16_t at(LandClass land_class, SurfaceKind surface) const { return v[index(land_class, surface)]; }
+
+    // Every entry defaults to `off_road`; each (land_class, value) pair then
+    // overwrites every SurfaceKind slot of that land_class - a LUT keyed by
+    // LandClass alone (roads_plan.md's "unpaved by LandClass only" default:
+    // this feature does not yet distinguish surfaces within a land class).
+    static RoadValueLut by_land_class(std::uint16_t off_road,
+                                       std::initializer_list<std::pair<LandClass, std::uint16_t>> class_values);
+};
+
+// Same painting rule as rasterize_road_segments above (shares its inner
+// loop exactly - the exact integer inside test, round end caps and "later
+// segments overwrite earlier ones" rank order are identical; see that
+// function's own comment for the geometry), but resolves each covered
+// sample to one `lut.at(seg.land_class, seg.surface)` id instead of a
+// (land_class, surface) byte pair: out[j * row_stride + i] = that id.
+// `row_stride` need not equal `lattice.nx` - a caller painting into one
+// sub-rectangle of a larger owning buffer (e.g. paint_road_blocks below, or
+// a physics tile's own cell_surface_ids) passes that buffer's own row width
+// and an `out` already offset to the sub-rectangle's own corner; `out` must
+// have at least `row_stride * (lattice.ny - 1) + lattice.nx` elements from
+// its own start. Untouched samples are left at whatever `out` already held.
+//
+// Two clamps beyond rasterize_road_segments' own `params.min_half_width_mm`
+// are always applied to every segment's half_width_mm, in this order (widen
+// then cap):
+//   - minimum 710 mm (0.71 m): the one-cell proof (osm_roads.h's own PLAN
+//     reference, roads_plan.md section 2) - a physics cell centre and its
+//     render-quad corner are never more than half a metre apart on either
+//     axis, and half_width_mm >= 500*sqrt(2) ~= 707.1 mm is the exact
+//     threshold at which "centre inside the capsule" implies "at least one
+//     corner inside" (and the dual); 710 is a documented, slightly
+//     conservative rounding of that bound;
+//   - maximum kDefaultOsmHaloM * 1000 = 128,000 mm (128 m, g2m/layer/
+//     osm_clip.h): the owner rule's own correctness bound - a tile's own
+//     OSM extraction only ever keeps a way within its 128 m halo, so a
+//     half-width past that could reach a point this call was never given
+//     the covering segment for (relevant once this function's segments come
+//     from a single tile's own list, e.g. via paint_road_blocks below).
+//
+// Allocation-free apart from `out` (owned by the caller).
+void paint_road_segments(std::span<const RoadSegment> segs, const Lattice& lattice, const RasterParams& params,
+                          const RoadValueLut& lut, std::span<std::uint16_t> out, std::size_t row_stride);
+
+// What one L2 tile's road segments are, for the block helpers below. Only
+// `segments` is meaningful when status == Segments; the tile is the OWNER
+// (roads_plan.md section 2's OWNER RULE) of every lattice sample that maps
+// to it - never a merge with any neighbour's list.
+enum class RoadBlockStatus : std::uint8_t {
+    Segments, // segments is that tile's own extract_road_segments() output
+    None,     // that tile genuinely has no drivable ways (not a failure)
+    Missing,  // not resident / load failed - the caller's own fill-miss case
+};
+
+struct RoadBlockLookupResult {
+    RoadBlockStatus status = RoadBlockStatus::None;
+    std::span<const RoadSegment> segments; // valid only if status == Segments
+};
+
+// Allocation-free lookup seam: a plain function pointer plus an opaque
+// context instead of std::function, so the block helpers below never
+// allocate or take a virtual call to find a tile's segments. Called once
+// per BLOCK (not once per sample).
+using RoadBlockLookupFn = RoadBlockLookupResult (*)(void* ctx, const TileKey& l2_key);
+
+// How many blocks of each RoadBlockStatus a paint_road_blocks/
+// rasterize_road_blocks call touched - lets a caller fold Missing/None into
+// its own fill-miss counters without re-deriving the block partition.
+struct RoadBlockStats {
+    int segments_blocks = 0;
+    int none_blocks = 0;
+    int missing_blocks = 0;
+};
+
+// Partitions `lattice` into an aligned TileKey block grid at `block_level`
+// (0 = 256 m, physics; 2 = 1024 m, render - roads_plan.md section 2), each
+// lattice sample's easting/northing floored to whole metres first
+// (g2m::floor_div - a Lattice sample position need not itself sit on an
+// exact metre, e.g. a DGM1/physics cell-centre lattice sits at X.5 m).
+//
+// For each block that owns at least one lattice sample: derives that
+// block's OWNER L2 tile (itself if block_level == 2, else its TileKey::
+// parent() ancestor two levels up - the OWNER RULE), calls `lookup` for it
+// exactly once, and - iff the result is RoadBlockStatus::Segments - paints
+// only that block's own sub-rectangle of `out` with only that L2 tile's own
+// segments, via paint_road_segments above (so the same 0.71 m minimum / 128
+// m halo maximum clamps apply here too). A None or Missing block leaves its
+// own sub-rectangle of `out` untouched (the caller's job to pre-fill, e.g.
+// all-off_road). Never merges more than one tile's segment list into a
+// single sample, unlike a cross-tile concatenation followed by a rank sort
+// - so the result at any sample cannot depend on any other tile's own data
+// or on lookup call order (roads_plan.md section 2's own contrast with
+// R/core/src/road_classes.cpp's current stable_sort-by-rank-alone render
+// merge).
+//
+// `row_stride`/`out` describe the SAME full buffer paint_road_segments
+// would need for the whole `lattice` at once (row_stride >= lattice.nx,
+// out.size() >= row_stride * (lattice.ny - 1) + lattice.nx).
+// Allocation-free apart from `out` (owned by the caller).
+RoadBlockStats paint_road_blocks(const Lattice& lattice, int block_level, geo::UtmZone zone, const RasterParams& params,
+                                  const RoadValueLut& lut, RoadBlockLookupFn lookup, void* ctx,
+                                  std::span<std::uint16_t> out, std::size_t row_stride);
+
+// Same partition / owner rule / allocation-free contract as
+// paint_road_blocks above, producing the render (land_class, surface) byte
+// pair instead of a LUT id - `land_class`/`surface` must each have exactly
+// `lattice.nx * lattice.ny` elements (rasterize_road_segments' own
+// row-major layout, row_stride == lattice.nx). Applies the same 128 m halo
+// MAXIMUM clamp as paint_road_blocks (the owner rule's correctness bound
+// above applies here too), but NOT the 710 mm minimum - a render-resolution
+// lattice does not need the physics one-cell proof.
+RoadBlockStats rasterize_road_blocks(const Lattice& lattice, int block_level, geo::UtmZone zone,
+                                      const RasterParams& params, RoadBlockLookupFn lookup, void* ctx,
+                                      std::span<std::uint8_t> land_class, std::span<std::uint8_t> surface);
+
+// The render LOD policy mapping a mesh chunk level to a RasterParams -
+// moved here from racing_game's own road_raster_params_for_level
+// (R/core/src/road_classes.cpp, which becomes a thin forwarder) so it is
+// available to any g2m_layer caller directly. L0/L1: every drivable segment
+// (min_rank 0, no widening). L2: tertiary and above (roads_plan.md R-2).
+// L3: primary and above, widened to 3/4 of that level's own lattice spacing
+// so a road stays continuous on that coarse a lattice. L4 and up:
+// std::nullopt - no road classes at all at that level.
+std::optional<RasterParams> raster_params_for_render_level(int level);
 
 } // namespace g2m

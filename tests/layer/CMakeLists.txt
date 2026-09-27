@@ -13,16 +13,22 @@
 # test_osm_roads.cpp (PLAN.md 6.5) reuses g2m_decode's read_pbf directly, to
 # load testdata/fixtures/osm/frankfurt_hoechst.osm.pbf for its own fixture
 # test - already linked here for test_derive_terrain.cpp's sake.
+# test_osm_paint.cpp (G2.5a-grip G-a) needs alloc_counter.cpp's own global
+# operator new/delete override (its "allocation-free" check) - same
+# duplicated-per-executable reasoning as tests/phys/CMakeLists.txt's own
+# g2m_phys_tests.
 add_executable(g2m_layer_tests
   test_container.cpp
   test_raster_encodings.cpp
   test_osm.cpp
   test_osm_roads.cpp
+  test_osm_paint.cpp
   test_release.cpp
   test_pack.cpp
   test_region.cpp
   test_derive_terrain.cpp
   test_terrain_pyramid.cpp
+  alloc_counter.cpp
 )
 target_link_libraries(g2m_layer_tests PRIVATE
   g2m_layers g2m_decode g2m_import g2m_server

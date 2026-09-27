@@ -55,6 +55,15 @@ std::vector<Entry> compute_g2mesh();
 // Windows/Linux; testdata/golden/g2roads_golden.txt.
 std::vector<Entry> compute_g2roads();
 
+// G2paint (golden_g2paint.cpp, G2.5a-grip commit G-a): g2m::
+// paint_road_segments/paint_road_blocks/rasterize_road_blocks/RoadValueLut/
+// raster_params_for_render_level - everything G-a added on top of
+// "g2roads" above (a separate golden set, not an extension of it) - proves
+// the LUT painter, the owner-rule block partition (both block levels 0 and
+// 2) and the moved render-LOD policy are byte-identical Windows/Linux;
+// testdata/golden/g2paint_golden.txt.
+std::vector<Entry> compute_g2paint();
+
 // "name count hash\n" per entry, the golden file's line format.
 std::string format(const std::vector<Entry>& entries);
 
