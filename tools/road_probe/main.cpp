@@ -9,6 +9,8 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
+#include "g2m/core/geo/utm.h"
 #include <string_view>
 #include <map>
 #include <algorithm>
@@ -144,6 +146,10 @@ int main(int argc, char** argv) {
                         if (a && b && reference) std::cout << " length_m=" << reference->length_m
                             << " endpoint_rise_m=" << (static_cast<double>(*b) - *a) / 256
                             << " endpoint_mean_grade=" << (static_cast<double>(*b) - *a) / (256 * reference->length_m);
+                        for (const auto index : {stretch.start_ref, stretch.end_ref}) {
+                            const auto p = point(index); const auto ll = geo::Utm{}.reverse(key->zone, p.x / 1000.0, p.y / 1000.0);
+                            std::cout << std::setprecision(10) << " node=" << way.node_ids[index] << " lat=" << ll.lat << " lon=" << ll.lon;
+                        }
                         std::cout << " reason=" << profile.error().message << '\n';
                     }
                 }
