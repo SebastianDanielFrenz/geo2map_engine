@@ -10,8 +10,8 @@
 #include <algorithm>
 using namespace g2m;
 int main(int argc, char** argv) {
-    if (argc != 5) {
-        std::cerr << "usage: g2m_road_probe STORE SCOPE TILE_KEY OUTPUT_CSV\n"; return 1;
+    if (argc != 5 && (argc != 6 || std::string_view(argv[5]) != "--exceptions")) {
+        std::cerr << "usage: g2m_road_probe STORE SCOPE TILE_KEY OUTPUT_CSV [--exceptions]\n"; return 1;
     }
     const auto key = parse_tile_path(argv[3]);
     if (!key || key->level != 2) { std::cerr << "level-2 tile key required\n"; return 1; }
@@ -40,15 +40,17 @@ int main(int argc, char** argv) {
     for (const auto index : tile->owned_edges) {
         const auto& edge = tile->graph.edges[index]; ++owned[edge.way_id]; owned_pairs[edge.way_id].push_back(edge.segment_index);
     }
+    ReferenceFitLimits limits; limits.allow_curvature_exceptions = argc == 6;
+    std::size_t exceptions = 0;
     std::size_t total_stretches = 0, failed_stretches = 0, failed_owned_edges = 0;
     std::map<std::string, std::size_t> failures;
     for (const auto& way : tile->graph.ways) {
-        const auto start = Clock::now(); const auto parts = builder->fit_stretches(way.osm_id);
+        const auto start = Clock::now(); const auto parts = builder->fit_stretches(way.osm_id, limits);
         const auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
         if (!parts) { std::cerr << parts.error().message << '\n'; return 1; }
         total_stretches += parts->size(); std::size_t failed = 0, local_failed = 0; double fitted_length = 0; std::string reason;
         for (const auto& part : *parts) {
-            if (part.reference) { fitted_length += part.reference->length_m; continue; }
+            if (part.reference) { if (part.reference->curvature_exception) ++exceptions; fitted_length += part.reference->length_m; continue; }
             ++failed; ++failures[part.reference.error().message];
             if (reason.empty()) reason = part.reference.error().message;
             for (const auto pair : owned_pairs[way.osm_id])
@@ -84,7 +86,7 @@ int main(int argc, char** argv) {
         << " graph_body_bytes=" << derived->body.size() << " body_bytes_per_km2=" << derived->body.size() / 1.048576
         << " graph_ms=" << graph_ms << " reference_ok=" << accepted << " reference_km=" << length / 1000
         << " reference_ms=" << reference_ms << " stretches=" << total_stretches << " declined_stretches=" << failed_stretches
-        << " declined_owned_edges=" << failed_owned_edges << '\n';
+        << " curvature_exceptions=" << exceptions << " declined_owned_edges=" << failed_owned_edges << '\n';
     for (const auto& [reason, count] : failures) std::cout << "declined_stretches=" << count << " reason=" << reason << '\n';
     return 0;
 }

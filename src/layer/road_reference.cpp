@@ -260,7 +260,25 @@ Result<RoadReferenceLine> RoadReferenceBuilder::fit_stretch(std::int64_t id, Roa
     if (knots.size() < 2) return make_error(ErrorCode::Malformed, "road reference: all points coincide");
     const bool closed = wi->node_ids[stretch.start_ref] == wi->node_ids[stretch.end_ref] && knots.size() > 3 &&
         std::none_of(knots.begin(), knots.end(), [](const auto& knot) { return knot.junction; });
-    auto out = fit_shape(knots, closed, id, radius, deviation, limits, coincident); if (!out) return out.error();
+    auto out = fit_shape(knots, closed, id, radius, deviation, limits, coincident);
+    double fitted_radius = radius;
+    // Only geometric infeasibility permits a retry. Resource/invalid-data errors
+    // must never be hidden by the exception policy. Each retry keeps the original
+    // corridor, junctions, bow and construction budgets unchanged.
+    const auto retryable = [](const Error& error) {
+        return error.code == ErrorCode::LimitExceeded &&
+            (error.message == "road reference: rounded corner corridor" ||
+             error.message == "road reference: overlapping rounded corners");
+    };
+    for (unsigned retry = 0; limits.allow_curvature_exceptions && !out &&
+         retryable(out.error()) && fitted_radius > 1 && retry < 17; ++retry) {
+        fitted_radius = std::max(1.0, fitted_radius * 0.5);
+        out = fit_shape(knots, closed, id, fitted_radius, deviation, limits, coincident);
+    }
+    if (!out) return out.error();
+    out->requested_min_radius_m = radius;
+    out->fitted_min_radius_m = fitted_radius;
+    out->curvature_exception = fitted_radius < radius;
     out->anchors = {{wi->node_ids[stretch.start_ref], 0}, {wi->node_ids[stretch.end_ref], out->length_m}};
     return out;
 }
@@ -294,6 +312,10 @@ Result<RoadReferenceLine> RoadReferenceBuilder::fit(std::int64_t id, const Refer
             out.segments.push_back(segment); first = false;
         }
         out.length_m += part->length_m; out.coincident_pairs += part->coincident_pairs;
+        out.curvature_exception = out.curvature_exception || part->curvature_exception;
+        out.requested_min_radius_m = part->requested_min_radius_m;
+        out.fitted_min_radius_m = out.fitted_min_radius_m == 0 ? part->fitted_min_radius_m :
+            std::min(out.fitted_min_radius_m, part->fitted_min_radius_m);
         out.anchors.push_back({part->anchors.back().node_id, out.length_m});
     }
     return out;

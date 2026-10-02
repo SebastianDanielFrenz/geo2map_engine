@@ -18,8 +18,7 @@ fail explicitly.
 Default vertex deviation is 0.5 m for rank >= 5 and 3 m for other roads. This is
 separate from the 32 m curve-to-chord bow allowance. Radius defaults come from
 resolve_road_attributes, including the separate ramp defaults. These are project
-policies. The served failure/exception policy is still awaiting an owner choice;
-this construction API currently returns errors rather than relaxing bounds.
+policies. The owner continuation selects preservation with explicit curvature exceptions. Strict fitting remains the API default. allow_curvature_exceptions retries only corner corridor/overlap failures, halving the radius to a 1 m floor in at most 17 retries. Output exposes requested and certified fitted radii and an exception flag. Invalid data, reversals and resource failures still fail.
 
 Release CI passes all 19 checks. Windows ASan and Linux TSan pass reference,
 attribute, DEM and fitting tests. Closed-reference bit-pattern golden is

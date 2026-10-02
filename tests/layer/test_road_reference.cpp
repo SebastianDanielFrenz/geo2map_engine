@@ -95,3 +95,25 @@ TEST_CASE("A declined stretch does not hide independent valid geometry", "[layer
     CHECK_FALSE((*parts)[0].reference); CHECK((*parts)[1].reference); CHECK((*parts)[1].stretch.start_ref == 2);
     CHECK_FALSE(builder->fit(10, limits));
 }
+TEST_CASE("Curvature exceptions preserve corridors and expose the relaxed bound", "[layer][road_reference]") {
+    const auto g = graph({{0, 0}, {100000, 0}, {100000, 100000}});
+    ReferenceFitLimits limits; limits.min_radius_m = 100;
+    CHECK_FALSE(fit_road_reference(g, 10, limits));
+    limits.allow_curvature_exceptions = true;
+    const auto line = fit_road_reference(g, 10, limits); REQUIRE(line);
+    CHECK(line->curvature_exception); CHECK(line->requested_min_radius_m == 100);
+    CHECK(line->fitted_min_radius_m >= 1); CHECK(line->fitted_min_radius_m < 100);
+    for (const auto& segment : line->segments) {
+        CHECK(std::fabs(segment.curve.curvature0) <= 1 / line->fitted_min_radius_m + 1e-10);
+        CHECK(std::fabs(segment.curve.curvature0 + segment.curve.curvature_rate * segment.curve.length) <=
+            1 / line->fitted_min_radius_m + 1e-10);
+    }
+    const auto start = line->at(0), end = line->at(line->length_m); REQUIRE(start); REQUIRE(end);
+    CHECK(std::fabs(start->x) < 1e-8); CHECK(std::fabs(start->y) < 1e-8);
+    CHECK(std::fabs(end->x - 100) < 1e-8); CHECK(std::fabs(end->y - 100) < 1e-8);
+    const auto straight = fit_road_reference(graph({{0, 0}, {100000, 0}}), 10, limits); REQUIRE(straight);
+    CHECK_FALSE(straight->curvature_exception); CHECK(straight->fitted_min_radius_m == 100);
+    limits.max_length_m = 1; CHECK_FALSE(fit_road_reference(g, 10, limits));
+    limits.max_length_m = 100000; limits.max_segments = 1; CHECK_FALSE(fit_road_reference(g, 10, limits));
+    limits.min_radius_m = -1; CHECK_FALSE(fit_road_reference(g, 10, limits));
+}

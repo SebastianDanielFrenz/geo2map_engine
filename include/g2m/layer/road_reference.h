@@ -16,6 +16,9 @@ struct RoadReferenceLine {
     std::size_t coincident_pairs = 0;
     std::vector<RoadReferenceSegment> segments;
     std::vector<RoadReferenceAnchor> anchors; // endpoints and branching junctions
+    bool curvature_exception = false;
+    double requested_min_radius_m = 0;
+    double fitted_min_radius_m = 0; // certified bound, not a measured radius
     Result<geom::CurvePose> at(double station) const;
 };
 struct ReferenceFitLimits {
@@ -26,6 +29,7 @@ struct ReferenceFitLimits {
     double max_bow_m = 32; // curve/chord bow, separate from original vertex tolerance
     std::size_t max_segments = 100000;
     double max_length_m = 100000;
+    bool allow_curvature_exceptions = false; // bounded retries; corridor/budgets stay fixed
 };
 struct RoadStretch { std::uint32_t start_ref = 0, end_ref = 0; };
 struct RoadStretchFit { RoadStretch stretch; Result<RoadReferenceLine> reference; };

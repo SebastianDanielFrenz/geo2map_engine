@@ -26,3 +26,8 @@ this includes geometry outside the tile. These counts are not road-length
 coverage. Failure causes were overlapping corner trims (18) and corner corridor
 bounds (29). The owner must choose how served geometry represents exceptions;
 this probe does not silently loosen limits or omit failures from its report.
+
+Pass --exceptions to preserve geometry with flagged curvature exceptions. The
+home fixture then fits all 478 stretches (344 complete ways), with 47 flagged
+exceptions and no declined owned edges. Full-context fitted length is 40.759 km.
+Construction took 33.6 ms in a single run; no runtime behavior is enabled.
