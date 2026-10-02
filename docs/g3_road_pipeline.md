@@ -18,7 +18,7 @@ later segment identities. Closed ways retain their closing edge.
 
 This graph is geometric and undirected. It is not a navigable G4 routing graph:
 oneway/access rules, restrictions, signal/stop-node metadata and routing costs
-need their own semantic model. No new served layer or wire format ships yet.
+need their own semantic model. The served tile layer and wire format are described below.
 
 Verification covers shared-node junctions, a crossing bridge, tunnel/tag
 retention, insertion-order independence, stable identities with different
@@ -26,20 +26,22 @@ neighbouring way sets, closed/repeated refs, malformed data and far-zone ways.
 The complete Frankfurt-Hoechst fixture yields 3,136 nodes, 739 ways and 3,309
 edges. Its canonical fingerprint is `2d63f916719a0c3b`.
 
-## B. Tile encoding and derivation (next)
+## B. Tile encoding and derivation (implemented)
 
-Define a bounded, versioned `roads.graph` encoding and register its layer and
-deriver. Merge complete source ways by OSM id before graph construction;
-identical duplicates deduplicate, conflicting copies fail. Resolve tile
-ownership with the existing integer tile grid, retaining halo references and
-stable ids. Do not infer connectivity from the raster capsules.
+`g2m.roads.graph` is a level-2 baked layer with a bounded encoding 4/version 1.
+See [the format](formats/road_graph.md) for exact bytes and ownership rules.
+The deriver merges nine raw source tiles, deduplicates identical complete ways
+and fails conflicting copies. Whole ways intersecting the 128 m halo retain
+all references and tags. Integer midpoint ownership is unique across tiles.
+Server registration is opt-in; `g2m_tiler bake --layers g2m.roads.graph
+--min-level 2 --max-level 2` selects it automatically.
 
-Tests: codec round trips, truncated/invalid/oversized input rejection, shuffled
-and duplicate source inputs, adjacent-tile stable ids, clipped/halo crossings,
-closed ways and Windows/Linux goldens. Measure bytes/km2 and derivation CPU.
-The current source codec already preserves complete ways and tags, so an OSM
-source-format migration is unnecessary for this slice.
-
+Five tests cover codec truncation and malformed data, source order/conflicts,
+adjacent ownership and real server/bake parity with four workers and pinning.
+Windows release CI passes all 19 checks with existing goldens unchanged.
+Windows AddressSanitizer and Linux ThreadSanitizer pass the new tests;
+the new decoder is included in the deterministic fuzz mutation corpus.
+Bandwidth and derivation CPU measurements are still pending.
 ## C. Reference lines and vertical profiles
 
 Resolve width/lanes/surface/bridge/tunnel/incline from preserved way tags using

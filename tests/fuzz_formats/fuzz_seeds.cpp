@@ -6,6 +6,7 @@
 #include "g2m/layer/layer_id.h"
 #include "g2m/layer/osm_clip.h"
 #include "g2m/layer/pack.h"
+#include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/region.h"
 #include "g2m/layer/release.h"
 #include "g2m/layer/src_elev.h"
@@ -184,6 +185,18 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
     case Target::Elev: return elev_bodies();
     case Target::Landcover: return landcover_bodies();
     case Target::Osm: return osm_bodies();
+    case Target::Roadgraph: {
+        g2m::RoadGraphTile tile;
+        tile.key = g2m_test::home_tile();
+        const auto x = tile.key.min_easting() * 1000, y = tile.key.min_northing() * 1000;
+        tile.graph.nodes = {{1, {x + 1000, y + 2000}}, {2, {x + 80000, y + 3000}}};
+        tile.graph.ways = {{10, 3, {1, 2}, {{"bridge", "yes"}, {"highway", "residential"}}}};
+        tile.graph.edges = {{10, 0, 1, 2}}; tile.owned_edges = {0};
+        auto first = body(must(g2m::encode_road_graph(tile), "encode_road_graph"));
+        tile.graph.ways[0].node_ids = {1, 2, 2, 1}; tile.graph.repeated_ref_pairs = 1;
+        tile.graph.edges.push_back({10, 2, 2, 1}); tile.owned_edges.push_back(1);
+        return {std::move(first), body(must(g2m::encode_road_graph(tile), "encode_road_graph loop"))};
+    }
     case Target::Pack: return {pack()};
     case Target::Manifest: return manifests();
     case Target::Path: return paths();

@@ -20,6 +20,8 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/derive_terrain.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/osm_roads.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_graph.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/road_graph_tile.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/derive_road_graph.cpp
   CACHE INTERNAL "g2m_layers sources (also compiled into the fuzz-instrumented copy, tests/fuzz_formats)"
 )
 

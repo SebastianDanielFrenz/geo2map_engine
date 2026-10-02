@@ -23,6 +23,7 @@ add_executable(g2m_layer_tests
   test_osm.cpp
   test_osm_roads.cpp
   test_road_graph.cpp
+  test_road_graph_tile.cpp
   test_osm_paint.cpp
   test_release.cpp
   test_pack.cpp

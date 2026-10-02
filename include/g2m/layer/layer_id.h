@@ -41,6 +41,7 @@ enum class LayerKind : std::uint8_t {
 enum class LayerEncoding : std::uint16_t {
     SrcElev = 1,       // docs/formats/src_elev.md
     SrcLandcover = 2,  // docs/formats/src_landcover.md
+    RoadGraph = 4,     // docs/formats/road_graph.md
     SrcOsm = 3,        // docs/formats/src_osm.md
 };
 

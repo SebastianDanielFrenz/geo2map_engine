@@ -5,6 +5,7 @@
 #include "fuzz_targets.h"
 
 #include "g2m/layer/pack.h"
+#include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/region.h"
 #include "g2m/layer/release.h"
 #include "g2m/layer/src_elev.h"
@@ -145,6 +146,10 @@ void run(Target target, std::span<const std::uint8_t> data) {
         raw_layer(
             data, [](const g2m::TileBody& b) { return g2m::decode_src_osm(b); },
             [](const g2m::OsmTile& t) { return g2m::encode_src_osm(t); }, "src.osm: round trip");
+        return;
+    case Target::Roadgraph:
+        raw_layer(data, [](const g2m::TileBody& b) { return g2m::decode_road_graph(b); },
+            [](const g2m::RoadGraphTile& t) { return g2m::encode_road_graph(t); }, "roads.graph: round trip");
         return;
     case Target::Pack: pack(data); return;
     case Target::Manifest: manifest(data); return;

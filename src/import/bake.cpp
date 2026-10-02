@@ -92,8 +92,9 @@ Result<BakeReport> bake(TileStore& sources, TileStore& derived, const std::strin
         return make_error(ErrorCode::InvalidArgument, "bake: options.layers is empty");
     }
 
+    const bool include_roads = std::find(options.layers.begin(), options.layers.end(), std::string(kRoadGraphLayer)) != options.layers.end();
     BuiltinTerrainDerivers derivers;
-    LocalReleaseParams params = builtin_local_release_params(scope, derivers, /*sources=*/{});
+    LocalReleaseParams params = builtin_local_release_params(scope, derivers, /*sources=*/{}, include_roads);
     Result<ReleaseManifest> manifest_r = make_local_release(sources, params);
     if (!manifest_r) return manifest_r.error();
     const ReleaseManifest manifest = std::move(manifest_r).value();
@@ -104,7 +105,7 @@ Result<BakeReport> bake(TileStore& sources, TileStore& derived, const std::strin
     config.server_id = "g2m_tiler.bake";
     config.offline = true;
     config.derived_store = &derived;
-    config.derivers = derivers.ordered();
+    config.derivers = derivers.ordered(include_roads);
     config.upstreams = {&local_upstream};
     Server server(config);
     Result<void> added = server.add_release(manifest, scope);
