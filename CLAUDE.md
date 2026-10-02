@@ -694,3 +694,14 @@ by default). Bridge physics pin is b90a531.
 Snapshot tests cover replacement/eviction lifetime, owner purge, concurrent
 read/fill against live mutation, relevant height/road invalidation, zero
 allocation callbacks and on/off per-tick crossing hashes at 1/4/24 workers.
+
+## G3 road graph foundation (2026-10-02)
+
+`g2m/layer/road_graph.h` exposes `RoadGraph` and `build_road_graph` from validated
+canonical OSM. It preserves node/way ids, reference order and all way tags,
+including bridge/tunnel metadata, with stable per-ref-pair edge ids. Output is
+sorted; shared node ids define connectivity. It lives in g2m_layers and changes
+no existing served layer, height raster or runtime behavior. Tests are in
+`tests/layer/test_road_graph.cpp`, including the real Frankfurt-Hoechst fixture.
+Remaining slices and acceptance are in `docs/g3_road_pipeline.md`; G3 is not yet
+complete. Graph encoding/derivation is the next slice.
