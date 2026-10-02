@@ -39,3 +39,15 @@ TEST_CASE("Road DEM sampler rejects invalid dependencies and rejects NoData befo
     const HeightTile* null[] = {nullptr}; CHECK_FALSE(RoadDemSampler::make(null));
     a->key.level = 1; CHECK_FALSE(RoadDemSampler::make(tiles));
 }
+TEST_CASE("Junction planes preserve both terrain slopes and resist a local height return", "[layer][road_dem]") {
+    auto a = tile(0, 0); const HeightTile* tiles[] = {a.get()};
+    const auto sampler = RoadDemSampler::make(tiles); REQUIRE(sampler);
+    const auto plane = sampler->junction_plane(zone, {10500, 10500}); REQUIRE(plane);
+    CHECK(plane->height == 60); CHECK(plane->grade_x == 2.0 / 256); CHECK(plane->grade_y == 4.0 / 256);
+    a->h[10 * 256 + 10] += 100000;
+    const auto robust = sampler->junction_plane(zone, {10500, 10500}); REQUIRE(robust);
+    CHECK(robust->grade_x == plane->grade_x); CHECK(robust->grade_y == plane->grade_y);
+    a->h[10 * 256 + 10] = kHeightNoData;
+    CHECK_FALSE(sampler->junction_plane(zone, {10500, 10500}));
+    CHECK_FALSE(sampler->junction_plane(zone, {10500, 10500}, 0));
+}

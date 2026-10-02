@@ -34,6 +34,7 @@ Result<VerticalProfile> fit_vertical_profile(std::span<const VerticalSample> sam
         !std::isfinite(limits.start_grade) || !std::isfinite(limits.end_grade) ||
         std::fabs(limits.start_grade) > limits.max_grade || std::fabs(limits.end_grade) > limits.max_grade ||
         !std::isfinite(limits.slope_weight_m) || limits.slope_weight_m < 0.1 || limits.slope_weight_m > 1000 ||
+        (limits.target_grade && (!std::isfinite(*limits.target_grade) || std::fabs(*limits.target_grade) > 1.0)) ||
         limits.max_iterations < 1 || limits.max_iterations > 16384)
         return invalid("vertical profile: limits/sample count");
     for (std::size_t i = 0; i < n; ++i)
@@ -72,6 +73,7 @@ Result<VerticalProfile> fit_vertical_profile(std::span<const VerticalSample> sam
         const auto lo = i ? i - 1 : i, hi = i + 1 < n ? i + 1 : i;
         values[n + i] = std::clamp((samples[hi].height_m - samples[lo].height_m) /
             (samples[hi].station_m - samples[lo].station_m), -limits.max_grade, limits.max_grade);
+        if (limits.target_grade) values[n + i] = std::clamp(*limits.target_grade, -limits.max_grade, limits.max_grade);
         inverse_weight[n + i] = 1 / (limits.slope_weight_m * limits.slope_weight_m);
     }
     values[n] = limits.start_grade; values[2 * n - 1] = limits.end_grade;

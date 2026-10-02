@@ -392,3 +392,41 @@ TEST_CASE("osm roads: frankfurt_hoechst.osm.pbf fixture gives sane road counts",
     CHECK(saw_unpaved);
     CHECK(saw_known_surface);
 }
+
+TEST_CASE("OSM speed limits preserve units direction and missing values", "[osm_roads][speed_limit]") {
+    REQUIRE(parse_road_speed_limit("120").kph == 120.0);
+    REQUIRE(parse_road_speed_limit("50 km/h").kph == 50.0);
+    REQUIRE(parse_road_speed_limit("30 mph").kph > 48.28);
+    REQUIRE(parse_road_speed_limit("30 mph").kph < 48.29);
+    REQUIRE(parse_road_speed_limit("10 knots").kph == 18.52);
+    REQUIRE(parse_road_speed_limit("none").kind == SpeedLimitKind::Unrestricted);
+    for (const auto text : {"", "DE:urban", "signals", "50;80", "nan", "-5", "50junk"})
+        REQUIRE(parse_road_speed_limit(text).kind == SpeedLimitKind::Unknown);
+    const auto road = extract_one(42, {{"highway", "primary"}, {"maxspeed", "80"},
+        {"maxspeed:forward", "50"}, {"maxspeed:backward", "none"},
+        {"maxspeed:conditional", "30 @ (wet)"}});
+    REQUIRE(road.has_value());
+    REQUIRE(road->way_id == 42);
+    REQUIRE(road->forward_limit.kph == 50.0);
+    REQUIRE(road->backward_limit.kind == SpeedLimitKind::Unrestricted);
+    REQUIRE(road->forward_limit.conditional);
+}
+
+TEST_CASE("Speed limit road matching uses direction and clears offroad", "[osm_roads][speed_limit]") {
+    RoadSegment road;
+    road.a = {0, 0}; road.b = {100000, 0}; road.half_width_mm = 3000; road.way_id = 42;
+    road.forward_limit = parse_road_speed_limit("50");
+    road.backward_limit = parse_road_speed_limit("80");
+    std::vector<RoadSegment> roads{road};
+    REQUIRE(match_road_speed_limit(roads, {50000, 0}, 1, 0).limit.kph == 50.0);
+    REQUIRE(match_road_speed_limit(roads, {50000, 0}, -1, 0).limit.kph == 80.0);
+    REQUIRE(match_road_speed_limit(roads, {50000, 4000}, 1, 0).way_id == 0);
+    roads[0].bridge = true;
+    REQUIRE(match_road_speed_limit(roads, {50000, 0}, 1, 0).way_id == 0);
+    roads[0].bridge = false;
+    auto nearer = road; nearer.a.y = nearer.b.y = 1000; nearer.way_id = 43;
+    nearer.forward_limit = {};
+    roads.push_back(nearer);
+    REQUIRE(match_road_speed_limit(roads, {50000, 1000}, 1, 0).way_id == 43);
+    REQUIRE(match_road_speed_limit(roads, {50000, 1000}, 1, 0).limit.kind == SpeedLimitKind::Unknown);
+}

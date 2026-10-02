@@ -1,5 +1,6 @@
 #include "g2m/layer/road_dem_sampler.h"
 #include <algorithm>
+#include <array>
 #include <vector>
 namespace g2m {
 Result<RoadDemSampler> RoadDemSampler::make(std::span<const HeightTile* const> tiles) {
@@ -43,16 +44,37 @@ Result<std::int32_t> RoadDemSampler::sample(geo::UtmZone zone, geom::PointMm p) 
     return static_cast<std::int32_t>(q);
 }
 Result<std::int32_t> RoadDemSampler::junction_height(geo::UtmZone zone, geom::PointMm p, std::int32_t radius) const {
+    const auto plane = junction_plane(zone, p, radius); if (!plane) return plane.error();
+    return plane->height;
+}
+Result<RoadJunctionPlane> RoadDemSampler::junction_plane(geo::UtmZone zone, geom::PointMm p, std::int32_t radius) const {
     constexpr auto bound = std::int64_t{1} << 62;
     if (radius < 1 || radius > 15 || p.x <= -bound + 15000 || p.x >= bound - 15000 ||
         p.y <= -bound + 15000 || p.y >= bound - 15000)
         return make_error(ErrorCode::InvalidArgument, "road DEM: invalid junction footprint");
     std::vector<std::int32_t> heights;
+    std::array<std::int32_t, 31 * 31> footprint{};
+    const auto index = [](int x, int y) { return static_cast<std::size_t>((y + 15) * 31 + x + 15); };
     for (int y = -radius; y <= radius; ++y) for (int x = -radius; x <= radius; ++x) {
         if (x * x + y * y > radius * radius) continue;
         const auto value = sample(zone, {p.x + x * 1000, p.y + y * 1000}); if (!value) return value.error();
         heights.push_back(*value);
+        footprint[index(x, y)] = *value;
     }
-    std::sort(heights.begin(), heights.end()); return heights[heights.size() / 2];
+    std::sort(heights.begin(), heights.end());
+    // Symmetric pairs cancel the perpendicular plane slope. Median rational
+    // gradients resist local DEM returns; integer ordering is platform-stable.
+    struct Gradient { std::int64_t rise; int run; };
+    std::vector<Gradient> gx, gy;
+    for (int y = -radius; y <= radius; ++y) for (int x = 1; x <= radius; ++x) {
+        if (x * x + y * y > radius * radius) continue;
+        gx.push_back({static_cast<std::int64_t>(footprint[index(x, y)]) - footprint[index(-x, y)], 2 * x});
+        gy.push_back({static_cast<std::int64_t>(footprint[index(y, x)]) - footprint[index(y, -x)], 2 * x});
+    }
+    const auto median = [](std::vector<Gradient>& values) {
+        std::sort(values.begin(), values.end(), [](const auto& a, const auto& b) { return a.rise * b.run < b.rise * a.run; });
+        const auto& g = values[values.size() / 2]; return static_cast<double>(g.rise) / (256 * g.run);
+    };
+    return RoadJunctionPlane{heights[heights.size() / 2], median(gx), median(gy)};
 }
 }

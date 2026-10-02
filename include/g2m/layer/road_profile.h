@@ -9,6 +9,8 @@ struct RoadProfile {
     RoadAttributes attributes;
     RoadReferenceLine reference;
     VerticalProfile vertical;
+    bool start_anchor_inferred = false, end_anchor_inferred = false;
+    bool start_anchor_adjusted = false, end_anchor_adjusted = false;
     Result<VerticalPose> at(double station_m) const;
 };
 struct RoadProfileLimits {
@@ -18,10 +20,10 @@ struct RoadProfileLimits {
     int max_iterations = 4096;
 };
 // Complete topological stretch, never a tile-clipped fragment. Ground endpoints
-// use shared-node DEM medians and zero grade; bridge endpoints use those same
+// use shared-node robust DEM planes; bridge endpoints use those same
 // medians and a constrained abutment interpolation without sampling the
-// bare-earth interior. Both ground and deck endpoint grades are zero, avoiding
-// a grade jump at their shared boundary before junction surfaces are built.
+// bare-earth interior. Endpoint grades project the common plane onto each
+// reference tangent, preserving slope without forcing junctions flat.
 // All required DEM samples must exist. Tunnels remain explicitly unsupported.
 Result<RoadProfile> build_road_profile(const RoadReferenceBuilder& builder,
     const RoadDemSampler& dem, geo::UtmZone zone, std::int64_t way_id, RoadStretch stretch,

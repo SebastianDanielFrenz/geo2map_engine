@@ -1,6 +1,7 @@
 // src/layer/osm_roads.cpp - see g2m/layer/osm_roads.h.
 
 #include "g2m/layer/osm_roads.h"
+#include "g2m/core/det_math.h"
 
 #include "g2m/core/geom/project.h" // project_e7_to_mm
 #include "g2m/core/tile_key.h"     // floor_div
@@ -9,11 +10,55 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <charconv>
 #include <cstdlib>
 #include <limits>
 #include <optional>
 
 namespace g2m {
+RoadSpeedLimit parse_road_speed_limit(std::string_view text) noexcept {
+    while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
+    while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
+    if (text == "none") return {SpeedLimitKind::Unrestricted, 0.0, false};
+    double factor = 1.0;
+    for (const auto unit : {std::string_view("km/h"), std::string_view("kmh"), std::string_view("kph"), std::string_view("mph"), std::string_view("knots")}) {
+        if (text.ends_with(unit)) {
+            text.remove_suffix(unit.size());
+            factor = unit == "mph" ? 1.609344 : unit == "knots" ? 1.852 : 1.0;
+            break;
+        }
+    }
+    while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
+    if (text.empty() || text.front() < '0' || text.front() > '9') return {};
+    double value = 0.0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || !std::isfinite(value) || value < 0.0 || value * factor > 1000.0) return {};
+    return {SpeedLimitKind::Numeric, value * factor, false};
+}
+
+RoadSpeedMatch match_road_speed_limit(std::span<const RoadSegment> roads,
+    geom::PointMm point, double heading_x, double heading_y) noexcept {
+    RoadSpeedMatch best;
+    for (const auto& road : roads) {
+        if (road.bridge) continue;
+        const double dx = static_cast<double>(road.b.x - road.a.x);
+        const double dy = static_cast<double>(road.b.y - road.a.y);
+        const double length2 = dx * dx + dy * dy;
+        if (length2 == 0.0) continue;
+        const double px = static_cast<double>(point.x - road.a.x);
+        const double py = static_cast<double>(point.y - road.a.y);
+        const double t = std::clamp((px * dx + py * dy) / length2, 0.0, 1.0);
+        const double ex = px - t * dx, ey = py - t * dy;
+        const double distance = det::sqrt(ex * ex + ey * ey);
+        if (distance > static_cast<double>(road.half_width_mm)) continue;
+        if (distance < best.distance_mm || (distance == best.distance_mm && road.way_id < best.way_id)) {
+            best.distance_mm = distance;
+            best.way_id = road.way_id;
+            best.limit = dx * heading_x + dy * heading_y >= 0.0 ? road.forward_limit : road.backward_limit;
+        }
+    }
+    return best;
+}
 namespace {
 
 // Parses `text` as one clean decimal number (nothing before or after it,
@@ -98,6 +143,9 @@ const RoadStyle& RoadStyle::default_style() {
 namespace {
 
 struct WayTags {
+    std::optional<std::string_view> maxspeed, forward, backward;
+    bool conditional = false;
+    bool bridge = false;
     std::optional<std::string_view> highway;
     std::optional<std::string_view> surface;
     std::optional<std::string_view> width;
@@ -111,7 +159,12 @@ WayTags read_way_tags(const osm::OsmData& set, const osm::Way& way) {
     for (const osm::Tag& tag : set.tags_of(way)) {
         const std::string_view key = set.str(tag.key);
         const std::string_view value = set.str(tag.value);
-        if (key == "highway") t.highway = value;
+        if (key == "maxspeed") t.maxspeed = value;
+        else if (key == "maxspeed:forward") t.forward = value;
+        else if (key == "maxspeed:backward") t.backward = value;
+        else if (key.starts_with("maxspeed:") && (key.find("conditional") != key.npos || key.find("lanes") != key.npos || key.find("variable") != key.npos)) t.conditional = true;
+        else if (key == "bridge") t.bridge = value != "no";
+        else if (key == "highway") t.highway = value;
         else if (key == "surface") t.surface = value;
         else if (key == "width") t.width = value;
         else if (key == "lanes") t.lanes = value;
@@ -192,6 +245,11 @@ std::vector<RoadSegment> extract_road_segments(const osm::OsmData& set, geo::Utm
             seg.land_class = ws->land_class;
             seg.surface = ws->surface;
             seg.rank = ws->rank;
+            seg.way_id = way.id;
+            seg.bridge = tags.bridge;
+            seg.forward_limit = parse_road_speed_limit(tags.forward.value_or(tags.maxspeed.value_or("")));
+            seg.backward_limit = parse_road_speed_limit(tags.backward.value_or(tags.maxspeed.value_or("")));
+            seg.forward_limit.conditional = seg.backward_limit.conditional = tags.conditional;
             out.push_back(seg);
         }
     }

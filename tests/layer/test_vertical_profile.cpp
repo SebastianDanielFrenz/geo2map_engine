@@ -81,3 +81,24 @@ TEST_CASE("Vertical profiles reject infeasible boundaries and invalid DEM", "[la
     const auto profile = fit_vertical_profile(flat); REQUIRE(profile);
     CHECK_FALSE(profile->segments[0].at(-1)); CHECK_FALSE(profile->segments[0].at(11));
 }
+
+TEST_CASE("Explicit incline is a bounded soft target with fixed endpoints", "[layer][vertical_profile]") {
+    const VerticalSample samples[] = {{0, 100}, {25, 100.25}, {50, 100.5}, {75, 100.75}, {100, 101}};
+    VerticalFitLimits limits; limits.start_grade = limits.end_grade = 0.01;
+    const auto baseline = fit_vertical_profile(samples, limits); REQUIRE(baseline);
+    limits.target_grade = 0.025;
+    const auto target = fit_vertical_profile(samples, limits); REQUIRE(target);
+    CHECK(target->segments.front().height0_m == 100.0);
+    CHECK(target->segments.back().height1_m == 101.0);
+    CHECK(target->segments.front().grade0 == 0.01);
+    CHECK(target->segments.back().grade1 == 0.01);
+    CHECK(target->segments[1].grade0 > baseline->segments[1].grade0);
+    for (const auto& segment : target->segments) for (int i = 0; i <= 10; ++i) {
+        const auto pose = segment.at(segment.station_m + segment.length_m * i / 10.0);
+        REQUIRE(pose);
+        CHECK(std::fabs(pose->grade) <= limits.max_grade + 1e-8);
+        CHECK(std::fabs(pose->second_derivative) <= 1 / limits.min_radius_m + 1e-8);
+    }
+    limits.target_grade = std::numeric_limits<double>::quiet_NaN();
+    CHECK_FALSE(fit_vertical_profile(samples, limits));
+}

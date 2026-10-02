@@ -125,12 +125,30 @@ int main(int argc, char** argv) {
         std::vector<const HeightTile*> views; for (const auto& height : heights) views.push_back(&height);
         const auto dem = RoadDemSampler::make(views); if (!dem) { std::cerr << dem.error().message << '\n'; return 1; }
         std::map<std::string, std::size_t> declined; std::size_t fitted = 0, bridges = 0;
+        std::ofstream profiles_csv(std::string(argv[4]) + ".profiles.csv");
+        if (!profiles_csv) { std::cerr << "cannot open profiles CSV\n"; return 1; }
+        profiles_csv << "way_id,start_ref,end_ref,ok,start_height_m,end_height_m,start_grade,end_grade,error\n";
         RoadProfileLimits profile_limits; profile_limits.reference = limits;
         for (const auto& way : tile->graph.ways) {
             const auto stretches = builder->stretches(way.osm_id); if (!stretches) { std::cerr << stretches.error().message << '\n'; return 1; }
             for (const auto stretch : *stretches) {
                 const auto profile = build_road_profile(*builder, *dem, key->zone, way.osm_id, stretch, profile_limits);
-                if (profile) { ++fitted; if (profile->attributes.bridge) ++bridges; }
+                profiles_csv << way.osm_id << ',' << stretch.start_ref << ',' << stretch.end_ref << ',' << bool(profile);
+                if (profile) {
+                    const auto a = profile->at(0), b = profile->at(profile->reference.length_m);
+                    profiles_csv << ',' << a->height_m << ',' << b->height_m << ',' << a->grade << ',' << b->grade << ",\n";
+                } else profiles_csv << ",,,,,\"" << profile.error().message << "\"\n";
+                if (profile) {
+                    ++fitted;
+                    if (profile->attributes.bridge) {
+                        ++bridges; const auto first = profile->at(0), last = profile->at(profile->reference.length_m);
+                        std::cout << "bridge_profile_way=" << way.osm_id << " length_m=" << profile->reference.length_m
+                            << " deck_start_m=" << first->height_m << " deck_end_m=" << last->height_m
+                            << " start_grade=" << first->grade << " end_grade=" << last->grade
+                            << " inferred_start=" << profile->start_anchor_inferred << " inferred_end=" << profile->end_anchor_inferred
+                            << " adjusted_start=" << profile->start_anchor_adjusted << " adjusted_end=" << profile->end_anchor_adjusted << '\n';
+                    }
+                }
                 else {
                     const auto count = ++declined[profile.error().message];
                     if (count <= 3) {
@@ -144,8 +162,8 @@ int main(int argc, char** argv) {
                         std::cout << "profile_example_way=" << way.osm_id << " start_ref=" << stretch.start_ref
                             << " end_ref=" << stretch.end_ref;
                         if (a && b && reference) std::cout << " length_m=" << reference->length_m
-                            << " endpoint_rise_m=" << (static_cast<double>(*b) - *a) / 256
-                            << " endpoint_mean_grade=" << (static_cast<double>(*b) - *a) / (256 * reference->length_m);
+                            << " dem_endpoint_rise_m=" << (static_cast<double>(*b) - *a) / 256
+                            << " dem_endpoint_mean_grade=" << (static_cast<double>(*b) - *a) / (256 * reference->length_m);
                         for (const auto index : {stretch.start_ref, stretch.end_ref}) {
                             const auto p = point(index); const auto ll = geo::Utm{}.reverse(key->zone, p.x / 1000.0, p.y / 1000.0);
                             std::cout << std::setprecision(10) << " node=" << way.node_ids[index] << " lat=" << ll.lat << " lon=" << ll.lon;

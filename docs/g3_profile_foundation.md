@@ -100,13 +100,17 @@ vertical solver. It preserves the full topological stretch and physical tags,
 including explicit horizontal-curvature exceptions. Ground interior samples use
 a seven-point cross-road median at 5 m station spacing; every contributor must
 exist, so NoData is never hidden by the median. Complete endpoint footprints
-use the shared-node DEM median and zero endpoint grade.
+use a robust shared-node DEM plane: a common median height and world-space
+gradient projected onto each incident road heading. Junctions retain slope.
 
-Bridge spans interpolate only abutment heights through the constrained solver,
-with zero endpoint grades matching ground approaches; interior bare-earth DEM
-is never queried. This does not establish clearance, deck thickness or collision
-acceptance. Tunnels return Unsupported. Numeric incline metadata is preserved;
-using it as a vertical fitting target remains separate work. Sample, extent and
+Bridge boundaries of degree two are structure transitions. Abutment heights
+and slopes are estimated from ground approaches 32 m away, avoiding underpass
+DEM samples. A canonical bridge-span feasibility projection may move these
+inferred heights by at most 0.25 m per endpoint; approaches use the same anchors.
+Unsupported topology or larger corrections fail explicitly. Interior bridge
+bare-earth DEM is never queried. This does not establish clearance, deck thickness or collision
+acceptance. Tunnels return Unsupported. Numeric incline metadata supplies a soft interior slope target; shared endpoint
+heights/slopes and road-class grade/curvature bounds retain priority. Sample, extent and
 iteration budgets fail explicitly; long stretches are not clipped to fit.
 
 Profile and reference regressions pass on Windows release/ASan and Linux TSan

@@ -86,15 +86,36 @@ struct RoadStyle {
 // `land_class`/`surface` already reflect the way's own tags (width/lanes/
 // surface overrides resolved by extract_road_segments); `rank` is copied
 // from the matched HighwayStyleEntry.
+enum class SpeedLimitKind { Unknown, Numeric, Unrestricted };
+struct RoadSpeedLimit {
+    SpeedLimitKind kind = SpeedLimitKind::Unknown;
+    double kph = 0.0;
+    bool conditional = false;
+    friend bool operator==(const RoadSpeedLimit&, const RoadSpeedLimit&) = default;
+};
+RoadSpeedLimit parse_road_speed_limit(std::string_view text) noexcept;
+
 struct RoadSegment {
     geom::PointMm a, b;
     std::int64_t half_width_mm = 0;
     LandClass land_class = LandClass::Unknown;
     SurfaceKind surface = SurfaceKind::Unknown;
     int rank = 0;
+    std::int64_t way_id = 0;
+    RoadSpeedLimit forward_limit{}, backward_limit{};
+    bool bridge = false;
 
     friend bool operator==(const RoadSegment&, const RoadSegment&) = default;
 };
+
+struct RoadSpeedMatch {
+    RoadSpeedLimit limit{};
+    std::int64_t way_id = 0;
+    double distance_mm = 1e100;
+};
+// Allocation-free ground-road match. Bridge decks require future 3D matching.
+RoadSpeedMatch match_road_speed_limit(std::span<const RoadSegment> roads,
+    geom::PointMm point, double heading_x, double heading_y) noexcept;
 
 // Extracts one RoadSegment per consecutive node pair of every drivable way
 // in `set` (RoadStyle's skip rules above). Endpoints are projected with

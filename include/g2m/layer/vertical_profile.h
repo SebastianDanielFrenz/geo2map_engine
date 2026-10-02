@@ -1,6 +1,7 @@
 #pragma once
 #include "g2m/core/result.h"
 #include <span>
+#include <optional>
 #include <vector>
 namespace g2m {
 struct VerticalSample { double station_m = 0, height_m = 0; };
@@ -10,6 +11,8 @@ struct VerticalFitLimits {
     double start_grade = 0, end_grade = 0;
     double slope_weight_m = 5;
     int max_iterations = 4096;
+    // Optional OSM incline as a soft interior slope target; boundaries stay fixed.
+    std::optional<double> target_grade;
 };
 struct VerticalPose { double height_m = 0, grade = 0, second_derivative = 0; };
 struct VerticalCubic {
