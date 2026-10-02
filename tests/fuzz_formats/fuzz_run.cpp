@@ -6,6 +6,7 @@
 
 #include "g2m/layer/pack.h"
 #include "g2m/layer/road_graph_tile.h"
+#include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/region.h"
 #include "g2m/layer/release.h"
 #include "g2m/layer/src_elev.h"
@@ -147,6 +148,14 @@ void run(Target target, std::span<const std::uint8_t> data) {
             data, [](const g2m::TileBody& b) { return g2m::decode_src_osm(b); },
             [](const g2m::OsmTile& t) { return g2m::encode_src_osm(t); }, "src.osm: round trip");
         return;
+    case Target::Roadgeom: {
+        const auto body = body_of(data); if (!body) return;
+        const auto tile = g2m::decode_road_geom(*body); if (!tile) return;
+        const auto encoded = g2m::encode_road_geom(*tile); check(encoded.ok(), "roads.geom: encode");
+        const auto back = g2m::decode_road_geom(*encoded); check(back.ok(), "roads.geom: decode");
+        const auto again = g2m::encode_road_geom(*back); check(again.ok() && *again == *encoded, "roads.geom: stable round trip");
+        return;
+    }
     case Target::Roadgraph:
         raw_layer(data, [](const g2m::TileBody& b) { return g2m::decode_road_graph(b); },
             [](const g2m::RoadGraphTile& t) { return g2m::encode_road_graph(t); }, "roads.graph: round trip");

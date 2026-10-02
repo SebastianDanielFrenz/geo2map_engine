@@ -2,6 +2,7 @@
 #include "g2m/layer/road_reference.h"
 #include "g2m/layer/road_attributes.h"
 #include "g2m/layer/road_profile.h"
+#include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/road_dem_dependencies.h"
 #include "g2m/layer/derive_terrain.h"
 #include "g2m/core/det_math.h"
@@ -183,6 +184,12 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        const auto geometry = build_road_geom_tile(*tile, *dem, profile_limits);
+        if (!geometry) { std::cerr << geometry.error().message << '\n'; return 1; }
+        const auto geometry_body = encode_road_geom(*geometry); if (!geometry_body) return 1;
+        const auto geometry_bytes = encode_body(*geometry_body); if (!geometry_bytes) return 1;
+        const auto geometry_decoded = decode_road_geom(*geometry_body); if (!geometry_decoded) return 1;
+        std::cout << "roads_geom_bytes=" << geometry_bytes->size() << " entries=" << geometry->entries.size() << '\n';
         std::cout << "dem_tiles=" << heights.size() << " profile_ok=" << fitted << " bridge_profiles=" << bridges
             << " profile_with_dem_ms=" << std::chrono::duration<double, std::milli>(Clock::now() - profile_begin).count() << '\n';
         for (const auto& [reason, count] : declined) std::cout << "declined_profiles=" << count << " reason=" << reason << '\n';

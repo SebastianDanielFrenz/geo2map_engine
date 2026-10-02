@@ -7,6 +7,7 @@
 
 #include "g2m/layer/derive_terrain.h"
 #include "g2m/layer/road_graph_tile.h"
+#include "g2m/layer/road_geom_tile.h"
 #include "g2m/server/server.h"
 
 #include <string>
@@ -29,10 +30,12 @@ struct BuiltinTerrainDerivers {
     // fixed slot keeps this struct's layout stable across increments).
 
     RoadGraphDeriver roads;
+    RoadGeomDeriver geometry;
     // Explicit opt-in preserves existing terrain-only release identities.
-    std::vector<const IDeriver*> ordered(bool include_roads = false) const {
+    std::vector<const IDeriver*> ordered(bool include_roads = false, bool include_geometry = false) const {
         std::vector<const IDeriver*> result{&elev, &height};
-        if (include_roads) result.push_back(&roads);
+        if (include_roads || include_geometry) result.push_back(&roads);
+        if (include_geometry) result.push_back(&geometry);
         return result;
     }
 };
@@ -43,6 +46,6 @@ struct BuiltinTerrainDerivers {
 // LayerRegistry::builtin()) - set them on the returned struct before
 // calling make_local_release() if the caller needs otherwise.
 LocalReleaseParams builtin_local_release_params(std::string scope, const BuiltinTerrainDerivers& derivers,
-                                                std::vector<ReleaseSource> sources, bool include_roads = false);
+                                                std::vector<ReleaseSource> sources, bool include_roads = false, bool include_geometry = false);
 
 } // namespace g2m

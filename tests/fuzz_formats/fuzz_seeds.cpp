@@ -7,6 +7,7 @@
 #include "g2m/layer/osm_clip.h"
 #include "g2m/layer/pack.h"
 #include "g2m/layer/road_graph_tile.h"
+#include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/region.h"
 #include "g2m/layer/release.h"
 #include "g2m/layer/src_elev.h"
@@ -185,6 +186,19 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
     case Target::Elev: return elev_bodies();
     case Target::Landcover: return landcover_bodies();
     case Target::Osm: return osm_bodies();
+    case Target::Roadgeom: {
+        g2m::RoadGraphTile graph; graph.key = g2m_test::home_tile();
+        const auto x = graph.key.min_easting() * 1000, y = graph.key.min_northing() * 1000;
+        graph.graph.nodes = {{1, {x + 10000, y + 10000}}, {2, {x + 80000, y + 10000}}};
+        graph.graph.ways = {{10, 1, {1, 2}, {{"highway", "service"}}}};
+        graph.graph.edges = {{10, 0, 1, 2}}; graph.owned_edges = {0};
+        g2m::HeightTile height; height.key = graph.key.child(0, 0).child(0, 0); height.h.fill(25600);
+        const g2m::HeightTile* views[] = {&height}; auto dem = must(g2m::RoadDemSampler::make(views), "road geom DEM");
+        auto tile = must(g2m::build_road_geom_tile(graph, dem), "road geom profile");
+        auto first = body(must(g2m::encode_road_geom(tile), "road geom encode"));
+        tile.entries[0].profile.reset(); tile.entries[0].decline = g2m::make_error(g2m::ErrorCode::Unsupported, "fixture decline");
+        return {std::move(first), body(must(g2m::encode_road_geom(tile), "road geom decline encode"))};
+    }
     case Target::Roadgraph: {
         g2m::RoadGraphTile tile;
         tile.key = g2m_test::home_tile();

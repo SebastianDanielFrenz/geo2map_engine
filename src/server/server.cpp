@@ -545,7 +545,9 @@ Result<ReleaseManifest> make_local_release(TileStore& sources, const LocalReleas
         if (!d) continue;
         const LayerDesc& desc = d->output();
         std::set<TileKey> keys;
-        for (const std::string& input : desc.inputs) {
+        for (const std::string& input : d->coverage_inputs()) {
+            if (std::find(desc.inputs.begin(), desc.inputs.end(), input) == desc.inputs.end())
+                return make_error(ErrorCode::InvalidArgument, "local release: undeclared coverage input");
             const auto it = level2.find(input);
             if (it != level2.end()) keys.insert(it->second.begin(), it->second.end());
         }

@@ -66,6 +66,9 @@ public:
     // SHA-256 of the deriver's configuration (tables, parameters); part of
     // the release id.
     virtual ContentHash config_hash() const = 0;
+    // Coverage-driving inputs may exclude supporting context layers. Default
+    // preserves the historical union policy; every name must be declared.
+    virtual std::span<const std::string> coverage_inputs() const { return output().inputs; }
     // Every input tile needed for `target`, sorted, unique.
     virtual std::vector<InputTileRef> inputs_for(const TileKey& target) const = 0;
     // Called once after first-stage resolution, before derive(). Returns

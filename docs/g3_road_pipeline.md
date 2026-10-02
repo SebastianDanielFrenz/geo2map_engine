@@ -58,7 +58,8 @@ and 79.3 ms derivation CPU, excluding source-store loading. See tools/road_probe
 See [the implemented profile foundation](g3_profile_foundation.md) for physical
 policy, complete DEM dependencies, staged resolution, deterministic elevation
 sampling, G1 clothoid fitting and constrained cubic least squares. Junction-aware complete-way reference construction is implemented; see
-[reference lines](g3_reference_lines.md). roads.geom orchestration remains pending.
+[reference lines](g3_reference_lines.md). roads.geom codec, staged derivation and opt-in server/bake serving are implemented;
+see [the format](formats/road_geom.md). Complete profile acceptance remains open.
 
 Resolve width/lanes/surface/bridge/tunnel/incline from preserved way tags using
 a shared data policy. Keep original ids through any fitted geometry. Fit the

@@ -29,6 +29,7 @@ enum class Target {
     Manifest,  // release_manifest_from_json + server_manifest_from_json
     Path,      // parse_path (protocol v1 request paths)
     Region,    // parse_regions + parse_resolved_region (g2m/layer/region.h)
+    Roadgeom,  // decode_body + decode_road_geom
     Roadgraph, // decode_body + decode_road_graph
 };
 
@@ -40,7 +41,7 @@ struct TargetInfo {
 inline constexpr TargetInfo kTargets[] = {
     {Target::Container, "container"}, {Target::Elev, "elev"}, {Target::Landcover, "landcover"},
     {Target::Osm, "osm"},             {Target::Pack, "pack"}, {Target::Manifest, "manifest"},
-    {Target::Path, "path"},           {Target::Region, "region"}, {Target::Roadgraph, "roadgraph"},
+    {Target::Path, "path"},           {Target::Region, "region"}, {Target::Roadgraph, "roadgraph"}, {Target::Roadgeom, "roadgeom"},
 };
 
 // Runs one input (fuzz_run.cpp).
