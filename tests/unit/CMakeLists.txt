@@ -15,6 +15,7 @@ add_executable(g2m_unit_tests
   test_decode_tiff.cpp
   test_decode_osm.cpp
   test_decode_real_data.cpp
+  test_clothoid.cpp
   test_geom_exact.cpp
   test_ring_assembly.cpp
   test_import_resolve.cpp

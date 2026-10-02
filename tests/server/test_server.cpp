@@ -190,6 +190,101 @@ std::vector<std::uint8_t> elev_container(const TileKey& k) {
 
 } // namespace
 
+TEST_CASE("server: discovered dependencies are resolved, hashed and cached", "[server][discovery]") {
+    World w;
+    class Discovered final : public IDeriver {
+    public:
+        SumDeriver sum;
+        const LayerDesc& output() const override { return sum.output(); }
+        ContentHash config_hash() const override { return sum.config_hash(); }
+        std::vector<InputTileRef> inputs_for(const TileKey& t) const override { return {{kOsm, t}}; }
+        Result<std::vector<InputTileRef>> additional_inputs_for(const DeriveRequest& req) const override {
+            REQUIRE(req.inputs.size() == 1); REQUIRE(req.inputs[0].header);
+            CHECK(req.inputs[0].body == raw_body(kOsm, req.target));
+            ++discoveries;
+            auto east = req.target; ++east.x;
+            return std::vector<InputTileRef>{{kLc, east}, {kOsm, req.target}}; // overlap deduplicates
+        }
+        Result<DeriveResult> derive(const DeriveRequest& req) const override {
+            REQUIRE(req.inputs.size() == 2); CHECK(req.inputs[0].ref.layer == kLc);
+            CHECK(req.inputs[1].ref.layer == kOsm); REQUIRE(req.inputs[0].header);
+            return sum.derive(req);
+        }
+        mutable int discoveries = 0;
+    } deriver;
+    LocalSourceUpstream upstream(*w.sources);
+    ServerConfig config; config.derived_store = w.derived.get(); config.derivers = {&deriver}; config.upstreams = {&upstream};
+    Server server(config); REQUIRE(server.add_release(w.release, "snap1"));
+    const auto response = get_tile(server, w.release.rid, kSum, home_tile()); REQUIRE(response.meta.status == Status::Ok);
+    const auto parsed = parse_container(response.container); REQUIRE(parsed); CHECK(parsed->header.inputs.size() == 2);
+    for (const auto& hash : {content_hash(raw_body(kLc, home_tile(1, 0))), content_hash(raw_body(kOsm, home_tile()))})
+        CHECK(std::find(parsed->header.inputs.begin(), parsed->header.inputs.end(), hash) != parsed->header.inputs.end());
+    const auto cached = get_tile(server, w.release.rid, kSum, home_tile()); REQUIRE(cached.meta.status == Status::Ok);
+    CHECK(cached.container == response.container); CHECK(deriver.discoveries == 1); CHECK(deriver.sum.calls == 1);
+}
+
+TEST_CASE("server: invalid or failed discovered dependencies never cache output", "[server][discovery]") {
+    for (int mode = 0; mode < 4; ++mode) {
+        World w;
+        class Invalid final : public IDeriver {
+        public:
+            int mode = 0;
+            SumDeriver sum;
+            const LayerDesc& output() const override { return sum.output(); }
+            ContentHash config_hash() const override { return sum.config_hash(); }
+            std::vector<InputTileRef> inputs_for(const TileKey& t) const override { return {{kOsm, t}}; }
+            Result<std::vector<InputTileRef>> additional_inputs_for(const DeriveRequest& req) const override {
+                if (mode == 0) return make_error(ErrorCode::Malformed, "bad discovered geometry");
+                if (mode == 1) return std::vector<InputTileRef>{{"undeclared.layer", req.target}};
+                if (mode == 2) return std::vector<InputTileRef>{{kLc, req.target}, {kLc, req.target}};
+                auto key = req.target; key.level = -1; return std::vector<InputTileRef>{{kLc, key}};
+            }
+            Result<DeriveResult> derive(const DeriveRequest& req) const override { return sum.derive(req); }
+        } deriver;
+        deriver.mode = mode;
+        LocalSourceUpstream upstream(*w.sources);
+        ServerConfig config; config.derived_store = w.derived.get(); config.derivers = {&deriver}; config.upstreams = {&upstream};
+        Server server(config); REQUIRE(server.add_release(w.release, "snap1"));
+        const auto response = get_tile(server, w.release.rid, kSum, home_tile());
+        CHECK(response.meta.status == Status::Internal); CHECK(deriver.sum.calls == 0);
+        const auto stored = w.derived->get({to_hex(w.release.rid), kSum, home_tile()}); REQUIRE(stored); CHECK_FALSE(*stored);
+    }
+}
+
+TEST_CASE("server: discovered absent and offline dependencies retain resolver semantics", "[server][discovery]") {
+    for (const bool offline_network : {false, true}) {
+        World w; w.add_network_layer();
+        class Discovery final : public IDeriver {
+        public:
+            bool network = false; SumDeriver sum; LayerDesc desc = sum.output();
+            Discovery() { desc.inputs.push_back(kElev); }
+            const LayerDesc& output() const override { return desc; }
+            ContentHash config_hash() const override { return sum.config_hash(); }
+            std::vector<InputTileRef> inputs_for(const TileKey& t) const override { return {{kOsm, t}}; }
+            Result<std::vector<InputTileRef>> additional_inputs_for(const DeriveRequest& req) const override {
+                auto key = req.target; if (!network) key.x += 20;
+                return std::vector<InputTileRef>{{network ? kElev : kLc, key}};
+            }
+            Result<DeriveResult> derive(const DeriveRequest& req) const override {
+                REQUIRE(req.inputs.size() == 2);
+                CHECK(std::count_if(req.inputs.begin(), req.inputs.end(), [](const auto& in) { return !in.header; }) == 1);
+                return sum.derive(req);
+            }
+        } deriver;
+        deriver.network = offline_network;
+        LocalSourceUpstream local(*w.sources); NetUpstream net;
+        ServerConfig config; config.offline = true; config.derived_store = w.derived.get();
+        config.derivers = {&deriver}; config.upstreams = {&local, &net};
+        Server server(config); REQUIRE(server.add_release(w.release, "snap1"));
+        const auto response = get_tile(server, w.release.rid, kSum, home_tile());
+        CHECK(net.calls == 0);
+        if (offline_network) {
+            CHECK(response.meta.status == Status::Unavailable); CHECK(response.meta.degraded); CHECK(deriver.sum.calls == 0);
+            const auto stored = w.derived->get({to_hex(w.release.rid), kSum, home_tile()}); REQUIRE(stored); CHECK_FALSE(*stored);
+        } else { CHECK(response.meta.status == Status::Ok); CHECK(deriver.sum.calls == 1); }
+    }
+}
+
 TEST_CASE("server: local release manifest", "[server]") {
     World w;
     const ReleaseManifest& m = w.release;

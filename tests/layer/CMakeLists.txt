@@ -22,6 +22,10 @@ add_executable(g2m_layer_tests
   test_raster_encodings.cpp
   test_osm.cpp
   test_osm_roads.cpp
+  test_vertical_profile.cpp
+  test_road_dem_sampler.cpp
+  test_road_dem_dependencies.cpp
+  test_road_attributes.cpp
   test_road_graph.cpp
   test_road_graph_tile.cpp
   test_osm_paint.cpp

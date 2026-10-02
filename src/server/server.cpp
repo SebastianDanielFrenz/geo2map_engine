@@ -183,6 +183,45 @@ struct Server::Impl {
                     inputs.push_back(std::move(in));
                 }
                 DeriveRequest req{key, rel.manifest.world_seed, inputs};
+                auto extra = d->additional_inputs_for(req);
+                if (!extra) {
+                    out.kind = Resolved::Kind::Error;
+                    out.message = "deriver " + name + " dependency discovery: " + extra.error().message;
+                    return out;
+                }
+                if (!extra->empty()) {
+                    const auto invalid = [&]() {
+                        if (extra->size() > kMaxInputHashes || inputs.size() > kMaxInputHashes ||
+                            !std::is_sorted(extra->begin(), extra->end()) ||
+                            std::adjacent_find(extra->begin(), extra->end()) != extra->end()) return true;
+                        for (const auto& ref : *extra)
+                            if (!ref.key.valid() || std::find(d->output().inputs.begin(), d->output().inputs.end(),
+                                ref.layer) == d->output().inputs.end()) return true;
+                        return false;
+                    };
+                    if (invalid()) {
+                        out.kind = Resolved::Kind::Error; out.message = "deriver " + name + ": invalid discovered dependencies";
+                        return out;
+                    }
+                    for (const auto& ref : *extra) {
+                        if (std::find_if(inputs.begin(), inputs.end(), [&](const auto& in) { return in.ref == ref; }) != inputs.end()) continue;
+                        if (inputs.size() == kMaxInputHashes) {
+                            out.kind = Resolved::Kind::Error; out.message = "deriver " + name + ": dependency count limit";
+                            return out;
+                        }
+                        InputTile in; in.ref = ref;
+                        const auto* il = rel.manifest.find_layer(ref.layer);
+                        if (il && !check_tile(il, ref.key)) {
+                            auto r = resolve(rel, *il, ref.key, depth + 1);
+                            if (r.kind == Resolved::Kind::Found) {
+                                in.header = std::move(r.header); in.body = std::move(r.body);
+                            } else if (r.kind != Resolved::Kind::NotFound) return r;
+                        }
+                        inputs.push_back(std::move(in));
+                    }
+                    std::sort(inputs.begin(), inputs.end(), [](const auto& a, const auto& b) { return a.ref < b.ref; });
+                    req.inputs = inputs; // vector growth invalidated the first-stage span
+                }
                 auto res = d->derive(req);
                 if (!res) {
                     out.kind = Resolved::Kind::Error;

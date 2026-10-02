@@ -42,7 +42,12 @@ Windows release CI passes all 19 checks with existing goldens unchanged.
 Windows AddressSanitizer and Linux ThreadSanitizer pass the new tests;
 the new decoder is included in the deterministic fuzz mutation corpus.
 Bandwidth and derivation CPU measurements are still pending.
-## C. Reference lines and vertical profiles
+## C. Reference lines and vertical profiles (foundation implemented)
+
+See [the implemented profile foundation](g3_profile_foundation.md) for physical
+policy, complete DEM dependencies, staged resolution, deterministic elevation
+sampling, G1 clothoid fitting and constrained cubic least squares. Complete-way
+construction and roads.geom orchestration remain in progress.
 
 Resolve width/lanes/surface/bridge/tunnel/incline from preserved way tags using
 a shared data policy. Keep original ids through any fitted geometry. Fit the

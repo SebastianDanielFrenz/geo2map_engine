@@ -704,4 +704,8 @@ sorted; shared node ids define connectivity. It lives in g2m_layers and changes
 no existing served layer, height raster or runtime behavior. Tests are in
 `tests/layer/test_road_graph.cpp`, including the real Frankfurt-Hoechst fixture.
 Remaining slices and acceptance are in `docs/g3_road_pipeline.md`; G3 is not yet
-complete. Graph encoding/derivation is the next slice.
+complete. The opt-in g2m.roads.graph layer now has a bounded codec and nine-input deriver.
+Physical tags, complete DEM dependency enumeration, immutable DEM sampling,
+G1 clothoid fitting and constrained cubic profiles are implemented foundations.
+IDeriver::additional_inputs_for provides one pure discovery stage for distant
+DEM inputs. See docs/g3_profile_foundation.md for limits and project defaults.
