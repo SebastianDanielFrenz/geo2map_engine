@@ -76,6 +76,10 @@ Result<RoadAttributes> resolve_road_attributes(const RoadGraphWay& way, const Ro
     out.max_grade_per_mille = grades[highway->rank]; out.blend_mm = blends[highway->rank];
     out.min_vertical_radius_m = vertical_radii[highway->rank];
     out.min_horizontal_radius_m = horizontal_radii[highway->rank];
+    constexpr std::pair<std::string_view, std::int32_t> link_radii[] = {
+        {"tertiary_link", 10}, {"secondary_link", 15}, {"primary_link", 20}, {"trunk_link", 30}, {"motorway_link", 60}};
+    for (const auto& [name, link_radius] : link_radii)
+        if (highway->highway == name) out.min_horizontal_radius_m = link_radius;
     auto incline = trim(tag(way, "incline"));
     if (incline.ends_with('%')) incline = trim(incline.substr(0, incline.size() - 1));
     if (const auto slope = decimal(incline, 10); slope && *slope >= -1000 && *slope <= 1000)

@@ -41,13 +41,14 @@ adjacent ownership and real server/bake parity with four workers and pinning.
 Windows release CI passes all 19 checks with existing goldens unchanged.
 Windows AddressSanitizer and Linux ThreadSanitizer pass the new tests;
 the new decoder is included in the deterministic fuzz mutation corpus.
-Bandwidth and derivation CPU measurements are still pending.
+The home-map probe measured a 29,998-byte compressed graph body (28,608 bytes/km²)
+and 79.3 ms derivation CPU, excluding source-store loading. See tools/road_probe/README.md.
 ## C. Reference lines and vertical profiles (foundation implemented)
 
 See [the implemented profile foundation](g3_profile_foundation.md) for physical
 policy, complete DEM dependencies, staged resolution, deterministic elevation
-sampling, G1 clothoid fitting and constrained cubic least squares. Complete-way
-construction and roads.geom orchestration remain in progress.
+sampling, G1 clothoid fitting and constrained cubic least squares. Junction-aware complete-way reference construction is implemented; see
+[reference lines](g3_reference_lines.md). roads.geom orchestration remains pending.
 
 Resolve width/lanes/surface/bridge/tunnel/incline from preserved way tags using
 a shared data policy. Keep original ids through any fitted geometry. Fit the

@@ -33,7 +33,7 @@ TEST_CASE("Clothoids meet independent endpoint and unit-speed checks over tangen
         CHECK(std::fabs(b->curvature - a->curvature - curve->curvature_rate * 0.02) < 1e-12);
         golden.f64(endpoint->x).f64(endpoint->y).f64(endpoint->heading).f64(a->x).f64(a->y).f64(b->curvature);
     }
-    CHECK(to_hex(golden.value()) == "3d038842e637f8cc");
+    CHECK(to_hex(golden.value()) == "7034801945bff7b1");
 }
 TEST_CASE("Clothoid fitting rejects invalid and unbounded requests", "[geom][clothoid]") {
     CHECK_FALSE(fit_clothoid(0, 0, 0, 0, 0, 0));

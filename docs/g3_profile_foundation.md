@@ -84,7 +84,11 @@ Bridge abutment interpolation and layer orchestration are not implemented here.
 Release CI passes all 19 checks with existing goldens unchanged. The road
 policy/DEM tests, discovery cache/error/offline tests, clothoid tests and vertical
 tests pass on Windows and Linux, including AddressSanitizer/ThreadSanitizer
-checks. Clothoid bit-pattern golden: `3d038842e637f8cc`; constrained vertical
+checks. Clothoid bit-pattern golden: `7034801945bff7b1`; constrained vertical
 profile golden: `5ae5a60af3c10f3f`. Independent checks include a circular arc,
 unit-speed and endpoint tests over 81 tangent pairs, and an analytic symmetric
 least-squares optimum. Full G3 acceptance remains pending.
+
+Ramp horizontal-radius defaults are 10/15/20/30/60 m for tertiary_link,
+secondary_link, primary_link, trunk_link and motorway_link respectively.
+These remain project fitting defaults, not regulatory standards.

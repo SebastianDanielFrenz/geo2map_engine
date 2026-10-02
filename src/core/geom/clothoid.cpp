@@ -45,6 +45,7 @@ Result<Clothoid> fit_clothoid(double x0, double y0, double h0, double x1, double
     const auto chord_heading = det::atan2(dy, dx);
     const auto theta = normalise(h0 - chord_heading);
     const auto delta = normalise(h1 - h0);
+    if (theta == 0 && delta == 0) return Clothoid{x0, y0, normalise(h0), chord, 0, 0};
     double a = 6 * theta + 3 * delta;
     Integrals values; bool converged = false;
     for (int iteration = 0; iteration < 32; ++iteration) {
@@ -69,6 +70,10 @@ Result<CurvePose> Clothoid::at(double station) const {
     const double a = 0.5 * curvature_rate * length * length, b = curvature0 * length;
     if (!std::isfinite(a) || !std::isfinite(b) || std::fabs(a) > 16 * det::kPi || std::fabs(b) > 20 * det::kPi)
         return error("clothoid: integration phase budget");
+    if (curvature0 == 0 && curvature_rate == 0) {
+        double s, c; det::sincos(heading0, s, c);
+        return CurvePose{x0 + station * c, y0 + station * s, normalise(heading0), 0};
+    }
     const auto values = integrate(a, b, heading0, station / length);
     return CurvePose{x0 + length * values.x, y0 + length * values.y,
         normalise(heading0 + curvature0 * station + 0.5 * curvature_rate * station * station),

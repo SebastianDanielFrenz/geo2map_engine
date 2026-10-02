@@ -12,3 +12,7 @@ if(WIN32)
   # rss.cpp's K32GetProcessMemoryInfo resolves directly from kernel32.dll
   # (available since Vista) - no psapi.lib to link.
 endif()
+
+# G3 geometry diagnostics over an existing immutable source store.
+add_executable(g2m_road_probe ../../tools/road_probe/main.cpp)
+target_link_libraries(g2m_road_probe PRIVATE g2m_server g2m_warnings g2m_options)
