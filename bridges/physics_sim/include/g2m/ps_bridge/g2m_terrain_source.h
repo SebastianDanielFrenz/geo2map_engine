@@ -93,6 +93,13 @@ public:
     // both branches are the same allocation-free/lock-free contract.
     void fill_tile(ps::terrain::TileKey key, ps::terrain::TileSample& out) const override;
 
+    [[nodiscard]] ps::terrain::PrefetchSupportKind prefetch_support() const override {
+        return ps::terrain::PrefetchSupportKind::Snapshot;
+    }
+    bool acquire_prefetch_inputs(ps::terrain::TileKey key, std::shared_ptr<const void>& out) const override;
+    void fill_tile_from(ps::terrain::TileKey key, const void* inputs, ps::terrain::TileSample& out) const override;
+    [[nodiscard]] bool prefetch_inputs_current(ps::terrain::TileKey key, const void* inputs) const override;
+
     // Diagnostic counters (PLAN.md R2.2 1b), relaxed atomics incremented
     // from inside the const fill_tile above: fill_miss_count() counts a
     // fill that touched at least one L0 key never installed in the
@@ -112,6 +119,10 @@ public:
     [[nodiscard]] std::uint64_t nodata_fill_count() const noexcept;
 
 private:
+    void fill_from(ps::terrain::TileKey key, const g2m::phys::ResidentHeightSet& resident,
+                   ps::terrain::TileSample& out) const;
+    bool footprint_ready(ps::terrain::TileKey key, const g2m::phys::ResidentHeightSet& snapshot,
+                         bool compare_live) const;
     g2m::phys::PhysicsTileGrid grid_;
     std::shared_ptr<const g2m::phys::ResidentHeightSet> resident_;
     ps::SurfaceId surface_;
@@ -138,6 +149,7 @@ private:
 //     (G8, bridge-release, dev box) measured update_heightfield_body(256^2)
 //     at ~2.26 ms mean - over budget on its own - against ~0.03 ms per
 //     fill_tile and ~0.006 ms/tick of weld overhead at pool 49.
-[[nodiscard]] ps::terrain::TerrainConfig make_terrain_config(double interest_radius_m, std::uint32_t fills_per_tick);
+[[nodiscard]] ps::terrain::TerrainConfig make_terrain_config(double interest_radius_m, std::uint32_t fills_per_tick,
+                    std::uint32_t prefetch_margin_tiles = 0, std::uint32_t prefetch_max_tiles = 0);
 
 } // namespace g2m::ps_bridge

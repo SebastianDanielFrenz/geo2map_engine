@@ -17,9 +17,9 @@ ResidentHeightSet::Lookup ResidentHeightSet::find(const TileKey& key, const Heig
                                                    std::shared_ptr<const std::vector<RoadSegment>>* roads_out) const
     noexcept {
     const auto packed = packed_of(key);
-    const auto it = std::lower_bound(entries_.begin(), entries_.end(), packed,
+    const auto it = std::lower_bound(entries_->begin(), entries_->end(), packed,
                                      [](const Entry& e, std::uint64_t p) { return e.key.packed() < p; });
-    if (it == entries_.end() || it->key.packed() != packed) {
+    if (it == entries_->end() || it->key.packed() != packed) {
         *out = nullptr;
         if (roads_out) *roads_out = nullptr;
         return Lookup::Missing;
@@ -39,29 +39,55 @@ void ResidentHeightSet::install(const TileKey& key, std::shared_ptr<const Height
 
 void ResidentHeightSet::install(const TileKey& key, std::shared_ptr<const HeightTile> tile,
                                  std::shared_ptr<const std::vector<RoadSegment>> roads) {
+    make_writable();
     const auto packed = packed_of(key);
-    const auto it = std::lower_bound(entries_.begin(), entries_.end(), packed,
+    const auto it = std::lower_bound(entries_->begin(), entries_->end(), packed,
                                      [](const Entry& e, std::uint64_t p) { return e.key.packed() < p; });
-    if (it != entries_.end() && it->key.packed() == packed) {
+    if (it != entries_->end() && it->key.packed() == packed) {
         it->tile = std::move(tile);
         it->roads = std::move(roads);
         return;
     }
-    entries_.insert(it, Entry{key, std::move(tile), std::move(roads)});
+    entries_->insert(it, Entry{key, std::move(tile), std::move(roads)});
 }
 
 void ResidentHeightSet::retain_only(std::span<const TileKey> keep_sorted) {
+    const bool evicts = std::any_of(entries_->begin(), entries_->end(), [&](const Entry& e) {
+        return !std::binary_search(keep_sorted.begin(), keep_sorted.end(), e.key,
+            [](const TileKey& a, const TileKey& b) { return a.packed() < b.packed(); });
+    });
+    if (!evicts) return;
+    make_writable();
     std::vector<Entry> kept;
-    kept.reserve(entries_.size());
+    kept.reserve(entries_->size());
     std::size_t ki = 0;
-    for (auto& entry : entries_) {
+    for (auto& entry : *entries_) {
         const auto p = entry.key.packed();
         while (ki < keep_sorted.size() && keep_sorted[ki].packed() < p) ++ki;
         if (ki < keep_sorted.size() && keep_sorted[ki].packed() == p) {
             kept.push_back(std::move(entry));
         }
     }
-    entries_ = std::move(kept);
+    *entries_ = std::move(kept);
+}
+
+void ResidentHeightSet::make_writable() {
+    if (published_) {
+        retired_.push_back(std::move(published_));
+    }
+    if (entries_.use_count() != 1) entries_ = std::make_shared<Entries>(*entries_);
+}
+
+void ResidentHeightSet::publish_snapshot() {
+    if (!published_) {
+        auto view = std::make_shared<ResidentHeightSet>();
+        view->entries_ = entries_;
+        published_ = std::move(view);
+    }
+}
+
+void ResidentHeightSet::purge_retired_snapshots() {
+    std::erase_if(retired_, [](const auto& view) { return view.use_count() == 1; });
 }
 
 bool ResidentHeightSet::contains(const TileKey& key) const noexcept {

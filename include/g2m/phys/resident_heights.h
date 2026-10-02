@@ -72,7 +72,16 @@ public:
     // every other entry is dropped. O(size() + keep_sorted.size()).
     void retain_only(std::span<const TileKey> keep_sorted);
 
-    std::size_t size() const noexcept { return entries_.size(); }
+    // Publish only on the owner thread, BETWEEN steps. Snapshot acquisition
+    // inside a step only copies a shared_ptr; it never allocates or locks.
+    // Mutations use copy-on-write and invalidate the published handle until
+    // the owner publishes again. Retired snapshots retain storage until an
+    // owner-thread purge observes that all background/tick readers released it.
+    void publish_snapshot();
+    void purge_retired_snapshots();
+    [[nodiscard]] std::shared_ptr<const ResidentHeightSet> snapshot() const noexcept { return published_; }
+    [[nodiscard]] std::size_t retired_snapshot_count() const noexcept { return retired_.size(); }
+    std::size_t size() const noexcept { return entries_->size(); }
     // True whether the key is Resident or Absent (i.e. find() != Missing).
     bool contains(const TileKey& key) const noexcept;
 
@@ -83,7 +92,11 @@ private:
         std::shared_ptr<const std::vector<RoadSegment>> roads;      // see the 3-arg install() above
     };
     // Sorted ascending by key.packed(), unique by key.
-    std::vector<Entry> entries_;
+    using Entries = std::vector<Entry>;
+    void make_writable();
+    std::shared_ptr<Entries> entries_ = std::make_shared<Entries>();
+    std::shared_ptr<const ResidentHeightSet> published_;
+    std::vector<std::shared_ptr<const ResidentHeightSet>> retired_;
 };
 
 } // namespace g2m::phys

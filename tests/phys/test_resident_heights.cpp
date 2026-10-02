@@ -7,6 +7,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <memory>
 #include <vector>
 
@@ -179,4 +181,55 @@ TEST_CASE("ResidentHeightSet::retain_only keeps a key that never resided (harmle
 
     CHECK(set.size() == 1); // never_installed was never an entry, so nothing to keep for it
     CHECK(set.contains(a));
+}
+
+
+TEST_CASE("Resident snapshots survive replacement and eviction until owner purge", "[phys][snapshot]") {
+    ResidentHeightSet set;
+    const auto key = key_at(-1, -2);
+    set.install(key, make_tile(key, 256));
+    set.publish_snapshot();
+    auto view = set.snapshot();
+    std::weak_ptr<const ResidentHeightSet> weak = view;
+    set.install(key, make_tile(key, 512));
+    CHECK_FALSE(set.snapshot()); // cannot publish during tick acquisition
+    const g2m::HeightTile* old = nullptr;
+    CHECK(view->find(key, &old) == ResidentHeightSet::Lookup::Resident);
+    CHECK(old->h[0] == 256);
+    set.retain_only({});
+    CHECK(set.size() == 0);
+    set.publish_snapshot();
+    CHECK(set.snapshot()->size() == 0);
+    set.purge_retired_snapshots();
+    CHECK_FALSE(weak.expired());
+    view.reset(); // releasing a ticket must not destroy its snapshot
+    CHECK_FALSE(weak.expired());
+    set.purge_retired_snapshots();
+    CHECK(weak.expired());
+    CHECK(set.retired_snapshot_count() == 0);
+}
+
+
+TEST_CASE("Resident snapshot reads race neither owner replacement nor purge", "[phys][snapshot]") {
+    ResidentHeightSet set;
+    const auto key = key_at(-1, -2);
+    set.install(key, make_tile(key, 256));
+    set.publish_snapshot();
+    auto view = set.snapshot();
+    std::atomic<bool> start{false}, ok{true};
+    std::thread reader([&] {
+        while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+        for (int i = 0; i < 10000; ++i) {
+            const g2m::HeightTile* height = nullptr;
+            if (view->find(key, &height) != ResidentHeightSet::Lookup::Resident || height->h[0] != 256) ok = false;
+        }
+    });
+    start.store(true, std::memory_order_release);
+    for (int i = 0; i < 32; ++i) {
+        set.install(key, make_tile(key, 512 + i));
+        set.publish_snapshot();
+        set.purge_retired_snapshots();
+    }
+    reader.join();
+    CHECK(ok.load());
 }

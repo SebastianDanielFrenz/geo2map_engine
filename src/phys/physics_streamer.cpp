@@ -143,6 +143,9 @@ GateStatus PhysicsTerrainStreamer::update(std::span<const InterestPoint> points)
     status.inflight = ls.queued + ls.inflight;
     status.resident = static_cast<std::uint32_t>(set_.size());
     status.failed = static_cast<std::uint32_t>(failed_.size());
+    // All allocations/reclamation occur on the owner side, outside World::step.
+    set_.publish_snapshot();
+    set_.purge_retired_snapshots();
     return status;
 }
 

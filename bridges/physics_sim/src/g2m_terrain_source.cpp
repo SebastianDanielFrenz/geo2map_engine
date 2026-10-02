@@ -50,10 +50,62 @@ ps::Vec3 G2mTerrainSource::tile_origin_xy(ps::terrain::TileKey key) const {
 }
 
 void G2mTerrainSource::fill_tile(ps::terrain::TileKey key, ps::terrain::TileSample& out) const {
+    fill_from(key, *resident_, out);
+}
+
+void G2mTerrainSource::fill_tile_from(ps::terrain::TileKey key, const void* inputs,
+                                     ps::terrain::TileSample& out) const {
+    fill_from(key, *static_cast<const g2m::phys::ResidentHeightSet*>(inputs), out);
+}
+
+bool G2mTerrainSource::acquire_prefetch_inputs(ps::terrain::TileKey key,
+                                              std::shared_ptr<const void>& out) const {
+    auto view = resident_->snapshot();
+    if (!view || !footprint_ready(key, *view, false)) return false;
+    out = std::move(view);
+    return true;
+}
+
+bool G2mTerrainSource::prefetch_inputs_current(ps::terrain::TileKey key, const void* inputs) const {
+    return inputs && footprint_ready(key, *static_cast<const g2m::phys::ResidentHeightSet*>(inputs), true);
+}
+
+bool G2mTerrainSource::footprint_ready(ps::terrain::TileKey key,
+                                       const g2m::phys::ResidentHeightSet& view, bool compare_live) const {
+    const auto index = g2m::phys::PhysicsTileGrid::unpack(key.packed);
+    const std::int64_t ts = grid_.samples() - 1;
+    const auto col = grid_.frame().e0_m() + ts * index.ix;
+    const auto row = grid_.frame().n0_m() + ts * index.iy;
+    // Include both border height samples; cell-centre road inputs are a subset.
+    for (auto y = g2m::floor_div(row, 256); y <= g2m::floor_div(row + ts, 256); ++y) {
+        for (auto x = g2m::floor_div(col, 256); x <= g2m::floor_div(col + ts, 256); ++x) {
+            g2m::TileKey l0;
+            l0.zone = grid_.frame().zone();
+            l0.level = 0;
+            l0.x = static_cast<std::int32_t>(x);
+            l0.y = static_cast<std::int32_t>(y);
+            const g2m::HeightTile* height = nullptr;
+            std::shared_ptr<const std::vector<g2m::RoadSegment>> roads;
+            const auto state = view.find(l0, &height, &roads);
+            if (state == g2m::phys::ResidentHeightSet::Lookup::Missing) return false;
+            if (road_ && state == g2m::phys::ResidentHeightSet::Lookup::Resident && !roads) return false;
+            if (compare_live) {
+                const g2m::HeightTile* live_height = nullptr;
+                std::shared_ptr<const std::vector<g2m::RoadSegment>> live_roads;
+                if (resident_->find(l0, &live_height, &live_roads) != state || height != live_height ||
+                    (road_ && roads.get() != live_roads.get())) return false;
+            }
+        }
+    }
+    return true;
+}
+
+void G2mTerrainSource::fill_from(ps::terrain::TileKey key, const g2m::phys::ResidentHeightSet& resident,
+                                 ps::terrain::TileSample& out) const {
     const g2m::phys::PhysTileIndex index = g2m::phys::PhysicsTileGrid::unpack(key.packed);
 
     const g2m::phys::FillResult result =
-        g2m::phys::fill_physics_heights<ps::real>(grid_, index, *resident_, out.heights.data(), ps::kHeightfieldNoCollision);
+        g2m::phys::fill_physics_heights<ps::real>(grid_, index, resident, out.heights.data(), ps::kHeightfieldNoCollision);
 
     if (road_) {
         // Road mode (PLAN.md G2.5a-grip section 5, commit G-c): per-cell
@@ -62,7 +114,7 @@ void G2mTerrainSource::fill_tile(ps::terrain::TileKey key, ps::terrain::TileSamp
         // contract) - fill_physics_surfaces only overwrites content, same as
         // the std::fill below in uniform mode.
         const g2m::RoadBlockStats road_stats =
-            g2m::phys::fill_physics_surfaces(grid_, index, *resident_, road_->lut, road_->off_road, out.cell_surface_ids);
+            g2m::phys::fill_physics_surfaces(grid_, index, resident, road_->lut, road_->off_road, out.cell_surface_ids);
         if (road_stats.missing_blocks > 0) fill_miss_count_.fetch_add(1, std::memory_order_relaxed);
     } else {
         // Every cell gets the same single surface (PLAN.md R2.2 1b) - `out`'s
@@ -95,7 +147,9 @@ std::uint64_t G2mTerrainSource::nodata_fill_count() const noexcept {
     return nodata_fill_count_.load(std::memory_order_relaxed);
 }
 
-ps::terrain::TerrainConfig make_terrain_config(double interest_radius_m, std::uint32_t fills_per_tick) {
+ps::terrain::TerrainConfig make_terrain_config(double interest_radius_m, std::uint32_t fills_per_tick,
+                                                 std::uint32_t prefetch_margin_tiles,
+                                                 std::uint32_t prefetch_max_tiles) {
     ps::terrain::TerrainConfig cfg;
     cfg.suppress_terrain_under_static_geometry = false;
     cfg.precompute_suppression_at_load = false;
@@ -108,6 +162,8 @@ ps::terrain::TerrainConfig make_terrain_config(double interest_radius_m, std::ui
     const std::size_t side = static_cast<std::size_t>(2 * r + 3);
     cfg.max_resident_tiles = side * side;
     cfg.max_tile_fills_per_tick = fills_per_tick;
+    cfg.prefetch_margin_tiles = prefetch_margin_tiles;
+    cfg.prefetch_max_tiles = prefetch_max_tiles;
     return cfg;
 }
 

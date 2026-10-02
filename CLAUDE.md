@@ -671,3 +671,26 @@ tools\ci.ps1 -Only release,linux-release   # named legs only
 tools\setup_dev_env.ps1 -CheckOnly   # verify only, installs nothing
 tools\setup_dev_env.ps1              # install what is missing (winget / apt)
 ```
+
+## Terrain prefetch snapshots (2026-10-01)
+
+ResidentHeightSet uses copy-on-write entry storage. PhysicsTerrainStreamer
+publishes an immutable ResidentHeightSet view after its owner-thread update and
+purges retired views there, outside World::step. Tick-side snapshot acquisition
+copies only a shared_ptr. Old views retain height and road objects until their
+last reader releases them AND the owner purges them; ticket release cannot
+free storage inside the physics tick. Mutating published HeightTile or road
+objects through a separate mutable alias is forbidden.
+
+G2mTerrainSource advertises Snapshot support. acquire_prefetch_inputs declines
+unpublished or incomplete footprints (missing heights, or missing road lists
+in road mode). Confirmed Absent tiles and successful empty roads are valid.
+fill_tile_from reads only the captured view. prefetch_inputs_current compares
+lookup state plus height and road pointer identities for the tile's complete
+L0 footprint; unrelated residency changes do not invalidate a build.
+make_terrain_config accepts optional prefetch margin and ticket cap (zero/off
+by default). Bridge physics pin is b90a531.
+
+Snapshot tests cover replacement/eviction lifetime, owner purge, concurrent
+read/fill against live mutation, relevant height/road invalidation, zero
+allocation callbacks and on/off per-tick crossing hashes at 1/4/24 workers.
