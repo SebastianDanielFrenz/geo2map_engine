@@ -44,6 +44,7 @@ Result<RoadReferenceLine> fit_road_reference(const RoadGraph& graph, std::int64_
 class RoadReferenceBuilder {
 public:
     static Result<RoadReferenceBuilder> make(const RoadGraph& graph);
+    const RoadGraph& graph() const { return *graph_; }
     Result<std::vector<RoadStretch>> stretches(std::int64_t way_id) const;
     Result<RoadReferenceLine> fit_stretch(std::int64_t way_id, RoadStretch stretch,
         const ReferenceFitLimits& limits = {}) const;

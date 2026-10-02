@@ -92,3 +92,25 @@ least-squares optimum. Full G3 acceptance remains pending.
 Ramp horizontal-radius defaults are 10/15/20/30/60 m for tertiary_link,
 secondary_link, primary_link, trunk_link and motorway_link respectively.
 These remain project fitting defaults, not regulatory standards.
+
+## Complete-stretch profile construction
+
+road_profile.h joins RoadReferenceBuilder to RoadDemSampler and the constrained
+vertical solver. It preserves the full topological stretch and physical tags,
+including explicit horizontal-curvature exceptions. Ground interior samples use
+a seven-point cross-road median at 5 m station spacing; every contributor must
+exist, so NoData is never hidden by the median. Complete endpoint footprints
+use the shared-node DEM median and zero endpoint grade.
+
+Bridge spans interpolate only abutment heights through the constrained solver,
+with zero endpoint grades matching ground approaches; interior bare-earth DEM
+is never queried. This does not establish clearance, deck thickness or collision
+acceptance. Tunnels return Unsupported. Numeric incline metadata is preserved;
+using it as a vertical fitting target remains separate work. Sample, extent and
+iteration budgets fail explicitly; long stretches are not clipped to fit.
+
+Profile and reference regressions pass on Windows release/ASan and Linux TSan
+(513 assertions in 11 cases), including interior outliers, missing samples,
+bridge NoData exclusion, endpoint grades and station validation. Release CI
+passes all 19 checks. This remains construction code, not a served geometry or
+runtime carving layer.

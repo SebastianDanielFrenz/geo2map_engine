@@ -19,6 +19,7 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/height_tile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/derive_terrain.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/osm_roads.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/road_profile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_reference.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/vertical_profile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_dem_sampler.cpp
