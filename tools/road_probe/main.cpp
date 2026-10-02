@@ -46,6 +46,16 @@ int main(int argc, char** argv) {
     if (!derived) { std::cerr << derived.error().message << '\n'; return 1; }
     const auto body = decode_body(derived->body); if (!body) { std::cerr << body.error().message << '\n'; return 1; }
     const auto tile = decode_road_graph(*body); if (!tile) { std::cerr << tile.error().message << '\n'; return 1; }
+    std::ofstream edges_csv(std::string(argv[4]) + ".edges.csv");
+    if (!edges_csv) { std::cerr << "cannot open edges CSV\n"; return 1; }
+    edges_csv << "way_id,pair_index,from_node,to_node,bridge,tunnel\n";
+    for (const auto& edge : tile->graph.edges) {
+        const auto way = std::lower_bound(tile->graph.ways.begin(), tile->graph.ways.end(), edge.way_id,
+            [](const auto& w, auto id) { return w.osm_id < id; });
+        const auto attrs = resolve_road_attributes(*way); if (!attrs) return 1;
+        edges_csv << edge.way_id << ',' << edge.segment_index << ',' << edge.from_node << ',' << edge.to_node
+            << ',' << attrs->bridge << ',' << attrs->tunnel << '\n';
+    }
     std::ofstream csv(argv[4]); if (!csv) { std::cerr << "cannot open output CSV\n"; return 1; }
     csv << "way_id,highway,rank,refs,min_class_radius_m,median_source_radius_m,owned_edges,reference_ok,stretches,failed_stretches,failed_owned_edges,fitted_length_m,reference_ms,error\n";
     const auto references_begin = Clock::now(); std::size_t accepted = 0; double length = 0;

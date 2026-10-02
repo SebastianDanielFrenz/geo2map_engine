@@ -26,19 +26,22 @@ Result<Anchor> raw_anchor(const RoadGraph& graph, const RoadDemSampler& dem,
         for (const auto& edge : graph.edges) if (edge.from_node == node || edge.to_node == node) edges.push_back(&edge);
         return edges;
     };
-    auto edges = incident(id); bool bridge = false; const RoadGraphEdge* approach = nullptr;
+    const auto edges = incident(id);
+    std::size_t bridge_count = 0;
+    std::vector<const RoadGraphEdge*> approaches;
     for (const auto* edge : edges) {
-        const auto a = attrs(*edge); if (!a) return Result<Anchor>{a.error()};
-        bridge = bridge || a->bridge;
-        if (!a->bridge && !a->tunnel) approach = edge;
+        const auto a = attrs(*edge); if (!a) return a.error();
+        if (a->bridge) ++bridge_count;
+        else if (!a->tunnel) approaches.push_back(edge);
     }
-    if (!bridge) {
+    if (!bridge_count) {
         const auto plane = dem.junction_plane(zone, point(id)); if (!plane) return plane.error();
         return Anchor{*plane, false};
     }
-    if (edges.size() != 2 || !approach)
+    if (bridge_count != 1 || approaches.empty() || approaches.size() > 8)
         return make_error(ErrorCode::Unsupported, "road profile: bridge boundary requires ground approach context");
-    constexpr double support_distance = 32; // metres away from the bare-earth underpass footprint
+    const auto from_approach = [&](const RoadGraphEdge* approach) -> Result<Anchor> {
+        constexpr double support_distance = 32; // metres away from the bare-earth underpass footprint
     double remaining = support_distance; auto node = id;
     for (std::size_t work = 0; work < 1000; ++work) {
         const auto other = approach->from_node == node ? approach->to_node : approach->from_node;
@@ -65,7 +68,31 @@ Result<Anchor> raw_anchor(const RoadGraph& graph, const RoadDemSampler& dem,
         approach = candidate; node = other;
     }
     return make_error(ErrorCode::LimitExceeded, "road profile: approach walk budget");
+    };
+    std::vector<RoadJunctionPlane> planes;
+    for (const auto* approach : approaches) {
+        const auto anchor = from_approach(approach); if (!anchor) return anchor.error();
+        planes.push_back(anchor->plane);
+    }
+    // At a true merge, all supported ground approaches must agree within the
+    // same 0.25 m uncertainty per estimate before a shared junction plane is used.
+    const auto [low, high] = std::minmax_element(planes.begin(), planes.end(),
+        [](const auto& a, const auto& b) { return a.height < b.height; });
+    if (static_cast<std::int64_t>(high->height) - low->height > 128)
+        return make_error(ErrorCode::LimitExceeded, "road profile: junction approach estimates disagree by more than 0.5 m");
+    RoadJunctionPlane plane;
+    std::int64_t height_sum = 0;
+    for (const auto& estimate : planes) {
+        height_sum += estimate.height;
+        plane.grade_x += estimate.grade_x;
+        plane.grade_y += estimate.grade_y;
+    }
+    plane.height = static_cast<std::int32_t>(std::llround(static_cast<double>(height_sum) / static_cast<double>(planes.size())));
+    plane.grade_x /= static_cast<double>(planes.size());
+    plane.grade_y /= static_cast<double>(planes.size());
+    return Anchor{plane, true};
 }
+
 Result<Anchor> surface_anchor(const RoadReferenceBuilder& builder, const RoadDemSampler& dem,
     geo::UtmZone zone, std::int64_t id, const ReferenceFitLimits& limits) {
     const auto& graph = builder.graph(); auto raw = raw_anchor(graph, dem, zone, id);
@@ -176,6 +203,20 @@ Result<RoadProfile> build_road_profile(const RoadReferenceBuilder& builder,
     for (std::size_t i = 1; i < count; ++i) {
         const auto station = step * static_cast<double>(i); const auto pose = out.reference.at(station);
         if (!pose) return pose.error();
+        // The bridge approach footprint may contain the underlying road or
+        // embankment. Use the supported anchor plane through that 32 m zone;
+        // the support footprint itself was fully validated by raw_anchor.
+        const bool near_start = first->inferred && station <= 32;
+        const bool near_end = last->inferred && out.reference.length_m - station <= 32;
+        if (near_start || near_end) {
+            const auto height_from = [&](const Anchor& anchor, const geom::CurvePose& at) {
+                return anchor.plane.height / 256.0 + anchor.plane.grade_x * (pose->x - at.x) + anchor.plane.grade_y * (pose->y - at.y);
+            };
+            const auto height = near_start && near_end ?
+                std::lerp(height_from(*first, *start), height_from(*last, *end), station / out.reference.length_m) :
+                near_start ? height_from(*first, *start) : height_from(*last, *end);
+            samples.push_back({station, height}); continue;
+        }
         const auto nx = -det::sin(pose->heading), ny = det::cos(pose->heading);
         std::array<std::int32_t, 7> heights{};
         for (int offset = -3; offset <= 3; ++offset) {

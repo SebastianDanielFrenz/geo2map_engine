@@ -41,3 +41,9 @@ one infeasible fixed cubic boundary, one class-grade conflict and 43 bounded
 solver convergence failures. Construction plus DEM derivation took 1.63 seconds
 in one run. NoData errors remain explicit; these counts are not runtime coverage.
 The analytically incompatible boundaries are distinct from solver failures.
+
+
+With `--profiles`, the probe writes `<OUTPUT_CSV>.profiles.csv` with success,
+endpoint height/grade and failure reason per stretch. `<OUTPUT_CSV>.edges.csv`
+records original way/pair/node identities and bridge/tunnel flags. These expose
+true branching junctions separately from degree-two structure transitions.

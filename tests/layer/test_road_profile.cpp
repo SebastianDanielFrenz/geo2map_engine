@@ -114,3 +114,26 @@ TEST_CASE("Short motorway decks share bounded DEM corrections with their approac
     const auto incomplete = graph(true); const auto incomplete_builder = RoadReferenceBuilder::make(incomplete); REQUIRE(incomplete_builder);
     CHECK_FALSE(build_road_profile(*incomplete_builder, *dem, zone, 10, {0, 1}));
 }
+
+TEST_CASE("Bridge merges share bounded approach estimates without sampling underpass DEM", "[layer][road_profile]") {
+    auto g = graph(true);
+    g.nodes = {{1, {50000, 10000}}, {2, {150000, 10000}}, {3, {10000, 10000}},
+        {4, {200000, 10000}}, {5, {50000, 60000}}};
+    g.ways.push_back({20, 1, {3, 1}, {{"highway", "service"}}});
+    g.ways.push_back({30, 1, {2, 4}, {{"highway", "service"}}});
+    g.ways.push_back({40, 1, {5, 1}, {{"highway", "service"}}});
+    g.edges.push_back({20, 0, 3, 1}); g.edges.push_back({30, 0, 2, 4}); g.edges.push_back({40, 0, 5, 1});
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    auto t = tile();
+    for (int y = 5; y <= 15; ++y) for (int x = 25; x <= 45; ++x) t.h[y * 256 + x] = kHeightNoData;
+    const HeightTile* tiles[] = {&t}; const auto dem = RoadDemSampler::make(tiles); REQUIRE(dem);
+    const auto deck = build_road_profile(*builder, *dem, zone, 10, {0, 1}); REQUIRE(deck);
+    const auto ground = build_road_profile(*builder, *dem, zone, 20, {0, 1}); REQUIRE(ground);
+    const auto ramp = build_road_profile(*builder, *dem, zone, 40, {0, 1}); REQUIRE(ramp);
+    CHECK(deck->at(0)->height_m == ground->at(ground->reference.length_m)->height_m);
+    CHECK(deck->at(0)->height_m == ramp->at(ramp->reference.length_m)->height_m);
+    CHECK(deck->start_anchor_inferred);
+    for (int y = 37; y <= 47; ++y) for (int x = 45; x <= 55; ++x) t.h[y * 256 + x] += 256;
+    const auto disagreement = build_road_profile(*builder, *dem, zone, 10, {0, 1}); REQUIRE_FALSE(disagreement);
+    CHECK(disagreement.error().message == "road profile: junction approach estimates disagree by more than 0.5 m");
+}

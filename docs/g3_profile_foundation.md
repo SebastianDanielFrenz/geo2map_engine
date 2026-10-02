@@ -126,3 +126,15 @@ before consuming the projection budget. It is a necessary test, not a promise
 that the conservative cubic constraints will converge or be feasible. Updated
 vertical/profile/reference selection: 2,276 assertions in 16 cases pass on
 Windows ASan and Linux TSan; existing vertical and reference hashes are unchanged.
+
+
+Bridge/ramp junction extension (2026-10-02): one incident bridge with up to eight
+ground approaches uses a canonical mean plane only when the projected approach
+heights agree within 0.5 m (0.25 m uncertainty per estimate). Otherwise it fails.
+Ground fitting uses the inferred plane within the 32 m approach zone rather
+than bare-earth underpass targets. All support footprints must be complete.
+The marked A66 bridge 1045544336, ground ways 1045544335/194653320 and bridge
+23658583 now fit with exactly shared endpoint heights. This is estimated
+construction geometry, not measured clearance or collision acceptance.
+The home probe accepts 395/478 profiles, including six bridges. Remaining
+failures are explicit; roads.geom serving and runtime carving remain pending.
