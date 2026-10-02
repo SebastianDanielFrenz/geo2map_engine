@@ -1,5 +1,15 @@
 # G3 road pipeline: implementation slices
 
+Current checkpoint (2026-10-02): A and B implemented; C has tested reference and
+complete-stretch DEM/bridge profile construction, but is not accepted. The home
+probe fits all 478 horizontal stretches with 47 flagged curvature exceptions.
+Strict vertical fitting succeeds for 339 stretches; 19 tunnels are unsupported,
+76 fail curvature constraints, one exceeds its class grade and 43 hit bounded
+solver convergence. The endpoint-height/class-grade priority needs an owner
+choice before serving incompatible geometry. D, E and F remain pending.
+Physics fixture contact fix bd41ac4 is verified; real bridge approaches remain
+an E/F acceptance check. No runtime carving or bridge layer is enabled.
+
 ## A. Identity-preserving graph foundation (implemented)
 
 `g2m/layer/road_graph.h` / `src/layer/road_graph.cpp` build a canonical geometric

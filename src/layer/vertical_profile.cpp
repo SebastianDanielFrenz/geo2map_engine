@@ -43,6 +43,28 @@ Result<VerticalProfile> fit_vertical_profile(std::span<const VerticalSample> sam
             return invalid("vertical profile: invalid station/height");
     if (std::fabs(samples.back().height_m - samples.front().height_m) > limits.max_grade * samples.back().station_m + 1e-10)
         return invalid("vertical profile: endpoint grade infeasible");
+    // Necessary reachability bound for any C1 profile with |z''| <= 1/R.
+    // Integrate the piecewise-linear grade envelopes induced by both fixed
+    // endpoint grades and the class cap before spending the projection budget.
+    const auto extent = samples.back().station_m, rate = 1 / limits.min_radius_m;
+    if (std::fabs(limits.end_grade - limits.start_grade) > rate * extent + 1e-10)
+        return invalid("vertical profile: endpoint curvature infeasible");
+    const auto maximum_rise = [&](double start, double end) {
+        std::array<double, 5> stations{{0, extent,
+            std::clamp((end - start + rate * extent) / (2 * rate), 0.0, extent),
+            std::clamp((limits.max_grade - start) / rate, 0.0, extent),
+            std::clamp(extent - (limits.max_grade - end) / rate, 0.0, extent)}};
+        std::sort(stations.begin(), stations.end());
+        const auto grade = [&](double s) { return std::min({limits.max_grade, start + rate * s, end + rate * (extent - s)}); };
+        double rise = 0;
+        for (std::size_t i = 1; i < stations.size(); ++i)
+            rise += (stations[i] - stations[i - 1]) * (grade(stations[i]) + grade(stations[i - 1])) * 0.5;
+        return rise;
+    };
+    const auto rise = samples.back().height_m - samples.front().height_m;
+    if (rise > maximum_rise(limits.start_grade, limits.end_grade) + 1e-10 ||
+        -rise > maximum_rise(-limits.start_grade, -limits.end_grade) + 1e-10)
+        return invalid("vertical profile: endpoint curvature infeasible");
     std::vector<double> values(n * 2), inverse_weight(n * 2, 1.0);
     const auto origin = samples.front().height_m;
     for (std::size_t i = 0; i < n; ++i) {

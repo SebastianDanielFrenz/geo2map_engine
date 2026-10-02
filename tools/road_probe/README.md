@@ -31,3 +31,13 @@ Pass --exceptions to preserve geometry with flagged curvature exceptions. The
 home fixture then fits all 478 stretches (344 complete ways), with 47 flagged
 exceptions and no declined owned edges. Full-context fitted length is 40.759 km.
 Construction took 33.6 ms in a single run; no runtime behavior is enabled.
+
+Use --profiles (optionally with --exceptions) to construct complete DEM profiles.
+The probe derives elev.base in memory from the same read-only raw source store;
+it never writes derived tiles to that cache. The home fixture needs 84 DEM tiles.
+339 profiles succeed, including one bridge profile. Remaining outcomes are 19
+unsupported tunnels, 75 analytically incompatible endpoint-curvature boundaries,
+one infeasible fixed cubic boundary, one class-grade conflict and 43 bounded
+solver convergence failures. Construction plus DEM derivation took 1.63 seconds
+in one run. NoData errors remain explicit; these counts are not runtime coverage.
+The analytically incompatible boundaries are distinct from solver failures.

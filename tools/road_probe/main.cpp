@@ -1,17 +1,27 @@
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_reference.h"
 #include "g2m/layer/road_attributes.h"
+#include "g2m/layer/road_profile.h"
+#include "g2m/layer/road_dem_dependencies.h"
+#include "g2m/layer/derive_terrain.h"
 #include "g2m/core/det_math.h"
 #include "g2m/server/tile_store.h"
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <string_view>
 #include <map>
 #include <algorithm>
 using namespace g2m;
 int main(int argc, char** argv) {
-    if (argc != 5 && (argc != 6 || std::string_view(argv[5]) != "--exceptions")) {
-        std::cerr << "usage: g2m_road_probe STORE SCOPE TILE_KEY OUTPUT_CSV [--exceptions]\n"; return 1;
+    bool exceptions_enabled = false, profiles_enabled = false;
+    for (int i = 5; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--exceptions" && !exceptions_enabled) exceptions_enabled = true;
+        else if (std::string_view(argv[i]) == "--profiles" && !profiles_enabled) profiles_enabled = true;
+        else { std::cerr << "unknown or repeated option\n"; return 1; }
+    }
+    if (argc < 5 || argc > 7) {
+        std::cerr << "usage: g2m_road_probe STORE SCOPE TILE_KEY OUTPUT_CSV [--exceptions] [--profiles]\n"; return 1;
     }
     const auto key = parse_tile_path(argv[3]);
     if (!key || key->level != 2) { std::cerr << "level-2 tile key required\n"; return 1; }
@@ -24,6 +34,9 @@ int main(int argc, char** argv) {
         InputTile input; input.ref = ref;
         if (*tile) { input.header = std::move((*tile)->header); input.body = std::move((*tile)->body); }
         inputs.push_back(std::move(input));
+    }
+    if (std::none_of(inputs.begin(), inputs.end(), [](const auto& input) { return input.header.has_value(); })) {
+        std::cerr << "no source OSM tiles for scope/target\n"; return 1;
     }
     using Clock = std::chrono::steady_clock;
     const auto begin = Clock::now(); const auto derived = deriver.derive({*key, 0, inputs});
@@ -40,7 +53,7 @@ int main(int argc, char** argv) {
     for (const auto index : tile->owned_edges) {
         const auto& edge = tile->graph.edges[index]; ++owned[edge.way_id]; owned_pairs[edge.way_id].push_back(edge.segment_index);
     }
-    ReferenceFitLimits limits; limits.allow_curvature_exceptions = argc == 6;
+    ReferenceFitLimits limits; limits.allow_curvature_exceptions = exceptions_enabled;
     std::size_t exceptions = 0;
     std::size_t total_stretches = 0, failed_stretches = 0, failed_owned_edges = 0;
     std::map<std::string, std::size_t> failures;
@@ -88,5 +101,57 @@ int main(int argc, char** argv) {
         << " reference_ms=" << reference_ms << " stretches=" << total_stretches << " declined_stretches=" << failed_stretches
         << " curvature_exceptions=" << exceptions << " declined_owned_edges=" << failed_owned_edges << '\n';
     for (const auto& [reason, count] : failures) std::cout << "declined_stretches=" << count << " reason=" << reason << '\n';
+    if (profiles_enabled) {
+        const auto deps = road_dem_dependencies(tile->graph, key->zone); if (!deps) { std::cerr << deps.error().message << '\n'; return 1; }
+        std::vector<HeightTile> heights; heights.reserve(deps->size()); ElevBaseDeriver elevation;
+        const auto profile_begin = Clock::now();
+        for (const auto& dep : *deps) {
+            std::vector<InputTile> raw;
+            for (const auto& ref : elevation.inputs_for(dep.key)) {
+                auto stored = (*store)->get({argv[2], ref.layer, ref.key});
+                if (!stored) { std::cerr << stored.error().message << '\n'; return 1; }
+                InputTile input; input.ref = ref;
+                if (*stored) { input.header = std::move((*stored)->header); input.body = std::move((*stored)->body); }
+                raw.push_back(std::move(input));
+            }
+            const auto derived_height = elevation.derive({dep.key, 0, raw});
+            if (!derived_height) { std::cerr << derived_height.error().message << '\n'; return 1; }
+            const auto height_body = decode_body(derived_height->body); if (!height_body) { std::cerr << height_body.error().message << '\n'; return 1; }
+            heights.emplace_back(); const auto decoded = decode_height_tile(*height_body, dep.key, heights.back());
+            if (!decoded) { std::cerr << decoded.error().message << '\n'; return 1; }
+        }
+        std::vector<const HeightTile*> views; for (const auto& height : heights) views.push_back(&height);
+        const auto dem = RoadDemSampler::make(views); if (!dem) { std::cerr << dem.error().message << '\n'; return 1; }
+        std::map<std::string, std::size_t> declined; std::size_t fitted = 0, bridges = 0;
+        RoadProfileLimits profile_limits; profile_limits.reference = limits;
+        for (const auto& way : tile->graph.ways) {
+            const auto stretches = builder->stretches(way.osm_id); if (!stretches) { std::cerr << stretches.error().message << '\n'; return 1; }
+            for (const auto stretch : *stretches) {
+                const auto profile = build_road_profile(*builder, *dem, key->zone, way.osm_id, stretch, profile_limits);
+                if (profile) { ++fitted; if (profile->attributes.bridge) ++bridges; }
+                else {
+                    const auto count = ++declined[profile.error().message];
+                    if (count <= 3) {
+                        const auto point = [&](std::uint32_t index) {
+                            return std::lower_bound(tile->graph.nodes.begin(), tile->graph.nodes.end(), way.node_ids[index],
+                                [](const auto& node, auto id) { return node.osm_id < id; })->position;
+                        };
+                        const auto a = dem->junction_height(key->zone, point(stretch.start_ref));
+                        const auto b = dem->junction_height(key->zone, point(stretch.end_ref));
+                        const auto reference = builder->fit_stretch(way.osm_id, stretch, limits);
+                        std::cout << "profile_example_way=" << way.osm_id << " start_ref=" << stretch.start_ref
+                            << " end_ref=" << stretch.end_ref;
+                        if (a && b && reference) std::cout << " length_m=" << reference->length_m
+                            << " endpoint_rise_m=" << (static_cast<double>(*b) - *a) / 256
+                            << " endpoint_mean_grade=" << (static_cast<double>(*b) - *a) / (256 * reference->length_m);
+                        std::cout << " reason=" << profile.error().message << '\n';
+                    }
+                }
+            }
+        }
+        std::cout << "dem_tiles=" << heights.size() << " profile_ok=" << fitted << " bridge_profiles=" << bridges
+            << " profile_with_dem_ms=" << std::chrono::duration<double, std::milli>(Clock::now() - profile_begin).count() << '\n';
+        for (const auto& [reason, count] : declined) std::cout << "declined_profiles=" << count << " reason=" << reason << '\n';
+    }
     return 0;
 }

@@ -4,6 +4,21 @@
 #include <cmath>
 #include <limits>
 using namespace g2m;
+
+TEST_CASE("Vertical reachability rejects incompatible endpoint curvature before iteration", "[layer][vertical_profile]") {
+    VerticalFitLimits limits; limits.min_radius_m = 100; limits.max_grade = 1;
+    const VerticalSample impossible[] = {{0, 0}, {5, 0.15}, {10, 0.3}};
+    const auto no = fit_vertical_profile(impossible, limits); REQUIRE_FALSE(no);
+    CHECK(no.error().message == "vertical profile: endpoint curvature infeasible");
+    const VerticalSample downward[] = {{0, 0}, {5, -0.15}, {10, -0.3}};
+    CHECK_FALSE(fit_vertical_profile(downward, limits));
+    const VerticalSample plane[] = {{0, 0}, {10, 0.5}};
+    limits.start_grade = limits.end_grade = 0.05;
+    CHECK(fit_vertical_profile(plane, limits));
+    limits.start_grade = -0.1; limits.end_grade = 0.1;
+    const auto changing = fit_vertical_profile(plane, limits); REQUIRE_FALSE(changing);
+    CHECK(changing.error().message == "vertical profile: endpoint curvature infeasible");
+}
 TEST_CASE("Vertical cubic least squares preserves an exact inclined plane", "[layer][vertical_profile]") {
     const VerticalSample samples[] = {{0, 100}, {25, 100.25}, {50, 100.5}, {75, 100.75}, {100, 101}};
     VerticalFitLimits limits; limits.start_grade = limits.end_grade = 0.01;

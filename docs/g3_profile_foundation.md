@@ -114,3 +114,11 @@ Profile and reference regressions pass on Windows release/ASan and Linux TSan
 bridge NoData exclusion, endpoint grades and station validation. Release CI
 passes all 19 checks. This remains construction code, not a served geometry or
 runtime carving layer.
+
+The vertical solver now checks necessary endpoint reachability analytically by
+integrating the grade envelopes implied by both endpoint slopes, the grade cap
+and the second-derivative bound. This rejects impossible curvature boundaries
+before consuming the projection budget. It is a necessary test, not a promise
+that the conservative cubic constraints will converge or be feasible. Updated
+vertical/profile/reference selection: 2,276 assertions in 16 cases pass on
+Windows ASan and Linux TSan; existing vertical and reference hashes are unchanged.
