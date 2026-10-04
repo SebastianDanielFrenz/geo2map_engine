@@ -28,73 +28,20 @@ Contents:
 The idea in one paragraph. Raw files (a height model, an OSM extract, a land cover raster) are **imported once** into a store of small tiles. Everything else is **derived** from those tiles by pure functions: same input, same bytes, on every machine. A server (in-process today) answers "give me layer X, tile Y" by looking in the cache, deriving the tile if missing, or asking an upstream. The game then turns tiles into render meshes and physics heightfields on its own side.
 
 ```mermaid
-flowchart LR
-  subgraph SRC["Raw sources"]
-    S1["DGM1 1 m heights - HVBG"]
-    S2["OSM extract - Geofabrik"]
-    S3["ESA WorldCover 10 m"]
-    S4["GLO-30 DEM - downloaded"]
-    S5["LoD2, DOM1, DOP20, Basis-DLM, trees - downloaded"]
-  end
-  subgraph IMP["Import - g2m_tiler import"]
-    I1["resolve region -> list of level-2 tiles"]
-    I2["import-dem / import-osm / import-landcover"]
-  end
-  subgraph RAW["Raw layers - level 2, 1024 m, source store"]
-    R1["g2m.src.elev.dgm1"]
-    R2["g2m.src.osm"]
-    R3["g2m.src.landcover"]
-  end
-  subgraph BAKE["Derived layers - pure derivers, derived store"]
-    D1["g2m.elev.base - L0"]
-    D2["g2m.terrain.height - L0 to L6"]
-    D3["g2m.roads.graph - L2"]
-    D4["g2m.roads.geom - L2"]
-    D5["g2m.terrain.class - no deriver yet"]
-    D6["buildings, trees, markings - planned"]
-  end
-  subgraph SRVC["Server and cache"]
-    C1["g2m::Server: cache, derive, upstream"]
-    C2["tiles.sqlite3 + blob files"]
-    C3["release manifest and release id"]
-    C4["HTTP server, packs, hosted CDN - planned"]
-  end
-  subgraph CONS["Consumers - other repos"]
-    K1["racing_game WorldTerrain: render chunks, road raster, carving, NPC traffic"]
-    K2["g2m_ps_bridge: G2mTerrainSource"]
-    K3["physics_sim TileManager: Jolt heightfield pool"]
-  end
-  S1 --> I2
-  S2 --> I2
-  S3 --> I2
-  S4 -.-> I2
-  S5 -.-> D6
-  I1 --> I2
-  I2 --> R1
-  I2 --> R2
-  I2 --> R3
-  R1 --> D1 --> D2
-  R2 --> D3 --> D4
-  D1 --> D4
-  R3 -.-> D5
-  R2 -.-> D6
-  D2 --> C1
-  D3 --> C1
-  D4 --> C1
-  R2 --> C1
-  R3 --> C1
-  C1 <--> C2
-  C1 --- C3
-  C1 -.-> C4
-  C1 --> K1
-  K1 --> K2 --> K3
+%%{init: {"flowchart": {"wrappingWidth": 440, "useMaxWidth": false}}}%%
+flowchart TB
+  SRC["<b>1. Raw sources</b> - files on S:<br/>DGM1 1 m heights - HVBG<br/>OSM Hessen extract - Geofabrik<br/>ESA WorldCover 10 m<br/><i>downloaded, not used yet:</i> GLO-30, LoD2, DOM1, DOP20, Basis-DLM, tree data"]
+  IMP["<b>2. Import</b> - g2m_tiler import<br/>resolve region to level-2 tiles<br/>import-dem, import-osm, import-landcover"]
+  RAW["<b>3. Raw layers</b> - level 2, 1024 m, source store<br/>g2m.src.elev.dgm1 / g2m.src.osm / g2m.src.landcover"]
+  BAKE["<b>4. Derived layers</b> - pure derivers, g2m_tiler bake<br/>g2m.elev.base L0 / g2m.terrain.height L0-L6<br/>g2m.roads.graph L2 / g2m.roads.geom L2<br/><i>planned:</i> terrain.class, buildings, trees, markings"]
+  SRV["<b>5. Server and cache</b> - in-process today<br/>g2m::Server: cache, derive on miss, upstream<br/>tiles.sqlite3 + blob files, release id<br/><i>planned:</i> HTTP server, packs, hosted CDN"]
+  GAME["<b>6a. racing_game</b> WorldTerrain<br/>render chunks, road raster and grip,<br/>road carving at L0, NPC traffic"]
+  PHYS["<b>6b. physics_sim</b><br/>g2m_ps_bridge G2mTerrainSource<br/>TileManager Jolt heightfield pool"]
+  SRC --> IMP --> RAW --> BAKE --> SRV --> GAME --> PHYS
+  RAW -. "src.osm and src.landcover are also served raw" .-> SRV
 
-  classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
-  classDef part fill:#fff3cd,stroke:#b58900,stroke-dasharray:4 3,color:#000;
-  classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
-  class S1,S2,S3,I1,I2,R1,R2,R3,D1,D2,D3,D4,C1,C2,C3,K1,K2,K3 done;
-  class S4,S5 part;
-  class D5,D6,C4 plan;
+  classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000,text-align:left;
+  class SRC,IMP,RAW,BAKE,SRV,GAME,PHYS done;
 ```
 
 What the diagram hides, in short:
@@ -317,7 +264,7 @@ Attribution status in the game: the `racing_game` manifest lists only the DGM1 a
 Two plans meet here: the engine phases G0 to G8 (in `racing_game/PLAN.md` section 12 and `PLAN.md` here) and the street fidelity phases P0 to P8 ([../street_fidelity/plan.md](../street_fidelity/plan.md)).
 
 ```mermaid
-flowchart LR
+flowchart TB
   G0["G0 skeleton, geodesy - done"]
   G1["G1 server core, raw layers, tiler, cache - done"]
   G2["G2 terrain pyramid, render chunks, physics bridge - done for height"]
