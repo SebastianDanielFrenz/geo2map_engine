@@ -212,6 +212,8 @@ if(G2M_BUILD_IMPORT)
   if(G2M_BUILD_APPS)
     add_subdirectory(apps/g2m_tiler)
   endif()
+  # Street-level fidelity plan P0: OSM tag-coverage probe (tools/osm_tag_probe).
+  add_subdirectory(tools/osm_tag_probe)
 endif()
 
 if(G2M_BUILD_TESTS)

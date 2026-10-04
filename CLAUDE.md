@@ -340,6 +340,7 @@ geo2map_engine/
     setup_dev_env.ps1                 verify (-CheckOnly) or install the toolchain
     tsan_suppressions.txt             TSan suppressions, loaded only by the linux-tsan test preset (SQLite wal-index header reads)
     refgen/                           g2m_refgen: GeographicLib reference-value generator (G2M_BUILD_REFGEN=ON only)
+    osm_tag_probe/                    street-fidelity plan P0: g2m_osm_tag_probe, OSM tag-coverage report (road classes, crossings/signals, buildings, trees) for a regions.json region cut by admin boundaries. Library g2m_osm_tag_probe_lib (tag_probe.* pure aggregation + md/json writers, scan.* three PBF passes over a ResolvedRegion), exe under G2M_BUILD_APPS, home_probe_region.json (Main-Taunus, Hochtaunus, Frankfurt), test tests/unit/test_osm_tag_probe.cpp [osm][probe]. Run: `g2m_osm_tag_probe --pbf F --region REGIONS.json#NAME --out-md F --out-json F`; deterministic (sorted maps). Snapshot: docs/osm_tag_coverage_home.md
 ```
 
 Not built yet. These are placeholders only (PLAN.md 2.2/2.3; a comment at the
