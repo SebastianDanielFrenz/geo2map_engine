@@ -2,7 +2,7 @@
 
 # OSM tag coverage: home
 
-Phase P0 of the street-level fidelity plan (`out/street_fidelity_plan.md` section 6). Produced by `g2m_osm_tag_probe`; counts are deterministic (same input, same bytes).
+Phase P0 of the street-level fidelity plan (`docs/street_fidelity/plan.md` section 6). Produced by `g2m_osm_tag_probe`; counts are deterministic (same input, same bytes).
 
 ## Input
 

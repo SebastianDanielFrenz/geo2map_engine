@@ -5,6 +5,9 @@ This file only maps what exists and how to build, test and run it.
   (`S:\claude_knowledge_base`), not here.
 - The design and phase plan is `PLAN.md` (plus racing_game `PLAN.md` section 12
   for the milestones).
+- **Standing rule:** any change that adds or changes a pipeline stage, layer,
+  encoding, data source or consumer updates `docs/pipeline/` in the same
+  commit. Start reading there: `docs/pipeline/README.md`.
 - Milestone state: **G0 done**. G0 covers the library skeleton, deterministic
   math, geodesy, tile keys, rasters, hashes and golden infrastructure.
   **G1a done**: the layer model, the tile formats, releases, the SQLite tile
@@ -232,6 +235,11 @@ geo2map_engine/
                                       install_square_with_roads (install_square's road-carrying counterpart).
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
                                       src_landcover, src_osm, pack, release_manifest, protocol, cache_db
+  docs/pipeline/                      THE human entry point: README.md (overview + layer-dependency + runtime-sequence + roadmap
+                                      Mermaid diagrams, per-stage tables, data sources, runbook, glossary, open questions) and
+                                      raw_layers.md, terrain.md, roads.md, client_side.md
+  docs/street_fidelity/               plan.md (street-level fidelity sources/architecture/phases P0-P8), p1_cross_section_design.md
+                                      (P1 design); moved from out/ (out/ keeps one-line stubs)
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)
   include/g2m/decode/                 public API of g2m_decode (no third-party types); milestone G1b
     byte_source.h                     IByteSource (abstract random-access read), FileByteSource, MemoryByteSource,
