@@ -3,6 +3,8 @@
 #include "g2m/core/hash.h"
 #include <algorithm>
 #include <limits>
+#include <map>
+#include <set>
 
 namespace g2m {
 namespace {
@@ -156,6 +158,54 @@ Result<RoadGraphTile> decode_road_graph(const TileBody& body) {
     if (!r.at_end()) return malformed("truncated or trailing bytes");
     const auto valid = validate_road_graph_tile(tile); if (!valid) return valid.error();
     return tile;
+}
+
+Result<std::vector<InputTileRef>> road_context_dependencies(const RoadGraph& graph, geo::UtmZone zone,
+    const TileKey* exclude, std::size_t max_tiles) {
+    TileKey key{zone, 2, 0, 0};
+    if (!key.valid() || !max_tiles || max_tiles > 4096)
+        return make_error(ErrorCode::InvalidArgument, "road context: invalid zone or budget");
+    const auto size = key.size_m() * 1000;
+    std::set<TileKey> keys;
+    for (const auto& node : graph.nodes) {
+        const auto x = floor_div(node.position.x, size), y = floor_div(node.position.y, size);
+        if (x < TileKey::kIndexMin || x > TileKey::kIndexMax || y < TileKey::kIndexMin || y > TileKey::kIndexMax)
+            return make_error(ErrorCode::LimitExceeded, "road context: node outside tile grid");
+        key.x = static_cast<std::int32_t>(x); key.y = static_cast<std::int32_t>(y);
+        if (exclude && key == *exclude) continue;
+        keys.insert(key);
+        if (keys.size() > max_tiles) return make_error(ErrorCode::LimitExceeded, "road context: tile dependency budget");
+    }
+    std::vector<InputTileRef> out; out.reserve(keys.size());
+    for (const auto& k : keys) out.push_back({std::string(kRoadGraphLayer), k});
+    return out;
+}
+Result<RoadGraph> merge_road_graphs(std::span<const RoadGraph* const> graphs) {
+    std::map<std::int64_t, geom::PointMm> nodes;
+    std::map<std::int64_t, const RoadGraphWay*> ways;
+    for (const auto* graph : graphs) {
+        const auto valid = validate_road_graph(*graph); if (!valid) return valid.error();
+        for (const auto& node : graph->nodes) {
+            const auto [it, inserted] = nodes.emplace(node.osm_id, node.position);
+            if (!inserted && !(it->second == node.position)) return malformed("conflicting node copies in context");
+        }
+        for (const auto& way : graph->ways) {
+            const auto [it, inserted] = ways.emplace(way.osm_id, &way);
+            if (!inserted && !(*it->second == way)) return malformed("conflicting way copies in context");
+        }
+    }
+    RoadGraph out;
+    out.nodes.reserve(nodes.size());
+    for (const auto& [id, position] : nodes) out.nodes.push_back({id, position});
+    for (const auto& [id, way] : ways) {
+        out.ways.push_back(*way);
+        for (std::size_t i = 1; i < way->node_ids.size(); ++i) {
+            if (way->node_ids[i - 1] == way->node_ids[i]) { ++out.repeated_ref_pairs; continue; }
+            out.edges.push_back({id, static_cast<std::uint32_t>(i - 1), way->node_ids[i - 1], way->node_ids[i]});
+        }
+    }
+    const auto valid = validate_road_graph(out); if (!valid) return valid.error();
+    return out;
 }
 
 LayerDesc road_graph_desc() {

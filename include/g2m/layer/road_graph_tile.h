@@ -22,6 +22,17 @@ Result<RoadGraphTile> decode_road_graph(const TileBody& body);
 Result<void> validate_road_graph_tile(const RoadGraphTile& tile);
 Result<void> validate_road_graph(const RoadGraph& graph);
 Result<RoadGraphTile> select_road_graph_tile(const RoadGraph& graph, const TileKey& key);
+// Stretch context (street fidelity P1 slice 1). A tile graph stops at its halo,
+// so a node of a complete way far outside the tile can miss its other incident
+// ways. Every way incident to a node N touches the level-2 tile that contains
+// N, hence lies in that tile's roads.graph. road_context_dependencies lists
+// those tiles (sorted, unique, `exclude` omitted); merge_road_graphs unions
+// complete graphs (equal ways and nodes are shared, conflicting ones are
+// Malformed) into one canonical graph whose node degrees are world degrees.
+// More than max_tiles distinct tiles is an explicit LimitExceeded.
+Result<std::vector<InputTileRef>> road_context_dependencies(const RoadGraph& graph, geo::UtmZone zone,
+    const TileKey* exclude = nullptr, std::size_t max_tiles = 512);
+Result<RoadGraph> merge_road_graphs(std::span<const RoadGraph* const> graphs);
 LayerDesc road_graph_desc();
 class RoadGraphDeriver final : public IDeriver {
 public:

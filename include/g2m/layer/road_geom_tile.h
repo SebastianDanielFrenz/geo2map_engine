@@ -14,8 +14,13 @@ struct RoadGeomEntry {
 // Every graph stretch has exactly one accepted profile or explicit decline.
 // Consumers must inspect declines; this is never an implicitly complete mesh.
 struct RoadGeomTile { RoadGraphTile source; std::vector<RoadGeomEntry> entries; };
+// `context` (optional) is a canonical graph holding every way incident to the
+// nodes of graph.graph's ways (merge_road_graphs over the tiles named by
+// road_context_dependencies). Stretch extents, join headings and profiles then
+// depend on the world, not on the tile. Without it the tile graph itself is the
+// context, which is only exact for a graph that is complete at its own nodes.
 Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph,
-    const RoadDemSampler& dem, const RoadProfileLimits& limits = {});
+    const RoadDemSampler& dem, const RoadProfileLimits& limits = {}, const RoadGraph* context = nullptr);
 Result<void> validate_road_geom_tile(const RoadGeomTile& tile);
 Result<TileBody> encode_road_geom(const RoadGeomTile& tile);
 Result<RoadGeomTile> decode_road_geom(const TileBody& body);

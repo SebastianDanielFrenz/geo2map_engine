@@ -1,5 +1,6 @@
 #include "g2m/layer/road_profile.h"
 #include <catch2/catch_test_macros.hpp>
+#include <algorithm>
 #include <cmath>
 using namespace g2m;
 namespace {
@@ -70,8 +71,12 @@ TEST_CASE("Cross-road median rejects a centreline DEM outlier without hiding mis
     CHECK_FALSE(build_road_profile(*builder, *dem, zone, 10, {0, 1}));
 }
 TEST_CASE("Incoming roads share a tilted junction plane instead of flat endpoint grades", "[layer][road_profile]") {
-    auto g = graph(); g.nodes.push_back({3, {10000, 110000}});
+    // Node 1 must be a real junction (degree 3): at degree 2 the two ways would be one
+    // continued road and share a bisector heading instead of their own directions.
+    auto g = graph(); g.nodes.push_back({3, {10000, 110000}}); g.nodes.push_back({4, {-90000, 10000}});
     g.ways.push_back({20, 1, {1, 3}, {{"highway", "service"}}}); g.edges.push_back({20, 0, 1, 3});
+    g.ways.push_back({30, 1, {1, 4}, {{"highway", "service"}}}); g.edges.push_back({30, 0, 1, 4});
+    std::sort(g.nodes.begin(), g.nodes.end(), [](const auto& a, const auto& b) { return a.osm_id < b.osm_id; });
     const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
     auto t = tile();
     for (int y = 0; y < 256; ++y) for (int x = 0; x < 256; ++x) t.h[y * 256 + x] += 2 * x + 4 * y;

@@ -13,9 +13,18 @@ double number(ByteReader& r) { return std::bit_cast<double>(r.u64()); }
 bool finite(double d) { return std::isfinite(d) && std::fabs(d) <= 1e9; }
 }
 Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const RoadDemSampler& dem,
-    const RoadProfileLimits& limits) {
+    const RoadProfileLimits& limits, const RoadGraph* context) {
     const auto valid = validate_road_graph_tile(graph); if (!valid) return valid.error();
-    const auto builder = RoadReferenceBuilder::make(graph.graph); if (!builder) return builder.error();
+    if (context) {
+        // The context must contain every tile way unchanged, with all its nodes.
+        const auto contained = validate_road_graph(*context); if (!contained) return contained.error();
+        for (const auto& way : graph.graph.ways) {
+            const auto it = std::lower_bound(context->ways.begin(), context->ways.end(), way.osm_id,
+                [](const auto& w, auto id) { return w.osm_id < id; });
+            if (it == context->ways.end() || !(*it == way)) return invalid("context lacks a tile way");
+        }
+    }
+    const auto builder = RoadReferenceBuilder::make(context ? *context : graph.graph); if (!builder) return builder.error();
     RoadGeomTile result; result.source = graph;
     for (const auto& way : graph.graph.ways) {
         const auto stretches = builder->stretches(way.osm_id); if (!stretches) return stretches.error();
@@ -36,12 +45,17 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
     const auto builder = RoadReferenceBuilder::make(tile.source.graph); if (!builder) return builder.error();
     std::size_t index = 0, pieces = 0;
     for (const auto& way : tile.source.graph.ways) {
-        const auto stretches = builder->stretches(way.osm_id); if (!stretches) return stretches.error();
-        for (const auto stretch : *stretches) {
-            if (index == tile.entries.size()) return invalid("missing stretch");
-            const auto& entry = tile.entries[index++];
-            if (entry.way_id != way.osm_id || entry.stretch.start_ref != stretch.start_ref || entry.stretch.end_ref != stretch.end_ref ||
+        // The tile cannot know world degrees, so stretch extents are checked
+        // structurally: the way's entries partition [0, last ref], and no node
+        // inside a stretch may be a junction even in the tile's own (partial) graph.
+        std::uint32_t next = 0; bool any = false;
+        while (index < tile.entries.size() && tile.entries[index].way_id == way.osm_id) {
+            const auto& entry = tile.entries[index++]; const auto stretch = entry.stretch; any = true;
+            if (stretch.start_ref != next || stretch.end_ref <= stretch.start_ref || stretch.end_ref >= way.node_ids.size() ||
                 entry.profile.has_value() == entry.decline.has_value()) return invalid("stretch order or outcome");
+            for (auto ref = stretch.start_ref + 1; ref < stretch.end_ref; ++ref)
+                if (builder->degree(way.node_ids[ref]) != 2) return invalid("junction inside a stretch");
+            next = stretch.end_ref;
             if (entry.decline) {
                 const auto code = static_cast<unsigned>(entry.decline->code);
                 if (code < 1 || code > static_cast<unsigned>(ErrorCode::ReadOnly) || entry.decline->message.empty() || entry.decline->message.size() > 512)
@@ -104,6 +118,7 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
             }
             if (std::fabs(station - ref.length_m) > 1e-7) return invalid("vertical extent");
         }
+        if (!any || next + 1 != way.node_ids.size()) return invalid("missing stretch");
     }
     if (index != tile.entries.size()) return invalid("extra stretches"); return {};
 }
