@@ -209,7 +209,12 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         auto first = body(must(g2m::encode_road_graph(tile), "encode_road_graph"));
         tile.graph.ways[0].node_ids = {1, 2, 2, 1}; tile.graph.repeated_ref_pairs = 1;
         tile.graph.edges.push_back({10, 2, 2, 1}); tile.owned_edges.push_back(1);
-        return {std::move(first), body(must(g2m::encode_road_graph(tile), "encode_road_graph loop"))};
+        auto loop = body(must(g2m::encode_road_graph(tile), "encode_road_graph loop"));
+        // Encoding 4 (no node tags) and encoding 5 with node tags.
+        auto legacy = body(must(g2m::encode_road_graph(tile, g2m::kRoadGraphEncodingLegacy), "encode_road_graph legacy"));
+        tile.graph.nodes[0].tags = {{"highway", "crossing"}, {"traffic_calming", "table"}, {"traffic_calming:length", "6"}};
+        tile.graph.nodes[1].tags = {{"barrier", "bollard"}};
+        return {std::move(first), std::move(loop), std::move(legacy), body(must(g2m::encode_road_graph(tile), "encode_road_graph tags"))};
     }
     case Target::Pack: return {pack()};
     case Target::Manifest: return manifests();

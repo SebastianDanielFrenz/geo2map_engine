@@ -8,7 +8,9 @@ Back to [pipeline overview](README.md). Slices and status: [../g3_road_pipeline.
 flowchart TD
   OSM9["g2m.src.osm: own L2 tile + 8 neighbours"]
   ATTR["road_attributes: class policy, width, lanes, surface, bridge, tunnel, incline"]
-  GRAPH["g2m.roads.graph L2: complete ways, nodes, owned edges"]
+  GRAPH["g2m.roads.graph L2: complete ways, nodes with whitelisted tags, owned edges"]
+  RULES["road_rules: data/road_rules/de.json embedded, strict loader"]
+  XS["cross-section resolver, bands and joins - planned, street fidelity P1"]
   REF["road_reference: junction-aware stretches, G1 clothoid fit, corner arcs"]
   DEMDEP["road_dem_dependencies: elev.base L0 tiles within 65 m of the roads"]
   PROF["vertical_profile + road_profile: constrained cubics on DEM, bridge spans, junction planes"]
@@ -19,26 +21,29 @@ flowchart TD
   ATTR --> GRAPH
   GRAPH --> REF --> PROF
   GRAPH --> DEMDEP --> PROF
+  RULES -.-> XS
+  GRAPH -.-> XS
+  XS -.-> GEOM
   PROF --> GEOM
   GEOM -.-> CARVE
   GEOM -.-> RIB
   classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
   classDef part fill:#fff3cd,stroke:#b58900,stroke-dasharray:4 3,color:#000;
   classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
-  class OSM9,ATTR,GRAPH,REF,DEMDEP,GEOM done;
+  class OSM9,ATTR,GRAPH,REF,DEMDEP,GEOM,RULES done;
   class PROF part;
-  class CARVE,RIB plan;
+  class CARVE,RIB,XS plan;
 ```
 
 ## `g2m.roads.graph` (G3 slices A and B: implemented)
 
-- Code: `src/layer/derive_road_graph.cpp`, `road_graph.cpp`, `road_graph_tile.cpp`, `road_attributes.cpp`; public `include/g2m/layer/{road_graph,road_graph_tile,road_attributes}.h`.
-- Version 1, level 2, encoding 4 ([road_graph.md](../formats/road_graph.md)).
+- Code: `src/layer/derive_road_graph.cpp`, `road_graph.cpp`, `road_graph_tile.cpp`, `road_attributes.cpp`, `road_rules.cpp` (street fidelity P1 country rules, `data/road_rules/de.json` embedded through CMake, `builtin_road_rules_de()`); public `include/g2m/layer/{road_graph,road_graph_tile,road_attributes,road_rules}.h`.
+- Version 1, level 2, encoding 5 ([road_graph.md](../formats/road_graph.md)): nodes carry the whitelisted tags (`traffic_calming`, `crossing`, `barrier`, ...); encoding 4 without node tags still decodes.
 - Needs the exact 9 neighbouring level-2 `g2m.src.osm` tiles. Absent ones are explicit empty inputs.
 - Keeps every complete way that touches the tile grown by 128 m, with its original ids and tags. Connectivity comes from shared OSM node ids, never from geometric crossings.
 - An edge is owned by the tile that holds its midpoint (floor-rounded integer mm). Halo copies keep the same edge identity.
 - Opt-in: `BuiltinTerrainDerivers::ordered(true, ...)`; `g2m_tiler bake` turns it on when `--layers` names the layer.
-- Tests: `tests/layer/test_road_graph.cpp`, `test_road_graph_tile.cpp`, `test_road_attributes.cpp`; golden `g2roads_golden.txt`.
+- Tests: `tests/layer/test_road_graph.cpp`, `test_road_graph_tile.cpp`, `test_road_attributes.cpp`, `test_road_rules.cpp`; golden `g2roads_golden.txt` (covers the raster extraction, not the graph encoding).
 
 ## `g2m.roads.geom` (G3 slice B implemented, slice C foundation)
 

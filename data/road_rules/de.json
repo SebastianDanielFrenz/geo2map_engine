@@ -1,0 +1,101 @@
+{
+  "format": "g2m.road_rules/1",
+  "country": "DE",
+  "min_lane_mm": 2500,
+  "added_lane_side": "right",
+  "cycle_lane_mm": 1850,
+  "sidewalk_mm": 2500,
+  "parking_mm": { "parallel": 2000, "diagonal": 4500, "perpendicular": 5000 },
+  "min_edge_radius_m": {
+    "default": 10,
+    "motorway": 200,
+    "motorway_link": 60,
+    "trunk": 60,
+    "trunk_link": 60,
+    "primary": 60,
+    "primary_link": 60
+  },
+  "classes": {
+    "motorway": {
+      "oneway_lanes": 2, "twoway_lanes": 4, "lane_mm": 3500, "outer_lane_mm": 3750,
+      "shoulder_outer_mm": 2500, "shoulder_inner_mm": 750, "verge_mm": 1500, "markings_default": true,
+      "taper": { "lane_add_m": 60, "width_change_m": 60, "edge_band_m": 30, "shift_m_per_m": 60, "shift_min_m": 60, "shift_max_m": 250 }
+    },
+    "motorway_link": {
+      "oneway_lanes": 1, "twoway_lanes": 2, "lane_mm": 3500,
+      "shoulder_outer_mm": 1500, "shoulder_inner_mm": 1000, "verge_mm": 1500, "markings_default": true,
+      "taper": { "lane_add_m": 60, "width_change_m": 40, "edge_band_m": 20, "shift_m_per_m": 40, "shift_min_m": 40, "shift_max_m": 150 }
+    },
+    "trunk": {
+      "oneway_lanes": 2, "twoway_lanes": 2, "lane_mm": 3500, "outer_lane_mm": 3750,
+      "shoulder_outer_mm": 500, "shoulder_inner_mm": 500, "verge_mm": 1500, "markings_default": true,
+      "taper": { "lane_add_m": 60, "width_change_m": 40, "edge_band_m": 20, "shift_m_per_m": 40, "shift_min_m": 40, "shift_max_m": 150 }
+    },
+    "trunk_link": {
+      "oneway_lanes": 1, "twoway_lanes": 2, "lane_mm": 3500,
+      "shoulder_outer_mm": 1000, "shoulder_inner_mm": 500, "verge_mm": 1500, "markings_default": true,
+      "taper": { "lane_add_m": 40, "width_change_m": 30, "edge_band_m": 15, "shift_m_per_m": 30, "shift_min_m": 30, "shift_max_m": 100 }
+    },
+    "primary": {
+      "oneway_lanes": 2, "twoway_lanes": 2, "lane_mm": 3500,
+      "shoulder_outer_mm": 0, "shoulder_inner_mm": 0, "verge_mm": 1500, "markings_default": true,
+      "taper": { "lane_add_m": 30, "width_change_m": 20, "edge_band_m": 10, "shift_m_per_m": 20, "shift_min_m": 20, "shift_max_m": 80 }
+    },
+    "primary_link": {
+      "oneway_lanes": 1, "twoway_lanes": 2, "lane_mm": 3500,
+      "shoulder_outer_mm": 0, "shoulder_inner_mm": 0, "verge_mm": 1500, "markings_default": true,
+      "taper": { "lane_add_m": 30, "width_change_m": 20, "edge_band_m": 10, "shift_m_per_m": 20, "shift_min_m": 20, "shift_max_m": 80 }
+    },
+    "secondary": {
+      "oneway_lanes": 1, "twoway_lanes": 2, "lane_mm": 3250,
+      "shoulder_outer_mm": 0, "shoulder_inner_mm": 0, "verge_mm": 1500, "markings_default": true,
+      "taper": { "lane_add_m": 20, "width_change_m": 15, "edge_band_m": 10, "shift_m_per_m": 20, "shift_min_m": 15, "shift_max_m": 60 }
+    },
+    "secondary_link": {
+      "oneway_lanes": 1, "twoway_lanes": 2, "lane_mm": 3250,
+      "shoulder_outer_mm": 0, "shoulder_inner_mm": 0, "verge_mm": 1500, "markings_default": true,
+      "taper": { "lane_add_m": 20, "width_change_m": 15, "edge_band_m": 10, "shift_m_per_m": 20, "shift_min_m": 15, "shift_max_m": 60 }
+    },
+    "tertiary": {
+      "oneway_lanes": 1, "twoway_lanes": 2, "lane_mm": 3000, "verge_mm": 1000, "markings_default": true,
+      "taper": { "lane_add_m": 20, "width_change_m": 15, "edge_band_m": 10, "shift_m_per_m": 20, "shift_min_m": 15, "shift_max_m": 60 }
+    },
+    "tertiary_link": {
+      "oneway_lanes": 1, "twoway_lanes": 2, "lane_mm": 3000, "verge_mm": 1000, "markings_default": true,
+      "taper": { "lane_add_m": 20, "width_change_m": 15, "edge_band_m": 10, "shift_m_per_m": 20, "shift_min_m": 15, "shift_max_m": 60 }
+    },
+    "unclassified": {
+      "oneway_lanes": 1, "twoway_lanes": 2, "lane_mm": 2750, "verge_mm": 1000, "markings_default": false,
+      "taper": { "lane_add_m": 15, "width_change_m": 10, "edge_band_m": 5, "shift_m_per_m": 15, "shift_min_m": 10, "shift_max_m": 40 }
+    },
+    "residential": {
+      "oneway_lanes": 1, "twoway_lanes": 2, "lane_mm": 2750, "verge_mm": 500, "markings_default": false,
+      "taper": { "lane_add_m": 15, "width_change_m": 10, "edge_band_m": 5, "shift_m_per_m": 15, "shift_min_m": 10, "shift_max_m": 40 }
+    },
+    "living_street": {
+      "single_lane_both": true, "single_lane_mm": 5000, "verge_mm": 500, "markings_default": false,
+      "taper": { "lane_add_m": 15, "width_change_m": 10, "edge_band_m": 5, "shift_m_per_m": 15, "shift_min_m": 10, "shift_max_m": 40 }
+    },
+    "service": {
+      "single_lane_both": true, "single_lane_mm": 4000, "verge_mm": 500, "markings_default": false,
+      "taper": { "lane_add_m": 15, "width_change_m": 10, "edge_band_m": 5, "shift_m_per_m": 15, "shift_min_m": 10, "shift_max_m": 40 }
+    },
+    "track": {
+      "single_lane_both": true, "single_lane_mm": 3000, "verge_mm": 500, "markings_default": false,
+      "taper": { "lane_add_m": 15, "width_change_m": 10, "edge_band_m": 5, "shift_m_per_m": 15, "shift_min_m": 10, "shift_max_m": 40 }
+    }
+  },
+  "sources": {
+    "motorway_lanes_shoulders": "[RAA] RQ 31/36 plan-sheet values: 3.75 m outer lane, 3.50 m inner lanes, Standstreifen 2.50 m, Randstreifen 0.75 m. [unverified] (secondary sources; original PDFs not fetched)",
+    "verge": "[RAL] RQ 11 / RQ 9: Bankett 1.50 m for rural classes; urban classes 0.5 to 1.0 m [assumed]",
+    "primary_lane": "[RAL] RQ 11, EKL 3: 2 x 3.50 m lanes. The 0.50 m Randstreifen is deliberately not added: urban primaries dominate the home region and have none [assumed]",
+    "secondary_tertiary_residential_lanes": "[RASt] urban lanes 2.75 to 3.25 m, assigned per class [assumed]",
+    "link_classes": "primary_link, secondary_link, tertiary_link: lane and taper values copied from the parent class [assumed]",
+    "sidewalk": "[RASt] Seitenraum standard 2.50 m [unverified]",
+    "cycle_lane": "ERA 2010 Radfahrstreifen including marking, 1.85 m [unverified]",
+    "parking": "[RASt] Parkstaende 2.0 / 4.5 / 5.0 m [unverified]",
+    "motorway_tapers": "[RAA] Ein-/Ausfaedelungs-Verziehung 60 m [unverified]",
+    "other_tapers_and_shift_rates": "[assumed] rule of thumb 1:20 urban, 1:40 rural, 1:60 motorway lateral rate",
+    "min_edge_radius": "Tapers are validated so that the lateral S-ramp (max curvature 4 W / a^2 for a lane width W over a taper of length a) stays at or below 1 / min_edge_radius_m. The radii are [assumed]: 200 m motorway, 60 m other arterial classes, 10 m local classes; the design draft's single default of 60 m contradicted its own urban taper lengths."
+  }
+}

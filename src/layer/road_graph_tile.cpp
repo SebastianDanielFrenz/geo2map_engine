@@ -35,13 +35,23 @@ Result<void> validate_road_graph(const RoadGraph& g) {
     if (g.nodes.size() > kMaxNodes || g.ways.size() > kMaxWays || g.edges.size() > kMaxRefs ||
         g.far_zone_ways > kMaxWays || g.repeated_ref_pairs > kMaxRefs)
         return make_error(ErrorCode::LimitExceeded, "roads.graph: object count");
+    std::size_t refs = 0, tags = 0, tag_bytes = 0, edge_index = 0, repeats = 0;
     for (std::size_t i = 0; i < g.nodes.size(); ++i) {
         const auto& n = g.nodes[i];
         constexpr auto bound = std::int64_t{1} << 62;
         if ((i && g.nodes[i - 1].osm_id >= n.osm_id) || n.position.x <= -bound || n.position.x >= bound ||
             n.position.y <= -bound || n.position.y >= bound) return malformed("node order or coordinate range");
+        if (n.tags.size() > kMaxTags - tags) return make_error(ErrorCode::LimitExceeded, "roads.graph: pooled count");
+        tags += n.tags.size();
+        for (std::size_t j = 0; j < n.tags.size(); ++j) {
+            const auto& [key, value] = n.tags[j];
+            if (!road_node_tag_key_allowed(key) || value.size() > kMaxString || (j && n.tags[j - 1].first >= key))
+                return malformed("noncanonical node tags");
+            if (key.size() + value.size() > kMaxSectionRawSize - tag_bytes)
+                return make_error(ErrorCode::LimitExceeded, "roads.graph: pooled string bytes");
+            tag_bytes += key.size() + value.size();
+        }
     }
-    std::size_t refs = 0, tags = 0, tag_bytes = 0, edge_index = 0, repeats = 0;
     std::vector<bool> used(g.nodes.size(), false);
     for (std::size_t i = 0; i < g.ways.size(); ++i) {
         const auto& way = g.ways[i];
@@ -86,14 +96,22 @@ Result<void> validate_road_graph_tile(const RoadGraphTile& tile) {
     return {};
 }
 
-Result<TileBody> encode_road_graph(const RoadGraphTile& tile) {
+Result<TileBody> encode_road_graph(const RoadGraphTile& tile, std::uint16_t encoding) {
+    if (encoding != kRoadGraphEncodingLegacy && encoding != kRoadGraphEncoding)
+        return make_error(ErrorCode::InvalidArgument, "roads.graph: unsupported encoding to write");
     const auto valid = validate_road_graph_tile(tile); if (!valid) return valid.error();
+    const bool with_tags = encoding == kRoadGraphEncoding;
     ByteWriter w;
     w.u64(tile.key.packed()); w.u32(tile.halo_m);
     const auto& g = tile.graph;
     w.varint(g.far_zone_ways); w.varint(g.repeated_ref_pairs);
     w.varint(g.nodes.size());
-    for (const auto& n : g.nodes) { w.svarint(n.osm_id); w.svarint(n.position.x); w.svarint(n.position.y); }
+    for (const auto& n : g.nodes) {
+        w.svarint(n.osm_id); w.svarint(n.position.x); w.svarint(n.position.y);
+        if (!with_tags) continue;
+        w.varint(n.tags.size());
+        for (const auto& [key, value] : n.tags) { string(w, key); string(w, value); }
+    }
     w.varint(g.ways.size());
     for (const auto& way : g.ways) {
         w.svarint(way.osm_id); w.u8(static_cast<std::uint8_t>(way.rank)); w.varint(way.node_ids.size());
@@ -105,12 +123,13 @@ Result<TileBody> encode_road_graph(const RoadGraphTile& tile) {
     // ownership indices are stored; this avoids redundant, forgeable topology.
     w.varint(tile.owned_edges.size()); for (auto index : tile.owned_edges) w.varint(index);
     if (w.size() > kMaxSectionRawSize) return make_error(ErrorCode::LimitExceeded, "roads.graph: section size");
-    return TileBody{kRoadGraphEncoding, 1, {{1, SectionCodec::Zstd, w.take()}}};
+    return TileBody{encoding, 1, {{1, SectionCodec::Zstd, w.take()}}};
 }
 
 Result<RoadGraphTile> decode_road_graph(const TileBody& body) {
-    if (body.encoding != kRoadGraphEncoding || body.encoding_version != 1)
+    if ((body.encoding != kRoadGraphEncodingLegacy && body.encoding != kRoadGraphEncoding) || body.encoding_version != 1)
         return make_error(ErrorCode::Unsupported, "roads.graph: encoding/version");
+    const bool with_tags = body.encoding == kRoadGraphEncoding;
     if (body.sections.size() != 1 || body.sections[0].type != 1 || body.sections[0].data.size() > kMaxSectionRawSize)
         return malformed("sections");
     ByteReader r(body.sections[0].data);
@@ -121,11 +140,23 @@ Result<RoadGraphTile> decode_road_graph(const TileBody& body) {
     if (!r.ok() || far > kMaxWays || repeat > kMaxRefs) return malformed("diagnostic counts");
     g.far_zone_ways = static_cast<std::size_t>(far); g.repeated_ref_pairs = static_cast<std::size_t>(repeat);
     const auto nodes = r.varint();
-    if (!r.ok() || nodes > kMaxNodes || nodes > r.remaining() / 3) return malformed("node count");
+    if (!r.ok() || nodes > kMaxNodes || nodes > r.remaining() / (with_tags ? 4 : 3)) return malformed("node count");
     g.nodes.reserve(static_cast<std::size_t>(nodes));
+    std::size_t node_tags_total = 0;
     for (std::uint64_t i = 0; i < nodes; ++i) {
         RoadGraphNode n; n.osm_id = r.svarint(); n.position.x = r.svarint(); n.position.y = r.svarint();
-        if (!r.ok()) return malformed("truncated nodes"); g.nodes.push_back(n);
+        if (!r.ok()) return malformed("truncated nodes");
+        if (with_tags) {
+            const auto count = r.varint();
+            if (!r.ok() || count > kMaxTags - node_tags_total || count > r.remaining() / 2) return malformed("node tag count");
+            node_tags_total += static_cast<std::size_t>(count);
+            for (std::uint64_t j = 0; j < count; ++j) {
+                auto key = string(r); if (!key) return key.error();
+                auto value = string(r); if (!value) return value.error();
+                n.tags.emplace_back(std::move(*key), std::move(*value));
+            }
+        }
+        g.nodes.push_back(std::move(n));
     }
     const auto ways = r.varint();
     if (!r.ok() || ways > kMaxWays || ways > r.remaining() / 6) return malformed("way count");
@@ -181,13 +212,13 @@ Result<std::vector<InputTileRef>> road_context_dependencies(const RoadGraph& gra
     return out;
 }
 Result<RoadGraph> merge_road_graphs(std::span<const RoadGraph* const> graphs) {
-    std::map<std::int64_t, geom::PointMm> nodes;
+    std::map<std::int64_t, const RoadGraphNode*> nodes;
     std::map<std::int64_t, const RoadGraphWay*> ways;
     for (const auto* graph : graphs) {
         const auto valid = validate_road_graph(*graph); if (!valid) return valid.error();
         for (const auto& node : graph->nodes) {
-            const auto [it, inserted] = nodes.emplace(node.osm_id, node.position);
-            if (!inserted && !(it->second == node.position)) return malformed("conflicting node copies in context");
+            const auto [it, inserted] = nodes.emplace(node.osm_id, &node);
+            if (!inserted && !(*it->second == node)) return malformed("conflicting node copies in context");
         }
         for (const auto& way : graph->ways) {
             const auto [it, inserted] = ways.emplace(way.osm_id, &way);
@@ -196,7 +227,7 @@ Result<RoadGraph> merge_road_graphs(std::span<const RoadGraph* const> graphs) {
     }
     RoadGraph out;
     out.nodes.reserve(nodes.size());
-    for (const auto& [id, position] : nodes) out.nodes.push_back({id, position});
+    for (const auto& [id, node] : nodes) out.nodes.push_back(*node);
     for (const auto& [id, way] : ways) {
         out.ways.push_back(*way);
         for (std::size_t i = 1; i < way->node_ids.size(); ++i) {

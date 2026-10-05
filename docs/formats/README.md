@@ -10,6 +10,8 @@ reject anything that breaks a rule stated here.
 | [src_elev.md](src_elev.md) | body encoding 1: `g2m.src.elev.<source>` heights | `g2m/layer/src_elev.h` |
 | [src_landcover.md](src_landcover.md) | body encoding 2: `g2m.src.landcover` classes | `g2m/layer/src_landcover.h` |
 | [src_osm.md](src_osm.md) | body encoding 3: `g2m.src.osm` columnar OSM | `g2m/layer/src_osm.h`, `osm_clip.h`, `osm_data.h` |
+| [road_graph.md](road_graph.md) | `g2m.roads.graph` encodings 4/5: complete road ways, node tags, edge ownership | `g2m/layer/road_graph_tile.h` |
+| [road_geom.md](road_geom.md) | `g2m.roads.geom` encoding 5: reference line, vertical profile, declines | `g2m/layer/road_geom_tile.h` |
 | [pack.md](pack.md) | a 16×16 pack of containers with a directory of body hashes | `g2m/layer/pack.h` |
 | [release_manifest.md](release_manifest.md) | release id (rid) and the `g2m.release/1` manifest JSON | `g2m/layer/release.h` |
 | [regions.md](regions.md) | `g2m.regions/1` region definitions, ring assembly rules, `g2m.resolved_region/1` | `g2m/layer/region.h`, `g2m/core/geom/*` |

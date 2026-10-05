@@ -44,7 +44,7 @@ add_library(g2m_fuzz_instrumented OBJECT
   ${PROJECT_SOURCE_DIR}/src/server/protocol.cpp
   fuzz_run.cpp
 )
-target_include_directories(g2m_fuzz_instrumented PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/layer)
+target_include_directories(g2m_fuzz_instrumented PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/layer ${G2M_GENERATED_INCLUDE_DIR})
 target_link_libraries(g2m_fuzz_instrumented PRIVATE g2m_core g2m_dep_zstd g2m_dep_json g2m_warnings g2m_options)
 target_compile_options(g2m_fuzz_instrumented PRIVATE -fsanitize=fuzzer-no-link)
 

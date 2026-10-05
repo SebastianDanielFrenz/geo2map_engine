@@ -39,7 +39,7 @@ that follow, and the body hash. It does not decode the body.
 
 | Field | Type | Rule |
 |---|---|---|
-| encoding | u16 | 1 src.elev, 2 src.landcover, 3 src.osm; ≥ 0x8000 vendor encodings |
+| encoding | u16 | 1 src.elev, 2 src.landcover, 3 src.osm, 4/5 roads.graph, 5 roads.geom (ids are per layer); ≥ 0x8000 vendor encodings |
 | encoding_version | u16 | per encoding |
 | n_sections | u16 | ≤ 64 |
 | reserved | u16 | 0 |

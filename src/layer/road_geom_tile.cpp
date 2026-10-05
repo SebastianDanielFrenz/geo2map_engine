@@ -124,7 +124,8 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
 }
 Result<TileBody> encode_road_geom(const RoadGeomTile& tile) {
     const auto valid = validate_road_geom_tile(tile); if (!valid) return valid.error();
-    const auto graph = encode_road_graph(tile.source); if (!graph) return graph.error();
+    // Encoding 5 embeds the encoding-4 graph section (no node tags); encoding 6 will embed 5.
+    const auto graph = encode_road_graph(tile.source, kRoadGraphEncodingLegacy); if (!graph) return graph.error();
     ByteWriter w; w.varint(tile.entries.size());
     for (const auto& entry : tile.entries) {
         w.svarint(entry.way_id); w.u32(entry.stretch.start_ref); w.u32(entry.stretch.end_ref);
@@ -149,7 +150,7 @@ Result<TileBody> encode_road_geom(const RoadGeomTile& tile) {
 Result<RoadGeomTile> decode_road_geom(const TileBody& body) {
     if (body.encoding != kRoadGeomEncoding || body.encoding_version != 1) return make_error(ErrorCode::Unsupported, "roads.geom: encoding/version");
     if (body.sections.size() != 2 || body.sections[0].type != 1 || body.sections[1].type != 2 || body.sections[1].data.size() > kMaxSectionRawSize) return invalid("sections");
-    auto graph = decode_road_graph(TileBody{kRoadGraphEncoding, 1, {body.sections[0]}}); if (!graph) return graph.error();
+    auto graph = decode_road_graph(TileBody{kRoadGraphEncodingLegacy, 1, {body.sections[0]}}); if (!graph) return graph.error();
     RoadGeomTile tile; tile.source = std::move(*graph); ByteReader r(body.sections[1].data);
     const auto count = r.varint(); if (!r.ok() || count > kMaxEntries || count > r.remaining() / 11) return invalid("entry count");
     std::size_t pieces = 0;

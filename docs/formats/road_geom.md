@@ -5,7 +5,9 @@ midpoint ownership are retained. Every canonical graph stretch has exactly
 one accepted parametric profile or explicit declined outcome. A geometry tile
 does not promise every road is driveable; consumers must inspect declines.
 
-Section 1 is the unchanged roads.graph encoding-4 section-1 payload.
+Section 1 is the unchanged roads.graph encoding-4 section-1 payload (nodes without tags, even
+though roads.graph itself has been encoding 5 since street fidelity P1 slice 2: node tags are
+dropped when the geometry tile is written and arrive with roads.geom encoding 6).
 Section 2 stores a canonical varint entry count, then entries in ascending
 way id / stretch order. Integers use little endian, ids use signed LEB128,
 counts use unsigned LEB128, and floating values use IEEE-754 binary64 bits.

@@ -70,7 +70,7 @@ Result<RoadGraphTile> select_road_graph_tile(const RoadGraph& graph, const TileK
 }
 
 ContentHash RoadGraphDeriver::config_hash() const {
-    return Sha256::of("g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours");
+    return Sha256::of("g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours node-tags=1 enc=5");
 }
 std::vector<InputTileRef> RoadGraphDeriver::inputs_for(const TileKey& target) const {
     std::vector<InputTileRef> result;

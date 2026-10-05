@@ -3,11 +3,17 @@
 #pragma once
 #include "g2m/layer/osm_roads.h"
 #include <string>
+#include <string_view>
 
 namespace g2m {
+// Node tag keys kept in roads.graph (street fidelity P1, encoding 5): only the
+// whitelist, sorted by key, because shared nodes also carry addresses, names
+// and other tags no road consumer reads. Adding a key is an encoding bump.
+bool road_node_tag_key_allowed(std::string_view key);
 struct RoadGraphNode {
     std::int64_t osm_id = 0;
     geom::PointMm position;
+    std::vector<std::pair<std::string, std::string>> tags{}; // whitelisted keys, strictly ascending
     friend bool operator==(const RoadGraphNode&, const RoadGraphNode&) = default;
 };
 struct RoadGraphWay {

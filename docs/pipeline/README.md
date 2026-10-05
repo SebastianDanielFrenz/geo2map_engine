@@ -103,11 +103,11 @@ Details: [terrain.md](terrain.md).
 
 | | |
 |---|---|
-| Inputs | `roads.graph`: `g2m.src.osm` for the 3 x 3 level-2 neighbourhood. `roads.geom`: the same-tile `roads.graph` plus every `g2m.elev.base` level-0 tile the road segments touch (margin 65 m). |
-| Code | `src/layer/derive_road_graph.cpp`, `road_graph.cpp`, `road_attributes.cpp`, `osm_roads.cpp`; `derive_road_geom.cpp`, `road_reference.cpp`, `road_profile.cpp`, `vertical_profile.cpp`, `road_dem_dependencies.cpp`, `road_dem_sampler.cpp`. Builtin wiring: `include/g2m/server/builtin_release.h` (`BuiltinTerrainDerivers::ordered(include_roads, include_geometry)`). |
-| Output | `roads.graph` v1, encoding 4 ([road_graph.md](../formats/road_graph.md)), level 2. `roads.geom` v1, encoding 5 ([road_geom.md](../formats/road_geom.md)), level 2: reference line, vertical profile, declined stretches with reasons. |
+| Inputs | `roads.graph`: `g2m.src.osm` for the 3 x 3 level-2 neighbourhood. `roads.geom`: the same-tile `roads.graph`, the `roads.graph` tiles that hold every way incident to a node of its ways (stretch context), plus every `g2m.elev.base` level-0 tile the road segments touch (margin 65 m). |
+| Code | `src/layer/derive_road_graph.cpp`, `road_graph.cpp`, `road_attributes.cpp`, `osm_roads.cpp`; `derive_road_geom.cpp`, `road_reference.cpp`, `road_profile.cpp`, `vertical_profile.cpp`, `road_dem_dependencies.cpp`, `road_dem_sampler.cpp`; `road_rules.cpp` with `data/road_rules/de.json` (embedded, loader only so far). Builtin wiring: `include/g2m/server/builtin_release.h` (`BuiltinTerrainDerivers::ordered(include_roads, include_geometry)`). |
+| Output | `roads.graph` v1, encoding 5 (nodes carry whitelisted tags; 4 still decodes; [road_graph.md](../formats/road_graph.md)), level 2. `roads.geom` v1, encoding 5 ([road_geom.md](../formats/road_geom.md)), level 2: reference line, vertical profile, declined stretches with reasons. |
 | Halo | `roads.graph` uses a 128 m halo and complete ways. An edge belongs to the tile that contains its midpoint (integer mm). `roads.geom` reads DEM tiles up to 65 m outside the road. |
-| Config hash | graph: `g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours`. geom: `g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph`. |
+| Config hash | graph: `g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours node-tags=1 enc=5`. geom: `g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph join-bisector=1 context=nodes`. |
 | Tests | `tests/layer/test_road_*.cpp`, `test_vertical_profile.cpp`; golden `g2roads_golden.txt`; probe `tools/road_probe`. |
 | Consumers | `racing_game`: road surface patch (carving into the level-0 height tile), road visuals, bridge structures, NPC traffic and trucks. |
 | Status | Slices A and B of G3 implemented. C has a tested foundation, acceptance open. D to F open. See [roads.md](roads.md) and [../g3_road_pipeline.md](../g3_road_pipeline.md). |
@@ -435,14 +435,14 @@ These are listed, not resolved. Each needs an owner decision or a check.
 5. **`CLAUDE.md` of this repo is partly stale.** It still describes `elev.base`, `terrain.height`, `bake`, roads and the road probe as not built or planned in places. This docs folder is checked against code; `CLAUDE.md` should be reconciled.
 6. **PLAN.md vs code, terrain.** PLAN.md 6.1 describes multi-source blending and a 16 m halo for `elev.base`. The code is DGM1-only without halo. `g2m.terrain.class` has no deriver although the slot exists.
 7. **PLAN.md vs code, CLI.** PLAN.md 3.10 and 5.5 describe a CLI that differs from the real `g2m_tiler` subcommands. `apps/g2m_server` and `g2m_cli` are not built.
-8. **`LayerEncoding` enum.** `include/g2m/layer/layer_id.h` lists encodings 1 to 4 only; `roads.geom` uses encoding 5 (`kRoadGeomEncoding`) which is not in the enum.
+8. **`LayerEncoding` enum.** Resolved 2026-10-05: the enum now lists the road encodings (`RoadGraph` 4, `RoadGraphNodeTags` 5, `RoadGeom` 5, `RoadGeomCrossSection` 6). Ids are per layer, so the same number can name two layers' encodings.
 9. **Height quantiser unification (Q3).** PLAN.md records it as undecided: the half-even quantiser (DGM1 importer) and the older ties-away-from-zero `quantise_height` (everything else) both exist.
 10. **85 DGM1 halo tiles without coverage.** Accepted until the GLO-30 fallback exists. Heights there are NoData.
 11. **Pin values differ between documents.** `bridges/physics_sim/physics_sim.pin` holds `b90a531...`; older PLAN text mentions `5c648a5` and `be36545`; `racing_game` pins other commits. Which is the supported combination? Check `git submodule status` in `racing_game`.
 12. **Is roads baked for the home store?** `bake` accepts the road layers (code verified), but this review did not run it and did not check whether `S:\claude_code\geo2map_cache\home-r1\baked` already holds `roads.*` tiles.
 13. **Street fidelity plan is partly outdated.** Its section 9 says nothing is downloaded; since 2026-10-05 LoD2, DOM1, DOP20, Basis-DLM, tree datasets, HRL and phenology are downloaded ([section 5](#5-data-sources)).
 14. **Road curvature exceptions: decided or not?** `tools/road_probe/README.md` says the owner must choose how served geometry represents curvature exceptions. [../g3_reference_lines.md](../g3_reference_lines.md) says the owner continuation selects "preservation with explicit curvature exceptions", and the `roads.geom` config hash text contains `curvature-exceptions=true`. The probe README reads as undecided, the other two as decided.
-15. **Stale bake flags in a format doc.** [../formats/road_graph.md](../formats/road_graph.md) says to use `--min-level 2 --max-level 2` with `bake`. The real tiler has `--levels LO-HI` only (`apps/g2m_tiler/main.cpp`). Levels a layer lacks are skipped anyway.
+15. **Stale bake flags in a format doc.** Resolved 2026-10-05: road_graph.md and g3_road_pipeline.md now say `--levels 2-2` (the real tiler flag, `apps/g2m_tiler/main.cpp`).
 
 ---
 

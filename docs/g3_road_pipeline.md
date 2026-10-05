@@ -38,13 +38,14 @@ edges. Its canonical fingerprint is `2d63f916719a0c3b`.
 
 ## B. Tile encoding and derivation (implemented)
 
-`g2m.roads.graph` is a level-2 baked layer with a bounded encoding 4/version 1.
+`g2m.roads.graph` is a level-2 baked layer with a bounded encoding 5/version 1 (encoding 4,
+without node tags, is still decoded).
 See [the format](formats/road_graph.md) for exact bytes and ownership rules.
 The deriver merges nine raw source tiles, deduplicates identical complete ways
 and fails conflicting copies. Whole ways intersecting the 128 m halo retain
 all references and tags. Integer midpoint ownership is unique across tiles.
 Server registration is opt-in; `g2m_tiler bake --layers g2m.roads.graph
---min-level 2 --max-level 2` selects it automatically.
+--levels 2-2` selects it automatically.
 
 Five tests cover codec truncation and malformed data, source order/conflicts,
 adjacent ownership and real server/bake parity with four workers and pinning.

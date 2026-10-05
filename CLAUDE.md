@@ -718,3 +718,14 @@ Physical tags, complete DEM dependency enumeration, immutable DEM sampling,
 G1 clothoid fitting and constrained cubic profiles are implemented foundations.
 IDeriver::additional_inputs_for provides one pure discovery stage for distant
 DEM inputs. See docs/g3_profile_foundation.md for limits and project defaults.
+## Street fidelity P1 (cross-section), in progress (2026-10-05)
+
+Design: `docs/street_fidelity/p1_cross_section_design.md` (owner decisions at its end are binding).
+Slice 1: `roads.geom` also depends on the `roads.graph` tiles holding every way incident to a node of
+the tile's ways (`road_context_dependencies`, `merge_road_graphs`, `RoadReferenceBuilder::degree/join`),
+so stretches are tile-invariant, and both stretches of a degree-two way join end on one shared bisector
+heading. Slice 2: `roads.graph` encoding 5 (node tags, whitelist in `road_node_tag_key_allowed`; 4 still
+decodes), `include/g2m/layer/road_rules.h` + `src/layer/road_rules.cpp` (strict loader of
+`data/road_rules/de.json`, embedded through a CMake-generated `road_rules_de.inc`, `builtin_road_rules_de()`,
+`.gitattributes` keeps the JSON byte-exact). Tests: `test_road_context.cpp`, `test_road_rules.cpp`,
+`test_road_graph_tile.cpp` (node tags), shared helpers in `tests/support/road_fixture.h`.

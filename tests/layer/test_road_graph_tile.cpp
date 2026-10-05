@@ -168,3 +168,65 @@ TEST_CASE("Road graph derivation fails inconsistent duplicate sources", "[layer]
     const auto body = decode_body(empty->body); REQUIRE(body);
     const auto tile = decode_road_graph(*body); REQUIRE(tile); CHECK(tile->graph.nodes.empty());
 }
+
+TEST_CASE("Road graph nodes keep whitelisted tags in encoding 5 and encoding 4 still decodes", "[layer][road_graph_tile][road_node_tags]") {
+    const auto key = g2m_test::home_tile();
+    auto source = graph(key);
+    source.nodes[0].tags = {{"highway", "traffic_signals"}, {"traffic_calming", "table"}, {"traffic_calming:length", "6"}};
+    source.nodes[3].tags = {{"barrier", "bollard"}};
+    auto tile = select_road_graph_tile(source, key); REQUIRE(tile);
+    const auto encoded = encode_road_graph(*tile); REQUIRE(encoded);
+    CHECK(encoded->encoding == 5);
+    const auto decoded = decode_road_graph(*encoded); REQUIRE(decoded);
+    CHECK(*decoded == *tile);
+    CHECK(decoded->graph.nodes[0].tags.size() + decoded->graph.nodes[3].tags.size() == 4);
+    // Encoding 4: the same graph without node tags; both encodings decode, and the old one has no tags.
+    const auto legacy = encode_road_graph(*tile, kRoadGraphEncodingLegacy); REQUIRE(legacy);
+    CHECK(legacy->encoding == 4);
+    CHECK(legacy->sections[0].data.size() < encoded->sections[0].data.size());
+    const auto old = decode_road_graph(*legacy); REQUIRE(old);
+    for (const auto& node : old->graph.nodes) CHECK(node.tags.empty());
+    auto stripped = *tile; for (auto& node : stripped.graph.nodes) node.tags.clear();
+    CHECK(*old == stripped);
+    CHECK_FALSE(encode_road_graph(*tile, 6));
+    // Truncation of the tagged section never decodes.
+    for (std::size_t n = 0; n < encoded->sections[0].data.size(); ++n) {
+        auto cut = *encoded; cut.sections[0].data.resize(n); CHECK_FALSE(decode_road_graph(cut));
+    }
+    // Noncanonical node tags are rejected by the encoder: unsorted, duplicated, a key outside the whitelist.
+    auto bad = *tile; bad.graph.nodes[0].tags = {{"traffic_calming", "table"}, {"highway", "x"}}; CHECK_FALSE(encode_road_graph(bad));
+    bad = *tile; bad.graph.nodes[0].tags = {{"highway", "x"}, {"highway", "y"}}; CHECK_FALSE(encode_road_graph(bad));
+    bad = *tile; bad.graph.nodes[0].tags = {{"name", "x"}}; CHECK_FALSE(encode_road_graph(bad));
+    // A node-tag count bomb is rejected before allocation.
+    ByteWriter bomb; bomb.u64(tile->key.packed()); bomb.u32(128); bomb.varint(0); bomb.varint(0); bomb.varint(1);
+    bomb.svarint(1); bomb.svarint(0); bomb.svarint(0); bomb.varint(1ull << 40);
+    CHECK_FALSE(decode_road_graph({kRoadGraphEncoding, 1, {{1, SectionCodec::None, bomb.take()}}}));
+}
+
+TEST_CASE("Road graph derivation copies only whitelisted node tags, sorted", "[layer][road_graph_tile][road_node_tags]") {
+    osm::OsmBuilder builder; const auto key = g2m_test::home_tile();
+    const geo::Utm utm(geo::kGRS80);
+    const auto x = key.min_easting() + 100.0, y = key.min_northing() + 100.0;
+    for (int i = 0; i < 3; ++i) {
+        const auto ll = utm.reverse(key.zone, x + 50.0 * i, y);
+        osm::OsmBuilder::TagList tags;
+        if (i == 1) tags = {{"name", "Kreuzung"}, {"traffic_calming:length", "6"}, {"highway", "crossing"}, {"traffic_calming", "hump"}, {"addr:street", "x"}};
+        builder.add_node(i + 1, g2m_test::to_e7(ll.lat), g2m_test::to_e7(ll.lon), std::move(tags));
+    }
+    builder.add_way(10, {1, 2, 3}, {{"highway", "residential"}});
+    const auto data = builder.build(); REQUIRE(data);
+    const auto world = build_road_graph(*data, key.zone); REQUIRE(world);
+    REQUIRE(world->nodes.size() == 3);
+    CHECK(world->nodes[0].tags.empty()); CHECK(world->nodes[2].tags.empty());
+    using Tag = std::pair<std::string, std::string>;
+    CHECK(world->nodes[1].tags == std::vector<Tag>{{"highway", "crossing"}, {"traffic_calming", "hump"}, {"traffic_calming:length", "6"}});
+    const auto tile = select_road_graph_tile(*world, key); REQUIRE(tile);
+    const auto encoded = encode_road_graph(*tile); REQUIRE(encoded);
+    const auto decoded = decode_road_graph(*encoded); REQUIRE(decoded); CHECK(*decoded == *tile);
+    // Context merging keeps the tags and rejects two copies of a node whose tags differ.
+    auto other = *world; other.nodes[1].tags.pop_back();
+    const RoadGraph* both[] = {&*world, &other};
+    CHECK_FALSE(merge_road_graphs(both));
+    const RoadGraph* same[] = {&*world, &*world};
+    const auto merged = merge_road_graphs(same); REQUIRE(merged); CHECK(*merged == *world);
+}

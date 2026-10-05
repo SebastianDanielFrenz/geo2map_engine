@@ -4,7 +4,11 @@
 
 namespace g2m {
 inline constexpr std::string_view kRoadGraphLayer = "g2m.roads.graph";
-inline constexpr std::uint16_t kRoadGraphEncoding = 4;
+// Format ids (a tile body's first u16, per layer): 4 = nodes without tags, 5 = nodes
+// carry the whitelisted tags (street fidelity P1 slice 2). The encoder writes 5; 4 is
+// read, and written only for the section embedded in roads.geom encoding 5.
+inline constexpr std::uint16_t kRoadGraphEncodingLegacy = 4;
+inline constexpr std::uint16_t kRoadGraphEncoding = 5;
 inline constexpr std::uint32_t kRoadGraphHaloM = 128;
 struct RoadGraphTile {
     TileKey key;
@@ -15,9 +19,10 @@ struct RoadGraphTile {
     std::vector<std::uint32_t> owned_edges;
     friend bool operator==(const RoadGraphTile&, const RoadGraphTile&) = default;
 };
-// Canonical, bounded encoding 4/version 1. Complete way geometry and tags
-// remain available beyond the halo; ownership never changes edge identities.
-Result<TileBody> encode_road_graph(const RoadGraphTile& tile);
+// Canonical, bounded encoding 5/version 1 (4 on request: node tags are dropped).
+// Complete way geometry and tags remain available beyond the halo; ownership
+// never changes edge identities. decode accepts 4 (nodes carry no tags) and 5.
+Result<TileBody> encode_road_graph(const RoadGraphTile& tile, std::uint16_t encoding = kRoadGraphEncoding);
 Result<RoadGraphTile> decode_road_graph(const TileBody& body);
 Result<void> validate_road_graph_tile(const RoadGraphTile& tile);
 Result<void> validate_road_graph(const RoadGraph& graph);

@@ -37,12 +37,17 @@ enum class LayerKind : std::uint8_t {
 };
 
 // Body encodings (docs/formats/). The id is what a tile body's first u16
-// says; each encoding has its own version.
+// says; each encoding has its own version. Ids are chosen per layer: the road
+// layers changed their format more than once, so roads.graph 5 and roads.geom 5
+// are different encodings of different layers (a decoder checks the layer first).
 enum class LayerEncoding : std::uint16_t {
     SrcElev = 1,       // docs/formats/src_elev.md
     SrcLandcover = 2,  // docs/formats/src_landcover.md
-    RoadGraph = 4,     // docs/formats/road_graph.md
     SrcOsm = 3,        // docs/formats/src_osm.md
+    RoadGraph = 4,     // g2m.roads.graph, nodes without tags (read-only legacy); docs/formats/road_graph.md
+    RoadGraphNodeTags = 5, // g2m.roads.graph, nodes carry whitelisted tags (written since street fidelity P1 slice 2)
+    RoadGeom = 5,      // g2m.roads.geom, sections 1-2 only (read-only once encoding 6 lands); docs/formats/road_geom.md
+    RoadGeomCrossSection = 6, // g2m.roads.geom with cross-section and feature sections (street fidelity P1 slice 5)
 };
 
 // Levels a layer has tiles at, as a bit mask over TileKey levels 0..20.
