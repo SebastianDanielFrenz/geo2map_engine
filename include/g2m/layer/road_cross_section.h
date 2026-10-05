@@ -162,4 +162,48 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
 // same UTM frame as RoadReferenceLine::at.
 struct LateralPoint { double x = 0, y = 0; };
 Result<LateralPoint> lateral_point(const RoadReferenceLine& reference, double s, double t);
+
+// ---- Consumer API (design sections 8.1 and 9.1). All pure, allocation-free, noexcept. ----
+
+// t of the carriageway edges at station s: counted lanes plus the Parking and Cycle bands that sit on the
+// carriageway (design 3.4: the order outward is Parking, Cycle, Shoulder, Verge or Sidewalk).
+struct CarriagewayEdges { double left = 0, right = 0; };
+CarriagewayEdges carriageway_edges(const RoadCrossSection& xs, double s) noexcept;
+
+enum class CrownKind : std::uint8_t { Roof = 0, OneSidedRight = 1, OneSidedLeft = 2 };
+// The one footprint that carving, the render ribbon and the grip raster all use (lateral t in metres,
+// positive left of the reference direction, at station s).
+struct CarveFootprint {
+    double paved_left = 0, paved_right = 0;               // carriageway plus Shoulder and Sidewalk bands (sidewalks flush)
+    double roadbed_left = 0, roadbed_right = 0;           // paved without the Sidewalk bands: what the grip raster paints as road
+    double carriageway_left = 0, carriageway_right = 0;   // as carriageway_edges
+    double outer_left = 0, outer_right = 0;               // every band incl. Verge: the flat area carving levels
+    double crown_pivot = 0;                               // t of the crown line (8.2)
+    CrownKind crown = CrownKind::Roof;
+    // Kerb data (owner decision Q1: a raised VISUAL 12 cm kerb in the data and render API, physics flush):
+    // has_kerb_* is true on a side with a Sidewalk band; kerb_* is the t of the kerb line, the boundary between
+    // the sidewalk and the road bed. The height is kRoadKerbHeightM; no carved height ever includes it.
+    bool has_kerb_left = false, has_kerb_right = false;
+    double kerb_left = 0, kerb_right = 0;
+};
+inline constexpr double kRoadKerbHeightM = 0.12;
+// Crown: a two-way road is a roof whose ridge is the boundary between the Backward and the Forward counted
+// lanes (the carriageway centre if the lanes have no such boundary); a one-way carriageway falls one-sided
+// (RoadAttributes::crown_per_mille, 25 per mille) to the right of the TRAVEL direction: OneSidedRight with the
+// pivot on the left carriageway edge, or OneSidedLeft with the pivot on the right edge for oneway=-1.
+CarveFootprint carve_footprint(const RoadCrossSection& xs, double s) noexcept;
+
+// Lane queries for traffic. A lane's own turn data is in its travel direction as in OSM.
+struct LaneQuery {
+    std::size_t band = 0;
+    double centre_t = 0;                 // in the reference frame (positive left of the way direction)
+    double width_m = 0;
+    LaneDirection direction = LaneDirection::Forward;
+    std::uint16_t turn = 0;
+    LaneKind kind = LaneKind::Driving;
+};
+// Counted, non-Parking lanes whose direction matches `travel` (Forward or Backward; Both lanes match either),
+// ordered left to right in the TRAVEL direction; lanes narrower than 0.5 m (mid-taper) are excluded. Writes at
+// most out.size() entries and returns how many were written (any other `travel` value returns 0).
+std::size_t driving_lanes_at(const RoadCrossSection& xs, double s, LaneDirection travel, std::span<LaneQuery> out) noexcept;
 } // namespace g2m

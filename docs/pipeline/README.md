@@ -317,7 +317,7 @@ flowchart TB
 | G3 E: ribbons, markings, bridge bodies | Open | section E |
 | G3 F: route acceptance | Open | section F |
 | Street fidelity P0 (tag probe) | Done | [../osm_tag_coverage_home.md](../osm_tag_coverage_home.md) |
-| Street fidelity P1 (lane-aware cross-section) | Slices 1 to 5 implemented (context, node tags, base and join resolution, encoding 6); consumer API and features open | [../street_fidelity/p1_cross_section_design.md](../street_fidelity/p1_cross_section_design.md) |
+| Street fidelity P1 (lane-aware cross-section) | Slices 1 to 6 implemented (context, node tags, base and join resolution, encoding 6, consumer API: carve footprint, lane queries, grip-raster envelope); profile features open | [../street_fidelity/p1_cross_section_design.md](../street_fidelity/p1_cross_section_design.md) |
 | Street fidelity P2 to P8 | Planned, nothing written | [../street_fidelity/plan.md](../street_fidelity/plan.md) section 6 |
 | HTTP server, packs, hosted CDN (G6, G7) | Planned | [../formats/protocol.md](../formats/protocol.md), [../formats/pack.md](../formats/pack.md) |
 

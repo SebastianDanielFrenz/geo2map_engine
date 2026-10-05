@@ -179,6 +179,17 @@ void run(Target target, std::span<const std::uint8_t> data) {
                     check(std::isfinite(out[j]), "xs eval: finite");
                     if (j > 0) check(out[j] <= out[j - 1], "xs eval: non-increasing");
                 }
+                const auto edges = g2m::carriageway_edges(xs, s);
+                const auto fp = g2m::carve_footprint(xs, s);
+                check(std::isfinite(edges.left) && std::isfinite(edges.right) && edges.left >= edges.right, "xs eval: carriageway edges");
+                check(std::isfinite(fp.crown_pivot) && fp.outer_left >= fp.paved_left && fp.paved_left >= fp.roadbed_left
+                    && fp.roadbed_right >= fp.paved_right && fp.paved_right >= fp.outer_right, "xs eval: footprint nesting");
+                std::array<g2m::LaneQuery, 8> lanes{};
+                for (const auto travel : {g2m::LaneDirection::Forward, g2m::LaneDirection::Backward}) {
+                    const std::size_t n = g2m::driving_lanes_at(xs, s, travel, lanes);
+                    check(n <= lanes.size(), "xs eval: lane count");
+                    for (std::size_t k = 0; k < n; ++k) check(std::isfinite(lanes[k].centre_t) && lanes[k].width_m >= 0.5, "xs eval: lane");
+                }
             }
         }
         return;

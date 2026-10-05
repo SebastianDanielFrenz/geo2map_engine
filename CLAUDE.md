@@ -747,3 +747,8 @@ until slice 7). Validation per design 7.2 in `validate_road_geom_tile`. Config h
 rules=de:<hex>`. Golden `g3xs` (`tests/golden/golden_g3xs.cpp`, `testdata/golden/g3xs_golden.txt`, Windows =
 Linux), fuzz `Target::RoadCrossSectionEval`. Tests: `test_road_geom_xs.cpp`. Roadgeom golden body SHA is now
 `17d9b7c7...5ee2f9` (was `4dcfcbca...445f8`, the encoding-5 body, still reproduced by the test).
+Slice 6: consumer API. `road_cross_section.h`: `carriageway_edges`, `carve_footprint` (`CarveFootprint`, `CrownKind`,
+kerb line, `kRoadKerbHeightM`), `driving_lanes_at` (`LaneQuery`); implemented in
+`src/layer/road_cross_section_api.cpp`. `include/g2m/layer/road_envelope.h` / `src/layer/road_envelope.cpp`:
+`envelope_road_segments(tile, l0_key, spacing_m)` (grip-raster capsules from the same footprint; half-width = mean over
+the station pair, not the design text's max, because the round caps already overpaint). Test: `test_road_api.cpp`.
