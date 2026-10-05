@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -378,6 +379,78 @@ TEST_CASE("completion: one bridge anchor is the same from every tile; the tile g
     opts.abutment_path_m = 20; CHECK_FALSE(road_bridge_anchor(east->context, *east->dem, zone, 101, opts).plane.has_value());
     // The tile graph of the west tile lacks the bridge: no bridging node at all there (the hazard the context removes).
     CHECK_FALSE(road_bridge_anchor(west->tile.graph, *west->dem, zone, 101, RoadCompletionOptions{}).bridging);
+}
+
+namespace {
+// Every level-0 DEM tile under the world's nodes widened by 512 m: a DEM no tile can miss a cell of.
+struct FullDem { std::vector<HeightTile> heights; std::optional<RoadDemSampler> dem; };
+std::unique_ptr<FullDem> full_dem(const RoadGraph& world, const Fn& height) {
+    auto out = std::make_unique<FullDem>();
+    std::int64_t x0 = std::numeric_limits<std::int64_t>::max(), x1 = std::numeric_limits<std::int64_t>::min(), y0 = x0, y1 = x1;
+    for (const auto& n : world.nodes) { x0 = std::min(x0, n.position.x); x1 = std::max(x1, n.position.x); y0 = std::min(y0, n.position.y); y1 = std::max(y1, n.position.y); }
+    const auto lo = [](std::int64_t v) { return floor_div(v - 512000, 256000); };
+    const auto hi = [](std::int64_t v) { return floor_div(v + 512000, 256000); };
+    for (auto y = lo(y0); y <= hi(y1); ++y) for (auto x = lo(x0); x <= hi(x1); ++x) {
+        HeightTile t; t.key = TileKey{zone, 0, static_cast<std::int32_t>(x), static_cast<std::int32_t>(y)};
+        out->heights.push_back(std::move(t));
+    }
+    std::vector<const HeightTile*> views;
+    for (auto& t : out->heights) { g2m_test::fill_dem(t, height); views.push_back(&t); }
+    auto dem = RoadDemSampler::make(views); REQUIRE(dem); out->dem = std::move(*dem);
+    return out;
+}
+// A bridge B (way 40) from the west tile 455 to node 5 at x = 702.7, 65.3 m west of the DEM tile edge at x = 768, outside
+// the 128 m halo of tile 455. From node 5 a second bridge (way 41, `span` m) and a ground road (way 31) run east, so the
+// walk from node 5 crosses `span` m of bridge and finds its support 32 m further: path span + 32. Tile 455's DEM
+// dependencies end at x = 768 (65 m beyond B's last segment); tile 455 does not hold ways 41 and 31 (its context does).
+RoadGraph fence_world(double span) {
+    return world_of({{1, 300, 0}, {2, 400, 0}, {3, 500, 0}, {4, 600, 0}, {5, 702.7, 0}, {6, 702.7 + span, 0}, {7, 802.7 + span, 0}},
+        {{30, {1, 2, 3}}, {40, {3, 4, 5}, kBridge}, {41, {5, 6}, kBridge}, {31, {6, 7}}});
+}
+}
+
+TEST_CASE("completion: the walk budget bound keeps every DEM read inside the entry's DEM dependencies (D29)", "[layer][roads][completion][invariance]") {
+    RoadCompletionOptions opts; opts.enabled = true;
+    // The bound itself: 61.5 m accepted, anything beyond refused before any work.
+    {
+        const auto env = make_env(fence_world(29.4), kTile, rolling);
+        const auto builder = RoadReferenceBuilder::make(env->context); REQUIRE(builder);
+        auto entries = build(*env, false).entries; std::vector<RoadProfileOrigin> origins;
+        opts.abutment_path_m = kRoadCompletionMaxAbutmentPathM;
+        CHECK(complete_road_profiles(entries, origins, *builder, *env->dem, zone, env->limits, opts));
+        opts.abutment_path_m = kRoadCompletionMaxAbutmentPathM + 0.1;
+        const auto refused = complete_road_profiles(entries, origins, *builder, *env->dem, zone, env->limits, opts);
+        CHECK_FALSE(refused);
+        opts.abutment_path_m = 62;   // slice 6's bound
+        CHECK_FALSE(complete_road_profiles(entries, origins, *builder, *env->dem, zone, env->limits, opts));
+    }
+    opts.abutment_path_m = kRoadCompletionMaxAbutmentPathM;
+    // Paths 61.4 m (inside the bound) and 61.9 m (beyond it): the tile's own DEM dependencies and a DEM without holes give
+    // the same tier result for every entry.
+    for (const double span : {29.4, 29.9}) {
+        const auto world = fence_world(span);
+        const auto env = make_env(world, kTile, rolling); const auto full = full_dem(world, rolling);
+        const auto builder = RoadReferenceBuilder::make(env->context); REQUIRE(builder);
+        const auto strict = build(*env, false);
+        const auto bridge = index_of(strict, 40, 0); REQUIRE_FALSE(strict.entries[bridge].profile);   // two bridges meet at node 5
+        auto fenced = strict.entries, open = strict.entries; std::vector<RoadProfileOrigin> fo, oo;
+        REQUIRE(complete_road_profiles(fenced, fo, *builder, *env->dem, zone, env->limits, opts));
+        REQUIRE(complete_road_profiles(open, oo, *builder, *full->dem, zone, env->limits, opts));
+        for (std::size_t i = 0; i < fenced.size(); ++i) CHECK(same_outcome(fenced[i], fo[i], open[i], oo[i]));
+        const bool completed = oo[bridge].provenance == ProfileProvenance::BridgeCompleted;
+        std::printf("D29 fence, walk path %.1f m at budget %.1f m: bridge completed %d (fenced DEM and full DEM agree)\n", span + 32, opts.abutment_path_m, completed);
+        CHECK(completed == (span + 32 <= opts.abutment_path_m));
+    }
+    // Control: slice 6's 62 m budget reads beyond the DEM dependencies at path 61.9 m: the tile's DEM misses the cell the
+    // full DEM has, so the abutment exists in one and not the other.
+    {
+        const auto world = fence_world(29.9);
+        const auto env = make_env(world, kTile, rolling); const auto full = full_dem(world, rolling);
+        RoadCompletionOptions wide; wide.abutment_path_m = 62;
+        const auto fenced = road_bridge_anchor(env->context, *env->dem, zone, 5, wide), open = road_bridge_anchor(env->context, *full->dem, zone, 5, wide);
+        std::printf("D29 control, 62 m budget at path 61.9 m: abutment with the tile's DEM %d, with the full DEM %d\n", fenced.plane.has_value(), open.plane.has_value());
+        CHECK_FALSE(fenced.plane.has_value()); CHECK(open.plane.has_value());
+    }
 }
 
 // ---- the tier on the two committed fixtures ----

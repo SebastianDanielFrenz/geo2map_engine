@@ -144,7 +144,7 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
     origins.assign(entries.size(), RoadProfileOrigin{});
     if (!options.enabled) return {};
     if (!std::isfinite(options.abutment_ground_m) || !std::isfinite(options.abutment_path_m) || options.abutment_ground_m <= 0 ||
-        options.abutment_path_m < options.abutment_ground_m || options.abutment_path_m > 62 || options.retry_iterations < 1 ||
+        options.abutment_path_m < options.abutment_ground_m || options.abutment_path_m > kRoadCompletionMaxAbutmentPathM || options.retry_iterations < 1 ||
         options.retry_iterations > 16384 || options.retry_spacing_m < 0.5 || options.retry_spacing_m > 100 ||
         options.ground_spacing_m < 0.5 || options.ground_spacing_m > 100 || !std::isfinite(options.ground_ramp_m) || options.ground_ramp_m < 0)
         return make_error(ErrorCode::InvalidArgument, "road completion: options");

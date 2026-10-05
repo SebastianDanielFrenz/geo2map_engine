@@ -6,7 +6,8 @@
 // Tile invariance (decision D25). The result for one entry is a function of
 //   - the entry's own strict outcome (the strict pass, as before),
 //   - the context graph within 60 m of the entry's two end nodes, and
-//   - the DEM within 63 m of those end nodes and along the entry's own way,
+//   - the DEM within 63.5 m per axis of those end nodes (60 m walk + 3 m footprint + 0.5 m to the far edge of a
+//     bilinear cell; at most 65 m with kRoadCompletionMaxAbutmentPathM) and along the entry's own way,
 // and of nothing else: not of other entries, not of their strict or completed outcome, not of the tile. The reads fit
 // what every tile holding the entry already has: a way incident to a node within 60 m of an end node n touches the
 // level-2 tile of n widened by the 128 m halo, so it is in the roads.graph tile of n, which road_context_dependencies
@@ -15,6 +16,14 @@
 // in a tile that holds it) but recomputed from the node itself by the same pure function (road_bridge_anchor).
 #include "g2m/layer/road_geom_tile.h"
 namespace g2m {
+// The largest RoadCompletionOptions::abutment_path_m complete_road_profiles accepts (decision D29). The walk's support
+// point lies at most abutment_path_m from the end node (per axis too); junction_plane reads a 3 m footprint around it
+// and a bilinear sample reaches a cell whose square ends up to 0.5 m beyond the sample point per axis. 61.5 + 3 + 0.5
+// = 65 m, the road_dem_dependencies margin around the entry's own way, so every DEM cell the walk reads lies in a DEM
+// tile that every tile holding the entry loads. (Slice 6 accepted 62 m: such a walk reads up to 65.5 m away.)
+inline constexpr std::int64_t kRoadCompletionDemMarginMm = 65000;   // == road_dem_dependencies' default margin_mm
+inline constexpr double kRoadCompletionMaxAbutmentPathM = 61.5;
+static_assert(kRoadCompletionMaxAbutmentPathM + 3 + 0.5 <= static_cast<double>(kRoadCompletionDemMarginMm) / 1000.0);
 // What a bridge abutment plane at `node` is, as the completion tier computes it.
 struct RoadBridgeAnchor {
     bool bridging = false;                   // an incident bridge way (not a tunnel) ends or passes at the node

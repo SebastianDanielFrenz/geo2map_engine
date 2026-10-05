@@ -1710,6 +1710,25 @@ slice 8, stores them; the golden `g3xs` 6681f11d1fbdbcdf is unchanged).
   Fixture B (`hoechst_a66`): 52 crossing nodes, 50 placed, 2 `JunctionNode`; 73 stop lines + 1 give-way (5 junction-derived), 71 posts (4 left),
   1 `NoLanes`, 1 line decline `StretchDeclined`. Every placed crossing quad lies inside the carriageway (+- 0.6 mm), every line within its lanes.
 
+### Review of slices 5-7 before slice 8 (tile invariance and the handed-forward issues)
+
+**D29. The completion walk budget is bounded by the DEM margin: `abutment_path_m` <= 61.5 m (slice 6 accepted 62 m).**
+- Finding: D25's argument counted the walk (60 m) plus the 3 m footprint against the 65 m margin of `road_dem_dependencies`,
+  but not the bilinear sample, which reads a cell whose square ends up to 0.5 m beyond the sample point per axis. The default
+  60 m reads at most 63.5 m away (safe); the options check accepted up to 62 m, which reads up to 65.5 m away, i.e. a DEM tile
+  the tile holding the entry need not load. Not a defect of the served data (the deriver did not run the tier yet), but the
+  library accepted options under which the D25 claim is false.
+- Fix: `kRoadCompletionMaxAbutmentPathM` = 61.5 (61.5 + 3 + 0.5 = 65, a `static_assert` against `kRoadCompletionDemMarginMm`);
+  `complete_road_profiles` refuses anything above it.
+- Test (`test_road_completion.cpp`, "the walk budget bound keeps every DEM read inside ..."): a bridge ending 65.3 m west of a
+  DEM tile edge, outside the 128 m halo, with a second bridge and a ground road beyond it so that the walk's path is 61.4 m or
+  61.9 m. With the tile's own DEM dependencies and with a DEM that has no holes the tier gives the same result for every entry
+  at the 61.5 m budget (completed at 61.4 m, declined at 61.9 m in both). Control: at slice 6's 62 m budget the 61.9 m walk
+  finds its abutment with the full DEM and not with the tile's own (the hazard). Sabotage: the old bound 62 accepts 61.6 m and
+  62 m (2 assertions fail).
+- Alternatives: (a) widen `road_dem_dependencies` to 66 m - changes the DEM dependency set (and the release) for a budget nobody
+  uses; (b) keep 62 and document - leaves an option value that breaks invariance.
+
 ---
 
 
