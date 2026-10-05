@@ -1,4 +1,5 @@
 #include "g2m/layer/road_geom_tile.h"
+#include "g2m/layer/road_completion.h"
 #include "g2m/core/bytes.h"
 #include "g2m/core/det_math.h"
 #include <algorithm>
@@ -86,7 +87,8 @@ Result<void> validate_features(const RoadGeomTile& tile) {
 }
 }
 Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const RoadDemSampler& dem,
-    const RoadProfileLimits& limits, const RoadGraph* context, const RoadRules& rules) {
+    const RoadProfileLimits& limits, const RoadGraph* context, const RoadRules& rules,
+    const RoadCompletionOptions& completion, RoadCompletionStats* completion_stats) {
     const auto valid = validate_road_graph_tile(graph); if (!valid) return valid.error();
     if (context) {
         // The context must contain every tile way unchanged, with all its nodes.
@@ -99,24 +101,33 @@ Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const Road
     }
     const auto builder = RoadReferenceBuilder::make(context ? *context : graph.graph); if (!builder) return builder.error();
     RoadGeomTile result; result.source = graph;
+    // Strict pass: one accepted profile or one explicit decline per stretch.
     for (const auto& way : graph.graph.ways) {
         const auto stretches = builder->stretches(way.osm_id); if (!stretches) return stretches.error();
         for (const auto stretch : *stretches) {
             if (result.entries.size() == kMaxEntries) return make_error(ErrorCode::LimitExceeded, "roads.geom: entry budget");
             RoadGeomEntry entry; entry.way_id = way.osm_id; entry.stretch = stretch;
             auto profile = build_road_profile(*builder, dem, graph.key.zone, way.osm_id, stretch, limits);
-            if (profile) {
-                entry.profile = std::move(*profile);
-                // Cross-sections never read the DEM; they are stored only where a profile (hence a reference) exists.
-                auto xs = resolve_cross_section(*builder, way.osm_id, stretch, entry.profile->reference.length_m, rules);
-                if (!xs) return xs.error();
-                entry.cross_section = std::move(xs->xs); entry.cross_section_decline = xs->decline;
-            } else entry.decline = profile.error();
-            const auto features = resolve_profile_features(graph.graph, entry, result.entries.size(), rules);
-            if (!features) return features.error();
-            result.features.insert(result.features.end(), features->begin(), features->end());
+            if (profile) entry.profile = std::move(*profile); else entry.decline = profile.error();
             result.entries.push_back(std::move(entry));
         }
+    }
+    // Completion tier (design 6.6): off unless asked for; adds flagged profiles, never touches an accepted one.
+    if (completion.enabled) {
+        const auto done = complete_road_profiles(result.entries, result.origins, *builder, dem, graph.key.zone, limits, completion, completion_stats);
+        if (!done) return done.error();
+    }
+    // Cross-sections never read the DEM; they are stored only where a profile (hence a reference) exists.
+    for (std::size_t index = 0; index < result.entries.size(); ++index) {
+        auto& entry = result.entries[index];
+        if (entry.profile) {
+            auto xs = resolve_cross_section(*builder, entry.way_id, entry.stretch, entry.profile->reference.length_m, rules);
+            if (!xs) return xs.error();
+            entry.cross_section = std::move(xs->xs); entry.cross_section_decline = xs->decline;
+        }
+        const auto features = resolve_profile_features(graph.graph, entry, index, rules);
+        if (!features) return features.error();
+        result.features.insert(result.features.end(), features->begin(), features->end());
     }
     const auto check = validate_road_geom_tile(result); if (!check) return check.error();
     return result;
@@ -127,6 +138,7 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
     const bool legacy = tile.encoding == kRoadGeomEncodingLegacy;
     if (tile.entries.size() > kMaxEntries) return invalid("entry budget");
     if (legacy && !tile.features.empty()) return invalid("legacy tile carries features");
+    if (!tile.origins.empty() && (legacy || tile.origins.size() != tile.entries.size())) return invalid("origins count");
     const auto builder = RoadReferenceBuilder::make(tile.source.graph); if (!builder) return builder.error();
     std::size_t index = 0, pieces = 0;
     for (const auto& way : tile.source.graph.ways) {
@@ -141,6 +153,14 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
             for (auto ref = stretch.start_ref + 1; ref < stretch.end_ref; ++ref)
                 if (builder->degree(way.node_ids[ref]) != 2) return invalid("junction inside a stretch");
             next = stretch.end_ref;
+            RoadProfileOrigin origin;
+            if (!tile.origins.empty()) {
+                origin = tile.origins[index - 1];
+                if (static_cast<unsigned>(origin.provenance) > 3) return invalid("provenance");
+                if (origin.provenance == ProfileProvenance::Strict ? origin.strict_decline_code != 0
+                    : (!entry.profile || origin.strict_decline_code < 1 || origin.strict_decline_code > static_cast<unsigned>(ErrorCode::ReadOnly)))
+                    return invalid("provenance record");
+            }
             if (legacy ? (entry.cross_section || entry.cross_section_decline)
                        : (entry.profile ? entry.cross_section.has_value() == entry.cross_section_decline.has_value()
                                         : (entry.cross_section || entry.cross_section_decline)))
@@ -194,7 +214,12 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
                 !previous || std::fabs(previous->x - b.x / 1000.0) > 1e-5 || std::fabs(previous->y - b.y / 1000.0) > 1e-5)
                 return invalid("reference endpoints");
             station = 0; std::optional<VerticalCubic> last;
-            const double grade = attrs->max_grade_per_mille / 1000.0, curvature = 1.0 / attrs->min_vertical_radius_m;
+            // A completed profile is certified at its own relaxed limits (design 6.6): bridge max(12 %, class) and min(250, class),
+            // ground max(12 %, class) and min(500, class).
+            double grade = attrs->max_grade_per_mille / 1000.0, radius = attrs->min_vertical_radius_m;
+            if (origin.provenance == ProfileProvenance::BridgeCompleted) { grade = std::max(0.12, grade); radius = std::min(250.0, radius); }
+            if (origin.provenance == ProfileProvenance::GroundCompleted) { grade = std::max(0.12, grade); radius = std::min(500.0, radius); }
+            const double curvature = 1.0 / radius;
             for (const auto& s : p.vertical.segments) {
                 if (!finite(s.station_m) || std::fabs(s.station_m - station) > 1e-7 || !finite(s.length_m) || s.length_m < 0.5 ||
                     !finite(s.height0_m) || !finite(s.height1_m) || !finite(s.grade0) || !finite(s.grade1)) return invalid("vertical piece");
@@ -215,6 +240,8 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
 }
 Result<TileBody> encode_road_geom(const RoadGeomTile& tile) {
     if (tile.encoding != kRoadGeomEncoding) return make_error(ErrorCode::InvalidArgument, "roads.geom: only encoding 6 is written");
+    for (const auto& o : tile.origins) if (o.provenance != ProfileProvenance::Strict)
+        return make_error(ErrorCode::InvalidArgument, "roads.geom: encoding 6 cannot carry a completed profile");
     const auto valid = validate_road_geom_tile(tile); if (!valid) return valid.error();
     // Encoding 6 embeds the encoding-5 graph section (with node tags), byte for byte.
     const auto graph = encode_road_graph(tile.source, kRoadGraphEncoding); if (!graph) return graph.error();

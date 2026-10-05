@@ -9,6 +9,7 @@
 
 #include "g2m/decode/osm/pbf_reader.h"
 #include "g2m/layer/road_dem_dependencies.h"
+#include "g2m/layer/road_completion.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/road_graph_tile.h"
 
@@ -100,6 +101,32 @@ inline g2m::Result<g2m::RoadGeomTile> geometry_in_tile(const g2m::RoadGraph& wor
     for (const auto& t : others) graphs.push_back(&t.graph);
     const auto context = merge_road_graphs(graphs); if (!context) return context.error();
     return build_road_geom_tile(*tile, *dem, limits, &*context);
+}
+
+// Everything geometry_in_tile can vary (the completion tier of slice 6 and its inputs).
+struct GeomOptions {
+    bool with_context = true;
+    std::function<double(double, double)> height_m = {};      // replaces the flat 100 m DEM
+    g2m::RoadCompletionOptions completion = {};
+    g2m::RoadCompletionStats* stats = nullptr;
+};
+inline g2m::Result<g2m::RoadGeomTile> geometry_in_tile_with(const g2m::RoadGraph& world, const g2m::TileKey& key, const GeomOptions& o) {
+    using namespace g2m;
+    auto tile = select_road_graph_tile(world, key); if (!tile) return tile.error();
+    const auto dem_deps = road_dem_dependencies(tile->graph, key.zone); if (!dem_deps) return dem_deps.error();
+    std::vector<HeightTile> heights(dem_deps->size());
+    std::vector<const HeightTile*> views;
+    for (std::size_t i = 0; i < heights.size(); ++i) { heights[i].key = (*dem_deps)[i].key; fill_dem(heights[i], o.height_m); views.push_back(&heights[i]); }
+    const auto dem = RoadDemSampler::make(views); if (!dem) return dem.error();
+    RoadProfileLimits limits; limits.reference.allow_curvature_exceptions = true;
+    if (!o.with_context) return build_road_geom_tile(*tile, *dem, limits, nullptr, builtin_road_rules_de(), o.completion, o.stats);
+    const auto deps = road_context_dependencies(tile->graph, key.zone, &key); if (!deps) return deps.error();
+    std::vector<RoadGraphTile> others;
+    for (const auto& dep : *deps) { auto t = select_road_graph_tile(world, dep.key); if (!t) return t.error(); others.push_back(std::move(*t)); }
+    std::vector<const RoadGraph*> graphs{&tile->graph};
+    for (const auto& t : others) graphs.push_back(&t.graph);
+    const auto context = merge_road_graphs(graphs); if (!context) return context.error();
+    return build_road_geom_tile(*tile, *dem, limits, &*context, builtin_road_rules_de(), o.completion, o.stats);
 }
 
 } // namespace g2m_test

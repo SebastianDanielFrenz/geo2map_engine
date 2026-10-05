@@ -820,3 +820,20 @@ suppressed, D23), the ramp records (kind Table, plateau [0, trim], ramp max(10 x
 carver. `tests/support/road_fixture.h` `geometry_in_tile` takes an optional DEM height function. Test:
 `test_road_junction_height.cpp` (T5, T6; sabotages: plain-distance weights, plain average, a 2 cm lifted profile, a constant raise).
 No served bytes change.
+
+Slice 6: `road_completion.h` / `road_completion.cpp`: the profile completion tier of design 6.6, a port of racing_game's
+`complete_road_profiles` and its 20 m retry, opt-in (`RoadCompletionOptions::enabled`, default off; `build_road_geom_tile` takes the
+options and an optional `RoadCompletionStats*`; the deriver passes neither, so no served bytes change). Steps: (1) retry of strict
+declines "bounded solver" / "endpoint curvature" at 20 m / 16384 iterations (`Retry`), (2) bridge span re-fit between abutment
+planes at max(12 %, class) grade and min(250, class) radius with the secant-grade fallback (`BridgeCompleted`), (3) re-fit of
+still-declined ground stretches with 40 m DEM samples, end grades clamped to +-10 %, 32 m anchor ramps, max(12 %, class) /
+min(500, class) (`GroundCompleted`). `RoadGeomTile::origins` (one `RoadProfileOrigin{provenance, strict_decline_code}` per entry,
+empty without completion) is validated (non-Strict needs a profile and a decline code, the vertical bounds are relaxed per
+provenance) and `encode_road_geom` refuses a non-Strict origin (encoding 7 carries it, slice 8). `road_bridge_anchor(graph, dem,
+zone, node)` is a pure function of the node (decision D25: a bounded 60 m walk away from the first incident bridge edge, the DEM
+plane at the 32 m support carried back), so the result of an entry depends only on its strict outcome, the context graph within
+60 m of its end nodes and the DEM within 63 m, never on other entries or the tile. D26: strict ground profiles are not refitted at
+bridge nodes. Tests `test_road_completion.cpp` (T18, T6 completion variant, order independence, two-tile and fixture tile
+invariance with negative controls) against the frozen game code in `tests/support/road_completion_reference.h` (libm allowed there;
+do not "fix" it). `tests/support/road_fixture.h` `geometry_in_tile_with(world, key, GeomOptions)` takes the DEM, completion options
+and stats. Fixture A / B with the flat DEM: ground 12 / 5 and bridge 4 / 2 of the strict declines completed (bridge 3 / 1 stay declined, no support); see D25-D26.

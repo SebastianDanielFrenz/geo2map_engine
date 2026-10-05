@@ -1,8 +1,8 @@
 # P2: junction surfaces, server-side carving and junction furniture — implementation design
 
-Status: design 2026-10-05. Slices 1-5 implemented (78d189d rules, 399b460 surface
-function, 68985c6 single-node junctions, 9826c64 clusters, slice 5 junction heights and raised tables). Deviations found while
-implementing are recorded in section 15 (D16-D24); the owner answers are in section 17.
+Status: design 2026-10-05. Slices 1-6 implemented (78d189d rules, 399b460 surface
+function, 68985c6 single-node junctions, 9826c64 clusters, 90de609 junction heights and raised tables, slice 6 profile completion
+tier). Deviations found while implementing are recorded in section 15 (D16-D26); the owner answers are in section 17.
 Audience: the implementing agents. Each slice in section 14 can be built from this
 document plus the P1 design ([p1_cross_section_design.md](p1_cross_section_design.md)).
 P2 is G3-D (PLAN.md 6.3 steps 4-7) plus the furniture additions of
@@ -855,6 +855,13 @@ headings into tangent vectors instead of cos/sin.
   A completed profile that exceeds the class grade is a flagged grade exception, as
   in the strict pass.
 
+**As implemented (slice 6):** `road_completion.h` / `road_completion.cpp` (`complete_road_profiles`, `road_bridge_anchor`),
+opt-in through `RoadCompletionOptions::enabled` (default off, so no served bytes change: the deriver does not pass it, and
+`encode_road_geom` refuses a tile with a non-Strict `RoadGeomTile::origins` entry). Decisions D25 (anchors recomputed from the node,
+60 m / 63 m reads) and D26 (strict ground profiles are not refitted at bridge nodes). Step order retry, bridge, ground, each
+and the result is independent of the entry order (a reversed entry list gives the same profiles, tested). Tunnels are counted
+(`tunnel_skipped`) and left declined. The validator relaxes the vertical bounds per provenance and checks the origins.
+
 ---
 
 ## 7. Junction furniture
@@ -1224,6 +1231,7 @@ Each test is listed with its negative control or sabotage, which must make it fa
 | T16 terrain.class | physics cell centre (integer metre) samples classify road bed / sidewalk / verge exactly by footprint bands; edge samples equal in neighbouring tiles | Cell registration (half metres): misclassifies every road edge cell |
 | T17 pyramid | carved L1 = mean-of-4 of carved L0; class L1 rank-max | — |
 | T18 completion tier | each of the game's three paths reproduces the game's profile within 1 mm on a fixture where the game's own code is run in the test (copied as a frozen reference in tests/support, libm allowed in tests only) | omit the 10 % clamp: differs |
+| T18 as implemented (slice 6) | `test_road_completion.cpp`: a bridge with a junction 15 m beyond each end (span, both ground stubs), a motorway at 11 % (clamp), a noisy 1.5 km road (retry) and a noisy 3 km road (ground) each equal the frozen game reference (`tests/support/road_completion_reference.h`) within 1 mm (measured 0 on all four); completed stretches at a bridge node agree within 1/256 m (T6 completion variant: 0 on both fixtures, flat and tilted DEM); a reversed entry list gives the same profiles; two-tile invariance and every fixture entry held by two tiles identical (828 and 853 repeated entries, 0 differ); origins validated | omit the 10 % clamp: grade0 0.109375 not 0.10, parity with the game 5.2 cm off, the 3 km ground road no longer fits; retry-from-tile-graph context: 1 of 2 entries differ on the two-tile world, 2 / 8 / 1 / 31 of ~830 on the fixtures; one stretch 2 cm off at a bridge node fails T6; the game's own tier is the order and tile control (0.035 m shift on entry reversal, differs between tiles) |
 | T19 zero allocation / workers | carve with 1 and 10 workers bit-identical; CarveModel::evaluate allocation-free | — |
 | Goldens | `g3xs` re-recorded (encoding 7 bodies); new `g3j` (junction + furniture sections of both fixtures), `g3d` (carved L0 + class tiles over 4 fixture L0 tiles on the synthetic DEM); Windows = Linux | — |
 
@@ -1596,6 +1604,55 @@ not computable in one tile: discovery stops at the cap, which is the point of th
   inside a cluster between its nodes therefore follow the stubs' tangent extensions. On the fixtures the cluster extents are
   <= 35.4 m; slice 12's measurement should compare a cluster interior against its absorbed stretches' own profiles.
 
+
+### Decisions made while implementing (slice 6)
+
+**D25. Completion anchors are recomputed from the node, not read from other entries; the tier's inputs are bounded to 60 m / 63 m.**
+6.6 said: "the anchor map holds only bridges incident to the stretch's own end nodes", filled by step 2 and read by step 3.
+- Problem: an anchor map filled from other ENTRIES' profiles depends on which entries a tile holds and on their order. The game's
+  own map (`anchors`, filled in entry order) is tile-dependent: a stretch next to a bridge that another tile owns sees no anchor.
+  Measured (test negative controls): on the two-tile synthetic world the game's tier completes the stub in the east tile and not
+  in the west one; with the entries reversed the game's height at a node shared by two bridge halves moves 0.035 m.
+- Chosen: `road_bridge_anchor(graph, dem, zone, node)` is a pure function of the node (the game's `abutment` walk with a total
+  path budget `abutment_path_m` = 60 m, bridge edges included, starting AWAY from the first incident bridge edge in
+  (way id, segment index) order; the plane is the DEM plane at the 32 m support point carried back to the node). Every step
+  recomputes it per node (memoised inside one call only). The result for an entry is a function of its own strict outcome, the
+  context graph within 60 m of its end nodes and the DEM within 63 m of them and along its own way. A way incident to a node
+  within 60 m of an end node touches the level-2 tile of that node widened by the 128 m halo, so the context (the tiles of
+  every node of the tile's ways, `road_context_dependencies`) already holds it; the DEM margin of `road_dem_dependencies`
+  (65 m) covers the walk. No new dependency is needed.
+- Alternatives: (a) read the neighbour entries' completed profiles - not invariant; (b) widen the context margin - not needed,
+  and a 100-step walk as in the game has no bound; (c) refit every stretch of a bridge node jointly - needs a global solve.
+- Order differs from the game's in two places, both on purpose: retry runs FIRST (the game completes first, then retries; a
+  retry-able stretch that the ground step would otherwise take at 40 m samples keeps the strict-limit 20 m result), and the walk
+  takes its outward direction from the bridge edge (the game uses the fitted heading of the stretch, which needs the stretch's
+  own fit and differs from the edge direction only inside the corner arc).
+- Negative controls in the tests: the tile graph handed to the tier as its context (1 of 2 entries differ on the two-tile world,
+  2/8/1/31 of ~830 on the fixtures), the game's tier (differs between tiles, order dependent).
+
+**D26. A strict-accepted ground profile is never refitted at a bridge-anchored node (6.6 step 3 refits it).**
+- 6.6: "every ground stretch with an anchored end, including strict profiles at such a node". Implemented: only declined ground
+  stretches are completed.
+- Reason: a refit replaces a strict, in-limits profile by a relaxed one (12 % grades, 500 m radius, 40 m samples) to chase an
+  abutment plane. Strict profiles end at the junction plane of the node, the bridge completed profile at the abutment plane
+  carried back to the node; the two can differ by the strict height correction (<= 0.25 m). Measured on both fixtures with the
+  flat and the tilted bumpy DEM: 0 nodes where a strict profile meets a completed one (when a bridge declines for lack of
+  support the ground stretch next to it declines for the same reason), so the refit would never have fired; the stretches that
+  ARE completed agree at their bridge nodes to 0 (<= 1/256 m, T6 completion variant).
+- Con: a ground stretch strictly accepted next to a bridge that was completed (not seen on the fixtures) can sit up to 0.25 m
+  off at the node. Slice 8's validator does not check this; slice 12 should count such nodes.
+
+**Slice 6 findings for later slices.**
+- The strict pass keeps the latent far-end DEM and graph dependence found in P1 (not changed or re-measured here). The
+  completion tier adds only the
+  60 m / 63 m reads of D25. On the fixtures every entry that two tiles both hold has the same provenance, decline code and
+  vertical profile bits (828 and 853 repeated entries, 0 differ, flat and tilted DEM), so the latent case did not occur there.
+- Encoding 7's section 7 (provenance) must also carry the completion options in the deriver's config hash
+  (`abutment_path_m`, `retry_spacing_m`, ... and the relaxed limits) - the library takes them as `RoadCompletionOptions`;
+  the deriver is unchanged in slice 6 and still writes encoding 6 with no completion. `encode_road_geom` refuses a tile with a
+  non-Strict origin ("encoding 6 cannot carry a completed profile").
+- On the tilted bumpy DEM (2 m amplitude, 23 m period, deliberately hostile) the tier completes about half of what the strict
+  pass declines; the rest stays declined with its strict decline.
 ---
 
 ## 16. What P2 changes in P1's implementation

@@ -33,6 +33,39 @@ struct ProfileFeature {
     Provenance provenance = Provenance::Inferred;
     friend bool operator==(const ProfileFeature&, const ProfileFeature&) = default;
 };
+// Where an entry's profile came from (design 6.6). Strict is build_road_profile at the policy limits; the others are
+// the completion tier and exist only in a tile built with RoadCompletionOptions::enabled.
+enum class ProfileProvenance : std::uint8_t {
+    Strict = 0,              // build_road_profile at the policy limits (also a still-declined entry)
+    Retry = 1,               // 20 m samples, 16384 iterations, same limits (game parity)
+    BridgeCompleted = 2,     // span re-fitted between abutments at relaxed limits
+    GroundCompleted = 3,     // relaxed ground fit of a stretch the strict pass declined
+};
+struct RoadProfileOrigin {
+    ProfileProvenance provenance = ProfileProvenance::Strict;
+    std::uint16_t strict_decline_code = 0;  // the ErrorCode of the strict decline that was replaced (0 for Strict)
+    friend bool operator==(const RoadProfileOrigin&, const RoadProfileOrigin&) = default;
+};
+// The completion tier of design 6.6 (road_completion.h). Off by default: a tile built without it is byte-for-byte
+// what encoding 6 stores, and encode_road_geom refuses a tile that holds a completed profile (encoding 6 cannot
+// say so; encoding 7 will, slice 8).
+struct RoadCompletionOptions {
+    bool enabled = false;
+    double retry_spacing_m = 20;          // step 1: the game's retry
+    int retry_iterations = 16384;
+    double abutment_ground_m = 32;        // ground path to a support point (game: 32 m)
+    double abutment_path_m = 60;          // total walk, bridge edges included (design D25: DEM and graph locality)
+    double ground_spacing_m = 40;         // step 3 samples
+    double ground_ramp_m = 32;            // step 3 anchor ramps
+};
+// What the completion tier did, per kind (design 6.6; diagnostics only, never stored).
+struct RoadCompletionStats {
+    std::size_t retry_candidates = 0, retry_accepted = 0;
+    std::size_t bridge_candidates = 0, bridge_completed = 0, bridge_no_support = 0, bridge_fit_failed = 0;
+    std::size_t ground_candidates = 0, ground_completed = 0, ground_failed = 0;
+    std::size_t ground_bridge_anchored = 0;  // completed stretches with at least one end on a bridge abutment plane
+    std::size_t tunnel_skipped = 0;
+};
 // Every graph stretch has exactly one accepted profile or explicit decline.
 // Consumers must inspect declines; this is never an implicitly complete mesh.
 struct RoadGeomTile {
@@ -42,6 +75,9 @@ struct RoadGeomTile {
     // 6 for everything built or encoded; 5 for a decoded legacy body, which has no cross-sections or
     // features (consumers fall back to the symmetric RoadAttributes::width_mm path).
     std::uint16_t encoding = kRoadGeomEncoding;
+    // One per entry when the tile was built with the completion tier enabled, else empty (design 6.6, section 7 of
+    // encoding 7). Not stored by encoding 6.
+    std::vector<RoadProfileOrigin> origins;
 };
 // Feature shape (owner decision Q2: representable on the 1 m grid). Every carved feature is a plateau with two C1
 // smooth-step ramps (road_smooth_step), at least kFeatureMinRampMm per side, so the narrowest carved feature is 2 m
@@ -63,7 +99,8 @@ double feature_height_contribution_m(const ProfileFeature& f, double station_m) 
 // context, which is only exact for a graph that is complete at its own nodes.
 Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph,
     const RoadDemSampler& dem, const RoadProfileLimits& limits = {}, const RoadGraph* context = nullptr,
-    const RoadRules& rules = builtin_road_rules_de());
+    const RoadRules& rules = builtin_road_rules_de(), const RoadCompletionOptions& completion = {},
+    RoadCompletionStats* completion_stats = nullptr);
 // Sum of every carved feature of `entry` at station s (metres, 0 without one). Features are sorted by entry, so this
 // is a binary search plus the entry's own features. A consumer adds it to the vertical profile and the crown:
 // z = profile(s) + crown(t) + feature_height_m(tile, entry, s), over the feature's lateral extent.
