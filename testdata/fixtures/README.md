@@ -48,6 +48,31 @@ Superseded fixture (G1c I2, relation-closure-only extraction, kept only for
 history - not committed, see git log): 615 nodes, 5 ways, 1 relation, 4163
 bytes, SHA-256 `b9e460b72d896c4ea95e4bbba8c87489d9f01b30a99761cc6ea7a2ae194b3e48`.
 
+## osm/hoechst_a66.osm.pbf
+
+- **Source**: `hessen-latest.osm.pbf` (Geofabrik Hessen extract), as staged
+  read-only at `S:\claude_code\geo2map_data\downloads\hessen-latest.osm.pbf`.
+  (c) OpenStreetMap contributors, licensed
+  [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/); the cut is a
+  Derivative Database redistributed under the same terms, this notice is the
+  attribution (see `THIRD_PARTY_NOTICES.md`).
+- **Purpose** (street fidelity P1 slice 4): the home tile (utm32n/2/455/5421)
+  plus about 300 m, around the B 8 / A 66 interchange at Hoechst. The
+  lane-aware cross-section tests (`tests/layer/test_road_cross_section.cpp`,
+  `test_road_joins.cpp`) use its turn-lane, `placement`, bridge and
+  `transition` ways (H1-H7 in `docs/street_fidelity/p1_cross_section_design.md`
+  section 4.6). `frankfurt_hoechst.osm.pbf` above is really Kalbach/Bonames
+  (A 661) and stays for the F1-F10 cases.
+- **Cut with** (test-only tool, same algorithm as above):
+  ```
+  g2m_fixture_cut cut-pbf --in hessen-latest.osm.pbf --relation 4209939 \
+    --bbox 8.5190,50.1085,8.5418,50.1232 --out hoechst_a66.osm.pbf
+  ```
+  The full requested bbox fits the 1.8 MB budget, so it was not shrunk.
+- **Content**: 13668 nodes, 2697 ways, 1266 relations.
+- **Size**: 799,511 bytes (~781 KiB).
+- **SHA-256**: `8556244549478372cccdead6d3fd59638b5e313fc9358ccb9a1a4b7ac2947dd8`
+
 ## osm/unsorted_nodes.osm.pbf
 
 - **Source**: hand-built, not cut from real data - `g2m_fixture_cut
@@ -106,7 +131,7 @@ bytes, SHA-256 `b9e460b72d896c4ea95e4bbba8c87489d9f01b30a99761cc6ea7a2ae194b3e48
   ```
 - **Size**: 5,889,924 bytes (~5.62 MiB); `testdata/fixtures/` as a whole is
   6,842,992 bytes (~6.53 MiB, including the OSM fixture above and
-  `regions.json`), well under the 8 MB fixture budget.
+  `regions.json`), within the fixture budget (raised from 8 to 10 MiB when the second OSM fixture hoechst_a66.osm.pbf was added; the whole directory is now about 8.25 MiB).
 - **SHA-256**: `8fddb6a1910e5ba90d295026ac802caab2745b7d8312d3dce5b037329c07f956`
 
 ## worldcover/fixture_N50E008_hoechst.tif, worldcover/fixture_N50E008_bbox.tif

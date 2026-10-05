@@ -733,3 +733,9 @@ Slice 3: `include/g2m/layer/road_cross_section.h` + `src/layer/road_cross_sectio
 (bands, anchor, offset, joins; pure `band_width_m`/`offset_m`/`boundaries_at`, `road_smooth_step`) and
 `resolve_cross_section_base` (tags + rules -> bands, anchor, field declines; join ramps and offsets come in
 slice 4). Test: `test_road_cross_section.cpp`.
+Slice 4: `src/layer/road_cross_section_join.cpp`: `resolve_cross_section(builder, way, stretch, length_m, rules)`
+(join resolution in the lower way id's frame so both stretches derive one outcome; lane add/drop ramps,
+width ramps, absorber offsets Ramps/Hold/Transition, ramp clipping to the stretch length) and
+`lateral_point(reference, s, t)`. Second committed fixture `testdata/fixtures/osm/hoechst_a66.osm.pbf`
+(see testdata/fixtures/README.md). Test: `test_road_joins.cpp` (synthetic joins, design F1-F10/H1-H7,
+edge continuity over every degree-2 join of both fixtures, context invariance).

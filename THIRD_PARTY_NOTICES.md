@@ -283,8 +283,9 @@ runtime by any shipped `g2m` binary - fixtures and fuzz seeds only.
 - **OpenStreetMap (via Geofabrik's `hessen-latest.osm.pbf` extract)**:
   © OpenStreetMap contributors, licensed
   [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). Covers
-  `testdata/fixtures/osm/frankfurt_hoechst.osm.pbf` and
-  `testdata/fuzz_seeds/pbf/tiny_bbox_cut.osm.pbf` (both are small
+  `testdata/fixtures/osm/frankfurt_hoechst.osm.pbf`,
+  `testdata/fixtures/osm/hoechst_a66.osm.pbf` (SHA-256 `8556244549478372cccdead6d3fd59638b5e313fc9358ccb9a1a4b7ac2947dd8`, 799,511 bytes) and
+  `testdata/fuzz_seeds/pbf/tiny_bbox_cut.osm.pbf` (all are small
   bbox/relation-closure cuts of the same source, produced by
   `g2m_fixture_cut cut-pbf`; `testdata/fixtures/osm/unsorted_nodes.osm.pbf`
   is hand-built test data, not derived from this source, and carries no

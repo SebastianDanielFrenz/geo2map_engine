@@ -12,6 +12,7 @@
 // band are in the band's own travel direction, as in OSM.
 #pragma once
 #include "g2m/layer/road_graph.h"
+#include "g2m/layer/road_reference.h"
 #include "g2m/layer/road_rules.h"
 #include <cstdint>
 #include <optional>
@@ -146,4 +147,19 @@ struct CrossSectionBase {
     std::optional<CrossSectionDecline> decline;
 };
 Result<CrossSectionBase> resolve_cross_section_base(const RoadGraphWay& way, const RoadRules& rules);
+
+// The join-aware cross-section of one stretch (design section 4): resolve_cross_section_base of the way, then at
+// each end that is a degree-two way join the lane matching, width ramps, offset residual and its absorber, and the
+// end ramps clipped to the stretch length. A pure function of the two ways' tags, the orientation relation and the
+// rules (lengths enter only through the clipping), so both stretches of a join, resolved in different tiles, agree
+// and the result is tile invariant. `length_m` is the stretch's reference length; the result's length_m is set.
+// A way whose base declines (or has no rules) yields the decline; a neighbour whose base declines is treated as
+// "no join" because it has no section to meet.
+Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& builder, std::int64_t way_id,
+    RoadStretch stretch, double length_m, const RoadRules& rules);
+
+// World-space point at station s and lateral offset t (metres, positive left of the reference direction), in the
+// same UTM frame as RoadReferenceLine::at.
+struct LateralPoint { double x = 0, y = 0; };
+Result<LateralPoint> lateral_point(const RoadReferenceLine& reference, double s, double t);
 } // namespace g2m
