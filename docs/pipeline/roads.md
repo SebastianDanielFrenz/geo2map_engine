@@ -17,7 +17,11 @@ flowchart TD
   PROF["vertical_profile + road_profile: constrained cubics on DEM, bridge spans, junction planes"]
   FEAT["road_features: traffic_calming nodes to carved profile features, street fidelity P1 slice 7"]
   GEOM["g2m.roads.geom L2 encoding 6: profile or decline per stretch + cross-section record + features"]
-  CARVE["carving, junction surfaces - planned, G3-D"]
+  COMPL["profile completion tier: retry, bridge spans, relaxed ground - planned, P2 slice 6"]
+  JUNC["junctions: trim-overlap clusters, offset-intersect-trim rings, Shepard heights - planned, P2 slices 3-5"]
+  FURN["furniture: crossings, stop and give-way lines, signals - planned, P2 slice 7"]
+  GEOM7["roads.geom encoding 7: sections 5 junctions, 6 furniture, 7 provenance - planned, P2 slice 8"]
+  CARVE["g2m.terrain.carved and g2m.terrain.class from one CarveModel - planned, P2 slices 9-10 = G3-D"]
   RIB["ribbons, markings, bridge bodies - planned, G3-E"]
   OSM9 --> GRAPH
   ATTR --> GRAPH
@@ -34,16 +38,27 @@ flowchart TD
   PROF --> GEOM
   XS --> API
   GEOM --> API
+  PROF -.-> COMPL
+  COMPL -.-> JUNC
+  XS -.-> JUNC
+  RULES -.-> JUNC
+  JUNC -.-> FURN
+  GRAPH -.-> FURN
+  RULES -.-> FURN
+  COMPL -.-> GEOM7
+  JUNC -.-> GEOM7
+  FURN -.-> GEOM7
+  GEOM -.-> GEOM7
+  GEOM7 -.->|"L2 tiles within 192 m"| CARVE
   API -.-> CARVE
   API -.-> RIB
-  GEOM -.-> CARVE
-  GEOM -.-> RIB
+  GEOM7 -.-> RIB
   classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
   classDef part fill:#fff3cd,stroke:#b58900,stroke-dasharray:4 3,color:#000;
   classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
   class OSM9,ATTR,GRAPH,REF,DEMDEP,GEOM,RULES,XS,API,FEAT done;
   class PROF part;
-  class CARVE,RIB plan;
+  class COMPL,JUNC,FURN,GEOM7,CARVE,RIB plan;
 ```
 
 ## `g2m.roads.graph` (G3 slices A and B: implemented)
@@ -70,6 +85,29 @@ flowchart TD
 - Home-region probe (`tools/road_probe`, 2026-10-02, single run): 478 stretches in 344 ways all fit horizontally with 47 flagged curvature exceptions; vertical profiles succeed for 339; 19 tunnels unsupported, 76 curvature-bound failures, 1 over class grade, 43 solver non-convergence. Acceptance of complete profiles is **not** reached.
 - Tests: `tests/layer/test_road_geom.cpp`, `test_road_geom_xs.cpp` (encoding 6, one rejection test per validation rule of design 7.2, encoding-5 compatibility, config hash and release id), `test_road_cross_section.cpp`, `test_road_joins.cpp`, `test_road_features.cpp`, `test_road_api.cpp` (footprint, lane queries, zero allocations, painted envelope against the carve footprint on a 0.25 m lattice and over real Hoechst A 66 stretches, edge error at tapers, F8 lane order), `test_road_reference.cpp`, `test_road_profile.cpp`, `test_vertical_profile.cpp`, `test_road_dem_*.cpp`; probe in `tools/road_probe/README.md`.
 
+## Planned: junctions, carving, furniture (street fidelity P2 = G3-D)
+
+Design only, nothing implemented: [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) (12 slices, section 14).
+
+- **Junctions:**
+  - nodes of degree ≥ 3 in the merged context graph;
+  - clusters only where the approach trims overlap (caps 48 m, 12 nodes; the PLAN's 25 m rule chains up to 17 nodes and 106 m on the fixtures);
+  - rings (road bed, paved, outer) by the osm2streets offset-intersect-trim algorithm, ported to integer-mm P1 edge polylines with exact predicates;
+  - heights: an inverse-squared-distance blend of the approaches' own surfaces, exact on every trim line.
+  Each junction is stored once, in the `roads.geom` tile that holds its smallest node id.
+- **Profile completion tier:** racing_game's `complete_road_profiles` and its 20 m retry move into `build_road_geom_tile`, flagged per entry.
+- **Furniture:** crossing quads with pattern; stop and give-way lines over exactly the approach-direction driving lanes, 1 m before a crossing; signal posts and facing. Each source node gets a placed record or a decline reason.
+- **roads.geom encoding 7:**
+  - sections 5 (junctions), 6 (furniture), 7 (provenance);
+  - sections 1-4 keep their format;
+  - new rule blocks `junction` and `furniture` in `de.json`.
+- **Carving** (new layers; `g2m.terrain.height` stays the bare default):
+  - `g2m.terrain.carved` L0-L6: the game's smoothing ported as an integer kernel, then road cores, junctions, blends and the deck clearance clamp; L1-L6 are the mean-of-4 of the carved L0;
+  - `g2m.terrain.class` L0-L6: node-registered 257 x 257 at integer metres, the physics cell centres; land class, surface, role and rank from the same ownership function.
+  - Inputs of a carved L0 tile: its 3 x 3 `elev.base` neighbourhood and every `roads.geom` tile within 192 m.
+  - Carving parameters live in `data/carve/carve_default.json`, so re-tuning them does not re-derive `roads.geom`.
+- **Consumer switch:** racing_game then deletes its smoothing, `RoadSurfacePatch` carving, deck clearance cut, profile completion and src.osm road raster, with no fallback ([design section 10](../street_fidelity/p2_junction_design.md#10-consumer-switch-what-racing_game-needs-and-deletes)).
+
 ## Who uses it
 
 `racing_game`: `core/src/world_terrain.cpp` (fetch, decode, cache of `RoadGeomTile`, carving into the level-0 height tile), `road_surface.h`, `road_visual.h`, `road_structures.h`, `npc_traffic.cpp`, `npc_truck.cpp`. `physics_sim` sees roads only as carved heights and surface ids.
@@ -77,4 +115,4 @@ flowchart TD
 
 ## What is still open
 
-G3-C complete-profile acceptance; G3-D junction surfaces and server-side carving; G3-E ribbons, markings, bridge bodies; G3-F 20-junction route acceptance. Beyond G3: lane-aware cross-sections (street fidelity P1, [design](../street_fidelity/p1_cross_section_design.md)) and later P2/P3. See [README section 6](README.md#6-roadmap) and [open questions](README.md#9-open-questions-and-contradictions).
+G3-C complete-profile acceptance; G3-D junction surfaces and server-side carving (designed as street fidelity P2, [design](../street_fidelity/p2_junction_design.md), not implemented); G3-E ribbons, markings, bridge bodies; G3-F 20-junction route acceptance. Street fidelity P1 (lane-aware cross-sections, [design](../street_fidelity/p1_cross_section_design.md)) slices 1-7 are implemented; P3 markings follow P2. See [README section 6](README.md#6-roadmap) and [open questions](README.md#9-open-questions-and-contradictions).
