@@ -4,7 +4,8 @@
 // profile it adds (ProfileProvenance). No tunnel completion (not carved, not drivable).
 //
 // Tile invariance (decision D25). The result for one entry is a function of
-//   - the entry's own strict outcome (the strict pass, as before),
+//   - the entry's own strict outcome and the strict pass's anchor at its two end nodes (road_strict_anchor, D30: the
+//     same reads the strict pass of this very entry makes, including P1's latent far-end read of a bridge span),
 //   - the context graph within 60 m of the entry's two end nodes, and
 //   - the DEM within 63.5 m per axis of those end nodes (60 m walk + 3 m footprint + 0.5 m to the far edge of a
 //     bilinear cell; at most 65 m with kRoadCompletionMaxAbutmentPathM) and along the entry's own way,

@@ -28,4 +28,12 @@ struct RoadProfileLimits {
 Result<RoadProfile> build_road_profile(const RoadReferenceBuilder& builder,
     const RoadDemSampler& dem, geo::UtmZone zone, std::int64_t way_id, RoadStretch stretch,
     const RoadProfileLimits& limits = {});
+// The anchor build_road_profile uses at a stretch end node: the shared junction plane of a node without a bridge, or
+// at a degree-two bridge boundary the plane inferred from the supported ground approaches, its height corrected by at
+// most 0.25 m to the feasible cubic rise of the bridge span (inferred = true). Errors where build_road_profile would
+// decline at that end. The completion tier reads it at bridge nodes so a completed profile meets a strict one there
+// at the same height (decision D30). `limits` = the strict pass's RoadProfileLimits::reference.
+struct RoadStrictAnchor { RoadJunctionPlane plane; bool inferred = false, adjusted = false; };
+Result<RoadStrictAnchor> road_strict_anchor(const RoadReferenceBuilder& builder, const RoadDemSampler& dem,
+    geo::UtmZone zone, std::int64_t node, const ReferenceFitLimits& limits);
 }

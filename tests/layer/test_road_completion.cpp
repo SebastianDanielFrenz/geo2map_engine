@@ -298,6 +298,55 @@ TEST_CASE("completion: bridge anchors are a function of the node, so a split bri
     CHECK(game_shift > 1.0 / 256.0);
 }
 
+TEST_CASE("completion: a completed bridge stretch meets the strict profiles at its bridge nodes at their height (D30)", "[layer][roads][completion][T6]") {
+    // A 30 m bridge (way 20: 4 -> 5 -> 6) with a side road joining at its middle node 5, between strict ground roads (way 10
+    // ends at 4, way 12 starts at 6). The ground steps 0.5 m under the bridge, flat on both sides: the strict anchors at 4
+    // and 6 carry the feasibility correction of the span (a 0.5 m rise between level ends is beyond the 30 m span's
+    // curvature), so the strict ground profiles end about 0.15 m off the raw approach planes. Node 5 has two bridge edges:
+    // both bridge stretches and the side road are declined by the strict pass and completed.
+    const auto world = world_of({{1, -300, 0}, {2, -200, 0}, {3, -100, 0}, {4, 0, 0}, {5, 15, 0}, {6, 30, 0}, {7, 15, 80}, {8, 130, 0}, {9, 330, 0}},
+        {{10, {1, 2, 3, 4}}, {20, {4, 5, 6}, kBridge}, {11, {5, 7}}, {12, {6, 8, 9}}});
+    const Fn step = [](double e, double) { const double x = e - kOriginE; return 100.0 + 0.5 * std::clamp((x - 2.0) / 26.0, 0.0, 1.0); };
+    const auto env = make_env(world, kTile, step);
+    const auto strict = build(*env, false);
+    const auto west = last_of(strict, 10), east = index_of(strict, 12, 0), b1 = index_of(strict, 20, 0), b2 = last_of(strict, 20);
+    REQUIRE(b1 != b2);
+    REQUIRE(strict.entries[west].profile); REQUIRE(strict.entries[east].profile);
+    REQUIRE_FALSE(strict.entries[b1].profile); REQUIRE_FALSE(strict.entries[b2].profile);
+    REQUIRE(strict.entries[west].profile->end_anchor_adjusted); REQUIRE(strict.entries[east].profile->start_anchor_adjusted);
+    RoadCompletionStats stats; const auto lib = build(*env, true, &stats);
+    REQUIRE(lib.entries[b1].profile); REQUIRE(lib.entries[b2].profile);
+    CHECK(lib.origins[b1].provenance == ProfileProvenance::BridgeCompleted); CHECK(lib.origins[b2].provenance == ProfileProvenance::BridgeCompleted);
+    // The strict profiles are untouched (D26).
+    CHECK(lib.origins[west] == RoadProfileOrigin{}); CHECK(same_vertical(lib.entries[west].profile->vertical, strict.entries[west].profile->vertical));
+    const double gap_west = std::fabs(end_height(lib, west, true) - end_height(lib, b1, false));
+    const double gap_east = std::fabs(end_height(lib, b2, true) - end_height(lib, east, false));
+    // The walk's abutment plane at node 4 is the uncorrected approach plane: what slice 6 used.
+    const auto walk = road_bridge_anchor(env->context, *env->dem, zone, 4); REQUIRE(walk.plane);
+    const double walk_gap = std::fabs(end_height(lib, west, true) - walk.plane->height / 256.0);
+    std::printf("D30 gap scene: strict ground vs completed bridge at node 4 %.4f m, at node 6 %.4f m (slice 6's walk plane at node 4 sat %.4f m off); %zu strict anchors taken\n",
+        gap_west, gap_east, walk_gap, stats.strict_anchors);
+    CHECK(gap_west <= 1.0 / 256.0); CHECK(gap_east <= 1.0 / 256.0);
+    CHECK(walk_gap > 0.1);   // the scene does exercise the correction
+    CHECK(stats.strict_anchors == 2);
+    // The completed stretches still agree among themselves at the node they share (T6 completion variant).
+    CHECK(std::fabs(end_height(lib, b1, true) - end_height(lib, b2, false)) <= 1.0 / 256.0);
+    // Direction 2: a completed GROUND stretch next to a strict bridge anchor. Way 10 forced to decline (a decline that is
+    // not a retry candidate): its completion must end at the strict anchor of node 4, where a strict bridge would start.
+    {
+        auto entries = strict.entries; std::vector<RoadProfileOrigin> origins;
+        entries[west].profile.reset(); entries[west].decline = make_error(ErrorCode::LimitExceeded, "test: forced decline");
+        RoadCompletionOptions opts; opts.enabled = true;
+        const auto builder = RoadReferenceBuilder::make(env->context); REQUIRE(builder);
+        REQUIRE(complete_road_profiles(entries, origins, *builder, *env->dem, zone, env->limits, opts));
+        REQUIRE(entries[west].profile); CHECK(origins[west].provenance == ProfileProvenance::GroundCompleted);
+        const auto anchor = road_strict_anchor(*builder, *env->dem, zone, 4, env->limits.reference); REQUIRE(anchor);
+        const double h = entries[west].profile->at(entries[west].profile->reference.length_m)->height_m;
+        std::printf("D30 direction 2: completed ground at node 4 %.4f m, strict anchor %.4f m\n", h, anchor->plane.height / 256.0);
+        CHECK(std::fabs(h - anchor->plane.height / 256.0) <= 1.0 / 256.0);
+    }
+}
+
 // ---- tile invariance (D25) ----
 
 namespace {
@@ -517,9 +566,9 @@ TEST_CASE("completion: fixtures, completed stretches by kind before and after, t
             for (const auto& [s, c] : b) std::printf(" %s=%d;", s.c_str(), c);
             std::printf("\n  after: ");
             for (const auto& [s, c] : a) std::printf(" %s=%d;", s.c_str(), c);
-            std::printf("\n  tier counters over all tiles (an entry counts once per tile that holds it): retry %zu/%zu accepted; bridge %zu candidates, %zu completed, %zu without support, %zu fit failed; ground %zu candidates, %zu completed (%zu bridge-anchored), %zu failed; tunnels skipped %zu\n",
+            std::printf("\n  tier counters over all tiles (an entry counts once per tile that holds it): retry %zu/%zu accepted; bridge %zu candidates, %zu completed, %zu without support, %zu fit failed; ground %zu candidates, %zu completed (%zu bridge-anchored), %zu failed; tunnels skipped %zu; strict anchors taken %zu (D30)\n",
                 stats.retry_accepted, stats.retry_candidates, stats.bridge_candidates, stats.bridge_completed, stats.bridge_no_support, stats.bridge_fit_failed,
-                stats.ground_candidates, stats.ground_completed, stats.ground_bridge_anchored, stats.ground_failed, stats.tunnel_skipped);
+                stats.ground_candidates, stats.ground_completed, stats.ground_bridge_anchored, stats.ground_failed, stats.tunnel_skipped, stats.strict_anchors);
             std::printf("  tile invariance: %zu repeated entries compared across tiles, %zu differ\n", compared, mismatches);
             CHECK(mismatches == 0);
             CHECK(compared > 0);
@@ -534,9 +583,10 @@ TEST_CASE("completion: fixtures, completed stretches by kind before and after, t
                 if (any_strict) { ++nodes_mixed; worst_mixed = std::max(worst_mixed, hi->first - lo->first); }
                 else { ++nodes_completed; worst_completed = std::max(worst_completed, hi->first - lo->first); }
             }
-            std::printf("  T6 completion variant: %zu bridge nodes with only completed ends, worst spread %.3e m; %zu nodes where a strict profile meets a completed one, worst spread %.4f m (D26)\n",
+            std::printf("  T6 completion variant: %zu bridge nodes with only completed ends, worst spread %.3e m; %zu nodes where a strict profile meets a completed one, worst spread %.4f m (D26, D30)\n",
                 nodes_completed, worst_completed, nodes_mixed, worst_mixed);
             CHECK(worst_completed <= 1.0 / 256.0);
+            CHECK(worst_mixed <= 1.0 / 256.0);   // D30: a completed end takes the strict anchor where strict profiles end
         }
     }
 }

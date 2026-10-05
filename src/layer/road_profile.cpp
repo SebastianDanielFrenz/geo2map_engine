@@ -141,6 +141,14 @@ Result<Anchor> surface_anchor(const RoadReferenceBuilder& builder, const RoadDem
     raw->plane.height = static_cast<std::int32_t>(adjusted_height); return raw;
 }
 }
+Result<RoadStrictAnchor> road_strict_anchor(const RoadReferenceBuilder& builder, const RoadDemSampler& dem,
+    geo::UtmZone zone, std::int64_t node, const ReferenceFitLimits& limits) {
+    const auto& nodes = builder.graph().nodes;
+    const auto it = std::lower_bound(nodes.begin(), nodes.end(), node, [](const auto& n, auto search) { return n.osm_id < search; });
+    if (it == nodes.end() || it->osm_id != node) return make_error(ErrorCode::NotFound, "road profile: anchor node absent");
+    const auto anchor = surface_anchor(builder, dem, zone, node, limits); if (!anchor) return anchor.error();
+    return RoadStrictAnchor{anchor->plane, anchor->inferred, anchor->adjusted};
+}
 Result<VerticalPose> RoadProfile::at(double station) const {
     if (!std::isfinite(station) || station < 0 || station > reference.length_m || vertical.segments.empty())
         return make_error(ErrorCode::InvalidArgument, "road profile: station outside profile");

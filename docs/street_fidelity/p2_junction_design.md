@@ -1729,6 +1729,31 @@ slice 8, stores them; the golden `g3xs` 6681f11d1fbdbcdf is unchanged).
 - Alternatives: (a) widen `road_dem_dependencies` to 66 m - changes the DEM dependency set (and the release) for a budget nobody
   uses; (b) keep 62 and document - leaves an option value that breaks invariance.
 
+**D30. A completed profile takes the strict pass's anchor at a bridging end node where the strict pass has one (closes D26's 0.25 m gap).**
+- Finding (handed forward by D26): a strict ground profile ends at the strict anchor of a bridge boundary node (the approach plane
+  with the <= 0.25 m feasibility correction toward the span's cubic rise), a completed bridge stretch at the same node at the
+  walk's uncorrected abutment plane. Not seen on the fixtures (0 such nodes), but reachable whenever the strict anchor at the
+  node exists and the bridge stretch still declines - e.g. a bridge with a junction at an interior node (both its stretches
+  decline at the interior node, the outer nodes keep their strict anchors). The synthetic scene (30 m bridge, a side road at its
+  middle, a 0.5 m ground step under it) measured 0.148 m at one node and 0.152 m at the other. Junction continuity < 1 cm is a
+  G3-D criterion, so this is fixed rather than flagged.
+- Fix: `road_strict_anchor` (road_profile.h) exposes the strict pass's `surface_anchor`; the tier's anchor of a bridging node is
+  that anchor when it succeeds and is inferred, else the walk's plane (D25). Both directions close: a completed bridge next to a
+  strict ground profile, and a completed ground stretch next to a strict bridge. `RoadCompletionStats::strict_anchors` counts
+  the nodes (0 on both fixtures, flat and tilted DEM: their results are unchanged byte for byte).
+- Tile invariance: the strict anchor at an end node is exactly what the strict pass of this entry reads at that node, so the
+  tier's inputs become "the entry's strict inputs + the D25 walk"; it inherits P1's latent far-end read (`surface_anchor`
+  reads the span's far end) and adds nothing beyond it. The fixture invariance check (828 / 853 repeated entries) still reads 0
+  differences; the far-end measurement is in D32.
+- Test (`test_road_completion.cpp`, "a completed bridge stretch meets the strict profiles ..."): gaps 0 / 0 m (limit 1/256 m),
+  the walk plane at the node sat 0.148 m off; a ground stretch forced to decline next to the same node completes to the strict
+  anchor height. The fixture test now also checks the mixed-node spread (<= 1/256 m). Sabotage (walk plane kept): 0.1484 m,
+  0.1523 m and 0.1484 m against 1/256 m, 3 assertions fail.
+- Alternatives: (a) refit the strict ground profile to the walk plane (6.6's literal step 3, rejected by D26: replaces an
+  in-limits profile by a relaxed one); (b) flag the node and leave the gap - violates G3-D; (c) correct the walk plane by the
+  same feasibility projection inside the tier - duplicates the strict computation and still differs where the strict pass
+  averages several approaches.
+
 ---
 
 

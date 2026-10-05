@@ -174,6 +174,20 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
     }
 
     Walk walk(graph, dem, zone, options);
+    // The anchor of an end node (decision D30): at a bridging node the strict pass's own anchor where the strict pass has
+    // one (road_strict_anchor: the supported approach plane with its <= 0.25 m feasibility correction), so a completed
+    // profile meets every strict profile ending there at the same height and grade plane; else the walk's abutment plane
+    // (D25). A pure function of the node either way; memoised per call.
+    std::map<std::int64_t, RoadBridgeAnchor> anchors;
+    const auto anchor_of = [&](std::int64_t node) {
+        const auto cached = anchors.find(node); if (cached != anchors.end()) return cached->second;
+        auto result = walk.anchor(node);
+        if (result.bridging) {
+            const auto strict = road_strict_anchor(builder, dem, zone, node, limits.reference);
+            if (strict && strict->inferred) { result.plane = strict->plane; ++stats->strict_anchors; }
+        }
+        return anchors[node] = result;
+    };
     // Step 2: declined bridge spans, re-fitted between the abutment planes of their two end nodes at relaxed limits.
     for (std::size_t i = 0; i < entries.size(); ++i) {
         auto& entry = entries[i]; if (entry.profile || !entry.decline) continue;
@@ -184,7 +198,7 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         ++stats->bridge_candidates;
         auto ref = builder.fit_stretch(entry.way_id, entry.stretch, reference); if (!ref) { ++stats->bridge_fit_failed; continue; }
         const auto start = ref->at(0), end = ref->at(ref->length_m); if (!start || !end) { ++stats->bridge_fit_failed; continue; }
-        const auto a = walk.anchor(w->node_ids[entry.stretch.start_ref]), b = walk.anchor(w->node_ids[entry.stretch.end_ref]);
+        const auto a = anchor_of(w->node_ids[entry.stretch.start_ref]), b = anchor_of(w->node_ids[entry.stretch.end_ref]);
         if (!a.plane || !b.plane) { ++stats->bridge_no_support; continue; }
         VerticalFitLimits fit; fit.max_grade = std::max(0.12, attrs->max_grade_per_mille / 1000.0);
         fit.min_radius_m = std::min<double>(250, attrs->min_vertical_radius_m); fit.max_iterations = 16384;
@@ -212,7 +226,7 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         ++stats->ground_candidates;
         const auto fail = [&] { ++stats->ground_failed; };
         auto ref = builder.fit_stretch(entry.way_id, entry.stretch, reference); if (!ref || ref->length_m < 0.5) { fail(); continue; }
-        const auto anchor_first = walk.anchor(first_id), anchor_last = walk.anchor(last_id);
+        const auto anchor_first = anchor_of(first_id), anchor_last = anchor_of(last_id);
         const bool bridge_first = anchor_first.plane.has_value(), bridge_last = anchor_last.plane.has_value();
         const auto plane_at = [&](const RoadBridgeAnchor& anchor, std::int64_t id) -> std::optional<RoadJunctionPlane> {
             if (anchor.plane) return anchor.plane;
