@@ -1,8 +1,8 @@
 # P2: junction surfaces, server-side carving and junction furniture — implementation design
 
-Status: design 2026-10-05. Slices 1-4 implemented (78d189d rules, 399b460 surface
-function, 68985c6 single-node junctions, slice 4 clusters). Deviations found while
-implementing are recorded in section 15 (D16-D21); the owner answers are in section 17.
+Status: design 2026-10-05. Slices 1-5 implemented (78d189d rules, 399b460 surface
+function, 68985c6 single-node junctions, 9826c64 clusters, slice 5 junction heights and raised tables). Deviations found while
+implementing are recorded in section 15 (D16-D24); the owner answers are in section 17.
 Audience: the implementing agents. Each slice in section 14 can be built from this
 document plus the P1 design ([p1_cross_section_design.md](p1_cross_section_design.md)).
 P2 is G3-D (PLAN.md 6.3 steps 4-7) plus the furniture additions of
@@ -582,6 +582,11 @@ junctions do not have). See D6.
     measurement report. It is too small to carve across a junction.
 - **Features of an approach inside the ring** (P1 section 4, station < trim + ramp):
   not carved, counted. A feature cut by a trim line would leave a step.
+
+**As implemented (slice 5):** `adjust_features_for_junctions` (suppression and ramp records, D22/D23), `make_junction_surface` /
+`junction_height_m` (4.2, with the raise inside the approach surfaces, D24), `JunctionBuildStats::raised_tables` and
+`calming_ignored`. The `JunctionCalming` count of the measurement report is `calming_ignored`. Neither fixture has a
+table, hump or any other vertical calming tag on a junction node, so the raised-table path runs on synthetic scenes only.
 
 ---
 
@@ -1206,6 +1211,7 @@ Each test is listed with its negative control or sabotage, which must make it fa
 | T4 as implemented (slice 4) | synthetic dual crossing (median 10.5 m between centre lines) → 1 cluster of 4, 4 absorbed, 8 stubs turning one full turn, median and nodes inside the road bed ring; staggered T pair 5 m apart → 1 cluster, the main road between the nodes inside the road bed ring; a 3-node chain at 18 m (30° diagonal crossings) → 1 cluster, 5 nodes over 72 m → 5 singles + 1 `ClusterTooLarge`; node cap 2 → too large; roundabout middle stretch → 2 singles; fixture census with tile identity; D17 caps and all-layer hull on fixture nodes 507567 / 562041 | options in the tests: caps off → 507567 not nested (and 527505 back to a bow-tie round); one-layer hull → 562041 not nested; roundabout rule off → linked; cluster caps off → one 5-node cluster; unknown links absent → 4 records differ between tiles. Code sabotage: the walk not crossing absorbed stretches → dual crossing and staggered T fail, 34 face-walk fallbacks per fixture. The PLAN 25 m diag was not built: D2 already rests on the probe's measurement |
 | T5 junction heights | on 64 points per trim segment |z_J − ẑ_i| ≤ 1e-9 m; finite-difference normal slope across the trim line equal within 1e-4; min ≤ z_J ≤ max everywhere on a 0.25 m lattice | weights from plain distances instead of squared distances: the slope test fails; plain average: the match test fails |
 | T6 node agreement | for every fixture junction all used approaches' ẑ at the node agree within 1/256 m (strict and completed) | completion tier refitting only one stretch at an anchored node: fails |
+| T5/T6 as implemented (slice 5) | `test_road_junction_height.cpp`: X, T, Y 30 deg and a curved side arm over a tilted bumpy DEM: \|z_J - z_i\| <= 1e-9 on 64 points per trim segment (measured 5.7e-14 on both fixtures, ~25k points each), one-sided inward slope of z_J equals that of z_i within 1e-4 (h = 1 um; fixtures worst 8.7e-5), no overshoot on a 0.25 m lattice (0 violations); weights sum to 1 and average on two touched segments; zero allocation; tangent extension before station 0; every fixture junction (flat and tilted DEM): worst approach-to-node mismatch 6.9e-11 m (limit 1/256 m); a table / hump raises, other vertical kinds count `calming_ignored`; raised junction equals the raised core on all 4 trim lines incl. sidewalks (D24); ramp plateau [0, trim] (D22); feature inside the trim suppressed, beyond it kept (D23) | T5: plain-distance weights (slope mismatch 0.43 against 1e-4) and plain average (match error 0.249 m) fail; T6: one profile lifted 2 cm fails the node-agreement check (spread 0.02); D24: a constant raise after the blend steps 0.080 m on the sidewalk probes; D23: the suppressed bump would leave 0.01+ m on the trim line |
 | T7 tile invariance | every junction and furniture record identical whichever fixture tile builds it; owned exactly once | degree from the tile graph instead of the context graph: differs at halo edges (P1 slice 1 negative control reused) |
 | T8 encoding 7 | round trip; every rejection of 9.2 with its own malformed body; encoding 6/5 decode | flip one ring vertex: rejected as non-simple; change one t_to: rejected by the lane-span rule |
 | T9 crossings acceptance | per fixture, #crossing nodes on entries == #placed + #declined; counts printed; every placed quad within carriageway + 0.5 m (it is 0 by construction) | delete one record: count mismatch |
@@ -1539,6 +1545,56 @@ not computable in one tile: discovery stops at the cap, which is the point of th
     convex shape, slightly over-paving the nose.
   - Later fix, if slice 12's home census shows it matters: continue edge polylines
     across degree-2 way joins up to the reach (the same chain walk D20 avoided).
+
+### Decisions made while implementing (slice 5)
+
+**D22. Junction ramp records are not part of `RoadGeomTile::features`, and a junction ramp follows the Table ratio.**
+- 4.4 asked for "an extra feature record" per approach, made by the junction builder, with a ramp "of the feature's ramp length".
+  - Alt A: append the records to `RoadGeomTile::features`. Con: that changes the served roads.geom bytes (section 4 is
+    encoded) before slice 8 re-records the goldens, and a tile would then hold two feature sets (suppression is a function
+    of the junction records, which are not stored yet).
+  - Alt B (chosen): `adjust_features_for_junctions(tile, junctions)` returns the kept features, the ramp records and the
+    suppressed count; `core_features()` is features + ramps sorted for the carver. Slice 8 stores the same data.
+    Pro: no served byte moves; the function is a pure derivation, so a tile can recompute it.
+- The ramp record is a `Table`-kind `ProfileFeature` (height = the node's table or hump height) with length = trim + 2 r, so
+  its plateau is exactly [0, trim] and its one ramp beyond the trim line is r = max(10 x height, 1 m).
+  - Alt: a hump's own ramp (half its 3.7 m length = 1.85 m). A `ProfileFeature` cannot express "plateau plus a ramp of
+    arbitrary length" (only the Table kind has a plateau, and its ramp is capped by 10 x height), so a hump junction uses
+    the Table ratio too: 1 m ramps at 7 cm and 8 cm. Con: steeper than a stand-alone hump (peak slope 1:7.1 at 7 cm over
+    a 1 m smooth step, against 1:13 for the 1.85 m ramp). Accepted: a field per feature would change encoding 6 for a
+    detail the junction slice does not need; revisit with slice 8's section 5 if the owner wants hump parity.
+
+**D23. Feature suppression rule: footprint against trim.** 4.4 said "station < trim + ramp". Implemented as `station - effective_length/2 < trim`
+(measured from the junction-side end, both ends of an entry): any feature whose carved footprint reaches the ring is dropped.
+- Alt: the literal rule drops a feature whose centre is within trim + ramp. Con: it keeps a feature whose footprint
+  already reaches into the ring (centre beyond trim + ramp but a long feature), leaving a step on the trim line.
+- Measured on the fixtures: 0 features inside a ring (no traffic-calming node sits within a trim of a junction in either file);
+  the rule is exercised by the synthetic bump 0.3 m inside the trim (suppressed) and 4 m beyond it (kept).
+
+**D24. The raise of a table or hump junction enters through the approach surfaces, not as a constant over the ring.**
+4.2 and 4.4 said: add `raised_height_m` inside the ring.
+- Problem: the approach cores carry the raise only over the carriageway (features act over `carriageway_right..left`, no
+  lateral blend). A constant over the whole ring raises the sidewalks and verges of the junction too, so on every trim
+  line the junction would step by the full height against the unraised sidewalk of the core, which breaks the G3-D match
+  (T12: trim-line samples equal the cores) and the property 4.3(1).
+- Chosen: each approach carries its own ramp record, and z_i adds the ramp's plateau over that approach's carriageway
+  band exactly as `road_surface_height_m` does for a feature. On the trim line of approach i (w_i = 1) the junction then
+  equals the raised core everywhere, sidewalks included (measured: 0 difference on the 4 trim lines of a synthetic X
+  table, a constant raise would step 0.080 m on the 8 sidewalk/verge probes). Inside, the raise falls off toward the
+  corners where no approach carriageway reaches, which is the shape of a real raised table.
+- `RoadJunction::raised_height_m` stays as the record's metadata (slice 8 encodes it); `junction_height_m` does not add it.
+- Con: a junction with two approaches of different ramp state would blend; not possible, every used approach of a RaisedTable
+  junction gets a ramp.
+- Sabotage in the test: adding the constant after the blend fails the trim-line match by exactly 0.08 m on the sidewalk probes.
+
+**Slice 5 findings for later slices (not defects of this slice).**
+- Hull-fallback and shallow-merge junctions: at the gore of a shallow Y two diverging carriageways have their own cores 1-2 m
+  apart whose heights can differ by up to ~0.3 m (profiles of independent carriageways, e.g. node 507397 on fixture B).
+  `z_J` follows both, so a 1 m lattice step of 0.30 m (fixture B flat DEM) and 0.17 m (fixture A) appears inside such a
+  ring. The blend does not create it; slice 9's outer-boundary blend is where a step this size matters.
+- Cluster junctions blend only the stubs; an absorbed stretch has no surface of its own (4.2 lists approaches). Heights
+  inside a cluster between its nodes therefore follow the stubs' tangent extensions. On the fixtures the cluster extents are
+  <= 35.4 m; slice 12's measurement should compare a cluster interior against its absorbed stretches' own profiles.
 
 ---
 

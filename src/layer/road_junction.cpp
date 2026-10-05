@@ -1,4 +1,5 @@
 #include "g2m/layer/road_junction.h"
+#include "g2m/core/det_math.h"
 #include "g2m/layer/road_attributes.h"
 #include "g2m/layer/road_cross_section.h"
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <string_view>
 #include <tuple>
 
 namespace g2m {
@@ -326,6 +328,7 @@ void add_stats(JunctionBuildStats& to, const JunctionBuildStats& from) {
     to.max_ring_vertices = std::max(to.max_ring_vertices, from.max_ring_vertices);
     to.clusters += from.clusters; to.cluster_nodes += from.cluster_nodes; to.absorbed += from.absorbed;
     to.face_fallbacks += from.face_fallbacks;
+    to.raised_tables += from.raised_tables; to.calming_ignored += from.calming_ignored;
 }
 }
 
@@ -344,6 +347,37 @@ JunctionApproachStatus approach_status(const RoadGeomTile& tile, const RawApproa
     if (!e.cross_section) return JunctionApproachStatus::NoCrossSection;
     if (e.profile->attributes.tunnel) return JunctionApproachStatus::Tunnel;
     return JunctionApproachStatus::Used;
+}
+
+// Design 4.4: a table or hump tag on a junction node raises the whole junction by its height (rules, the P1 owner
+// decision: every vertical kind is carved); a cluster takes the greatest (ties: the smallest node id, the nodes
+// come ascending). Every other vertical kind raises nothing and is counted.
+void apply_junction_calming(const RoadGeomTile& tile, const std::vector<NodeInput>& nodes, const RoadRules& rules,
+    RoadJunction& j, JunctionBuildStats& stats) {
+    struct Name { std::string_view tag; ProfileFeatureKind kind; bool raises; };
+    static constexpr Name kNames[] = {{"table", ProfileFeatureKind::Table, true}, {"hump", ProfileFeatureKind::Hump, true},
+        {"bump", ProfileFeatureKind::Bump, false}, {"mini_bumps", ProfileFeatureKind::MiniBumps, false},
+        {"rumble_strip", ProfileFeatureKind::RumbleStrip, false}, {"cushion", ProfileFeatureKind::Cushion, false},
+        {"dip", ProfileFeatureKind::Dip, false}};
+    std::int32_t best_mm = 0;
+    for (const auto& n : nodes) {
+        const RoadGraphNode* node = find_node(tile.source.graph, n.id);
+        if (!node) continue;
+        for (const auto& [key, value] : node->tags) {
+            if (key != "traffic_calming") continue;
+            for (const auto& name : kNames) {
+                if (name.tag != value) continue;
+                if (!name.raises) { ++stats.calming_ignored; break; }
+                const std::int32_t height = rules.calming(name.kind).height_mm;
+                if (height > best_mm) { best_mm = height; j.raised_node = n.id; }
+                break;
+            }
+        }
+    }
+    if (best_mm <= 0) return;
+    j.flags |= static_cast<std::uint16_t>(JunctionFlags::RaisedTable);
+    j.raised_height_m = static_cast<double>(best_mm) / 1000.0;
+    ++stats.raised_tables;
 }
 
 // The junction of `nodes` (one node, or a cluster) with the `absorbed` entries inside it (design 3.2-3.7). Every
@@ -551,6 +585,7 @@ RoadJunction build_from(const RoadGeomTile& tile, const std::vector<NodeInput>& 
     if (std::all_of(darts.begin(), darts.end(), [](const Dart& g) { return g.bridge; })) j.flags |= static_cast<std::uint16_t>(JunctionFlags::OnStructure);
     stats.bowtie_rounds += static_cast<std::size_t>(rounds_used);
     if (rounds_used > 0 && !std::any_of(hull.begin(), hull.end(), [](bool h) { return h; })) ++stats.bowtie_repaired;
+    if (options.raised_tables) apply_junction_calming(tile, nodes, rules, j, stats);
     return record(j);
 }
 
@@ -778,6 +813,203 @@ Result<std::vector<RoadJunction>> build_road_junctions(const RoadGeomTile& tile,
         stats->max_cluster_nodes = std::max(stats->max_cluster_nodes, total.max_cluster_nodes);
         add_stats(*stats, total);
     }
+    return out;
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------
+// Slice 5: junction heights (design 4.2) and calming at junctions (4.4).
+
+namespace {
+// The ramp record of one used approach of a RaisedTable junction (design 4.4, decisions D22 and D24): a Table-kind
+// feature of the table's height whose plateau runs [0, trim] from the junction-side end of the entry and whose
+// single ramp beyond the trim line is max(10 x height, 1 m) long (a Table's own ratio). The record is carried by the
+// table node. length_mm = trim + 2 ramp, rounded to mm; the centre is placed so the plateau ends exactly at trim.
+ProfileFeature junction_ramp_record(const RoadGeomEntry& e, const JunctionApproach& a, const RoadJunction& j) {
+    ProfileFeature f;
+    f.entry_index = a.entry_index; f.node_id = j.raised_node; f.kind = ProfileFeatureKind::Table; f.carve = true;
+    f.height_mm = static_cast<std::int32_t>(std::llround(j.raised_height_m * 1000.0)); f.width_mm = 0;
+    f.provenance = Provenance::Derived;
+    const double ramp0 = std::max(j.raised_height_m * static_cast<double>(kFeatureTableRampRatio), static_cast<double>(kFeatureMinRampMm) / 1000.0);
+    f.length_mm = static_cast<std::int32_t>(std::llround((a.trim_m + 2.0 * ramp0) * 1000.0));
+    const double plateau = feature_effective_length_m(f) / 2.0 - feature_ramp_m(f);
+    const double sigma_c = a.trim_m - plateau;
+    f.station_m = a.at_end ? e.profile->reference.length_m - sigma_c : sigma_c;
+    return f;
+}
+} // namespace
+
+std::optional<JunctionSurface> make_junction_surface(const RoadGeomTile& tile, const RoadJunction& junction, const RoadRules& rules) {
+    if (junction.decline != JunctionDecline::None) return std::nullopt;
+    const double spacing = static_cast<double>(rules.junction.edge_station_spacing_mm) / 1000.0;
+    JunctionSurface surface;
+    for (const auto& a : junction.approaches) {
+        if (a.status != JunctionApproachStatus::Used) continue;
+        if (a.entry_index >= tile.entries.size()) return std::nullopt;
+        const RoadGeomEntry& e = tile.entries[a.entry_index];
+        if (!e.profile || !e.cross_section) return std::nullopt;
+        Dart g;
+        g.entry = a.entry_index; g.at_end = a.at_end; g.ref = &e.profile->reference; g.xs = &*e.cross_section;
+        g.length = e.profile->reference.length_m;
+        JunctionSurfaceApproach out;
+        out.entry_index = a.entry_index; out.at_end = a.at_end; out.length_m = g.length; out.trim_m = a.trim_m;
+        PointMm right, left;
+        if (!place(g, a.trim_m, 2, kRight, right) || !place(g, a.trim_m, 2, kLeft, left)) return std::nullopt;
+        out.trim_ax = static_cast<double>(right.x) / 1000.0; out.trim_ay = static_cast<double>(right.y) / 1000.0;
+        out.trim_bx = static_cast<double>(left.x) / 1000.0; out.trim_by = static_cast<double>(left.y) / 1000.0;
+        const double sigma_max = std::min(a.trim_m + 1.0, g.length);
+        for (std::int64_t k = 0;; ++k) {
+            const double sigma = static_cast<double>(k) * spacing;
+            if (sigma >= sigma_max) break;
+            out.sigma.push_back(sigma);
+        }
+        out.sigma.push_back(sigma_max);
+        if (out.sigma.size() >= 2 && out.sigma[out.sigma.size() - 2] == sigma_max) out.sigma.pop_back();
+        if (out.sigma.size() < 2) return std::nullopt;
+        for (const double sigma : out.sigma) {
+            const double s = std::clamp(a.at_end ? g.length - sigma : sigma, 0.0, g.length);
+            const auto p = lateral_point(*g.ref, s, 0.0);
+            if (!p) return std::nullopt;
+            out.ref_x.push_back(p->x); out.ref_y.push_back(p->y);
+        }
+        if (junction.flags & static_cast<std::uint16_t>(JunctionFlags::RaisedTable)) { out.has_ramp = true; out.ramp = junction_ramp_record(e, a, junction); }
+        surface.approaches.push_back(std::move(out));
+    }
+    if (surface.approaches.size() < 2) return std::nullopt;
+    return surface;
+}
+
+namespace {
+double segment_distance2(double px, double py, double ax, double ay, double bx, double by) noexcept {
+    const double dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    double u = len2 > 0.0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0.0;
+    if (u < 0.0) u = 0.0;
+    if (u > 1.0) u = 1.0;
+    const double qx = ax + u * dx - px, qy = ay + u * dy - py;
+    return qx * qx + qy * qy;
+}
+} // namespace
+
+double junction_approach_height_m(const JunctionSurface& surface, const RoadGeomTile& tile, std::size_t approach,
+    double x, double y, const RoadSurfaceParams& params) noexcept {
+    const JunctionSurfaceApproach& a = surface.approaches[approach];
+    // Nearest segment of the reference polyline; the first segment is a ray backwards past station 0 (the tangent
+    // extension), every other parameter is clamped to its segment. Ties keep the lowest segment.
+    const std::size_t segments = a.sigma.size() - 1;
+    double best = std::numeric_limits<double>::infinity(), best_u = 0.0, best_cross = 0.0, best_len = 1.0;
+    std::size_t best_k = 0;
+    for (std::size_t k = 0; k < segments; ++k) {
+        const double ax = a.ref_x[k], ay = a.ref_y[k], dx = a.ref_x[k + 1] - ax, dy = a.ref_y[k + 1] - ay;
+        const double len2 = dx * dx + dy * dy;
+        const double vx = x - ax, vy = y - ay;
+        double u = len2 > 0.0 ? (vx * dx + vy * dy) / len2 : 0.0;
+        if (u < 0.0 && k > 0) u = 0.0;
+        if (u > 1.0) u = 1.0;
+        const double qx = ax + u * dx - x, qy = ay + u * dy - y;
+        const double d2 = qx * qx + qy * qy;
+        if (d2 < best) { best = d2; best_k = k; best_u = u; best_cross = dx * vy - dy * vx; best_len = len2 > 0.0 ? det::sqrt(len2) : 1.0; }
+    }
+    const double sigma = a.sigma[best_k] + best_u * (a.sigma[best_k + 1] - a.sigma[best_k]);
+    const double t_out = best_cross / best_len;                 // positive left of the outward direction
+    const double t = a.at_end ? -t_out : t_out;                 // the reference direction runs the other way at an end
+    const double s_free = a.at_end ? a.length_m - sigma : sigma;
+    const double s = std::clamp(s_free, 0.0, a.length_m);
+    double z = road_surface_height_m(tile, a.entry_index, s, t, params);
+    if (a.has_ramp) {   // the table or hump plateau, over the carriageway only (the rule of road_surface_height_m for features)
+        const CarveFootprint f = carve_footprint(*tile.entries[a.entry_index].cross_section, s);
+        if (t >= f.carriageway_right && t <= f.carriageway_left) z += feature_height_contribution_m(a.ramp, s);
+    }
+    if (s_free != s) {
+        const RoadGeomEntry& e = tile.entries[a.entry_index];
+        const auto pose = e.profile->at(s);
+        if (pose) z += pose->grade * (s_free - s);
+    }
+    return z;
+}
+
+void junction_weights(const JunctionSurface& surface, double x, double y, std::span<double> weights) noexcept {
+    const std::size_t n = surface.approaches.size();
+    double sum = 0.0;
+    for (std::size_t m = 0; m < n; ++m) {
+        double product = 1.0;
+        for (std::size_t j = 0; j < n; ++j) {
+            if (j == m) continue;
+            const JunctionSurfaceApproach& a = surface.approaches[j];
+            product *= segment_distance2(x, y, a.trim_ax, a.trim_ay, a.trim_bx, a.trim_by);
+        }
+        weights[m] = product;
+        sum += product;
+    }
+    if (sum > 0.0) {
+        for (std::size_t m = 0; m < n; ++m) weights[m] /= sum;
+        return;
+    }
+    // On two trim segments at once (or an underflow): the average over the approaches whose segment is touched,
+    // else over all of them.
+    std::size_t touched = 0;
+    for (std::size_t m = 0; m < n; ++m) {
+        const JunctionSurfaceApproach& a = surface.approaches[m];
+        weights[m] = segment_distance2(x, y, a.trim_ax, a.trim_ay, a.trim_bx, a.trim_by) == 0.0 ? 1.0 : 0.0;
+        touched += weights[m] > 0.0 ? 1 : 0;
+    }
+    if (touched == 0) { for (std::size_t m = 0; m < n; ++m) weights[m] = 1.0; touched = n; }
+    for (std::size_t m = 0; m < n; ++m) weights[m] /= static_cast<double>(touched);
+}
+
+double junction_height_m(const JunctionSurface& surface, const RoadGeomTile& tile, double x, double y,
+    const RoadSurfaceParams& params) noexcept {
+    constexpr std::size_t kInline = 32;
+    const std::size_t n = surface.approaches.size();
+    double inline_weights[kInline];
+    std::vector<double> heap;
+    std::span<double> w(inline_weights, std::min(n, kInline));
+    if (n > kInline) { heap.assign(n, 0.0); w = std::span<double>(heap); }   // beyond 32 approaches only; never on the fixtures
+    junction_weights(surface, x, y, w);
+    double z = 0.0;
+    for (std::size_t i = 0; i < n; ++i) if (w[i] != 0.0) z += w[i] * junction_approach_height_m(surface, tile, i, x, y, params);
+    return z;
+}
+
+std::vector<ProfileFeature> JunctionFeatureAdjustment::core_features() const {
+    std::vector<ProfileFeature> all = features;
+    all.insert(all.end(), ramps.begin(), ramps.end());
+    std::sort(all.begin(), all.end(), [](const ProfileFeature& a, const ProfileFeature& b) {
+        return std::tie(a.entry_index, a.station_m, a.node_id) < std::tie(b.entry_index, b.station_m, b.node_id);
+    });
+    return all;
+}
+
+JunctionFeatureAdjustment adjust_features_for_junctions(const RoadGeomTile& tile, std::span<const RoadJunction> junctions) {
+    JunctionFeatureAdjustment out;
+    constexpr double kNone = -1.0;
+    std::vector<double> trim_start(tile.entries.size(), kNone), trim_end(tile.entries.size(), kNone);
+    for (const auto& j : junctions) {
+        if (j.decline != JunctionDecline::None) continue;
+        for (const auto& a : j.approaches) {
+            if (a.status != JunctionApproachStatus::Used || a.entry_index >= tile.entries.size()) continue;
+            (a.at_end ? trim_end : trim_start)[a.entry_index] = a.trim_m;
+        }
+    }
+    for (const auto& f : tile.features) {
+        bool inside = false;
+        if (f.entry_index < tile.entries.size() && tile.entries[f.entry_index].profile) {
+            const double length = tile.entries[f.entry_index].profile->reference.length_m;
+            const double half = feature_effective_length_m(f) / 2.0;
+            if (trim_start[f.entry_index] >= 0.0 && f.station_m - half < trim_start[f.entry_index]) inside = true;
+            if (trim_end[f.entry_index] >= 0.0 && (length - f.station_m) - half < trim_end[f.entry_index]) inside = true;
+        }
+        if (inside) ++out.suppressed; else out.features.push_back(f);
+    }
+    for (const auto& j : junctions) {
+        if (j.decline != JunctionDecline::None || !(j.flags & static_cast<std::uint16_t>(JunctionFlags::RaisedTable))) continue;
+        for (const auto& a : j.approaches) {
+            if (a.status != JunctionApproachStatus::Used || a.entry_index >= tile.entries.size() || !tile.entries[a.entry_index].profile) continue;
+            out.ramps.push_back(junction_ramp_record(tile.entries[a.entry_index], a, j));
+        }
+    }
+    std::sort(out.ramps.begin(), out.ramps.end(), [](const ProfileFeature& a, const ProfileFeature& b) {
+        return std::tie(a.entry_index, a.station_m, a.node_id) < std::tie(b.entry_index, b.station_m, b.node_id);
+    });
     return out;
 }
 

@@ -806,3 +806,17 @@ All builders now close obtuse open pairs on cap segments at the node and send ev
 ring nesting). `JunctionBuildOptions` switches exist for tests only. Tests: `test_road_junction.cpp` T4 cases, D17 cases,
 cluster census with multi-tile identity and its negative control (`unknown_links_are_absent`), a `[.][diag]` for two-stretch
 links. No served bytes change.
+
+Slice 5: `road_junction.h` / `road_junction.cpp`: junction heights and raised tables (design 4.2-4.4, decisions D22-D24).
+`make_junction_surface(tile, junction)` builds a `JunctionSurface` (per used approach: the 0.5 m reference polyline to trim + 1, the
+mm-rounded outer trim segment, an optional ramp record); `junction_height_m(surface, tile, x, y)` = sum of w_i z_i with the product
+form of inverse squared distances to the trim segments (exact on a trim line, C1, convex), z_i = `road_surface_height_m` at the
+projection on the approach's reference polyline with a tangent extension before station 0 (`junction_approach_height_m`,
+`junction_weights`); pure, allocation-free, det::sqrt only. A table or hump tag on a junction node sets `JunctionFlags::RaisedTable`,
+`raised_height_m` and `raised_node` (greatest in a cluster; other vertical kinds raise nothing and count `calming_ignored`);
+the raise enters through per-approach ramp records over the carriageway only (D24), not as a ring-wide constant.
+`adjust_features_for_junctions(tile, junctions)` returns the kept features (an approach feature whose footprint reaches the trim is
+suppressed, D23), the ramp records (kind Table, plateau [0, trim], ramp max(10 x height, 1 m), D22) and `core_features()` for the
+carver. `tests/support/road_fixture.h` `geometry_in_tile` takes an optional DEM height function. Test:
+`test_road_junction_height.cpp` (T5, T6; sabotages: plain-distance weights, plain average, a 2 cm lifted profile, a constant raise).
+No served bytes change.

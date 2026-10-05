@@ -13,6 +13,8 @@
 #include "g2m/layer/road_graph_tile.h"
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -66,17 +68,28 @@ inline g2m::RoadGraph filter_road_graph(const g2m::RoadGraph& world, Pred keep) 
     return out;
 }
 
+// Fills a DEM tile: flat 100 m, or `height_m(easting, northing)` at every cell centre (1/256 m, rounded).
+inline void fill_dem(g2m::HeightTile& tile, const std::function<double(double, double)>& height_m) {
+    if (!height_m) { tile.h.fill(25600); return; }
+    const double cell = static_cast<double>(tile.key.size_m()) / 256.0;
+    const double e0 = static_cast<double>(tile.key.min_easting()), n0 = static_cast<double>(tile.key.min_northing());
+    for (std::size_t j = 0; j < 256; ++j)
+        for (std::size_t i = 0; i < 256; ++i)
+            tile.h[j * 256 + i] = static_cast<std::int32_t>(std::llround(height_m(e0 + (static_cast<double>(i) + 0.5) * cell, n0 + (static_cast<double>(j) + 0.5) * cell) * 256.0));
+}
+
 // roads.geom of one level-2 tile of `world`, the way RoadGeomDeriver does it.
 // `with_context` = false builds from the (partial) tile graph alone, the
-// pre-slice-1 behaviour, for negative controls.
+// pre-slice-1 behaviour, for negative controls. `height_m(easting, northing)` replaces the flat 100 m DEM
+// (25600 / 256) by a terrain function, for the tilted and bumpy cases.
 inline g2m::Result<g2m::RoadGeomTile> geometry_in_tile(const g2m::RoadGraph& world, const g2m::TileKey& key,
-        bool with_context = true) {
+        bool with_context = true, const std::function<double(double, double)>& height_m = {}) {
     using namespace g2m;
     auto tile = select_road_graph_tile(world, key); if (!tile) return tile.error();
     const auto dem_deps = road_dem_dependencies(tile->graph, key.zone); if (!dem_deps) return dem_deps.error();
     std::vector<HeightTile> heights(dem_deps->size());
     std::vector<const HeightTile*> views;
-    for (std::size_t i = 0; i < heights.size(); ++i) { heights[i].key = (*dem_deps)[i].key; heights[i].h.fill(25600); views.push_back(&heights[i]); }
+    for (std::size_t i = 0; i < heights.size(); ++i) { heights[i].key = (*dem_deps)[i].key; fill_dem(heights[i], height_m); views.push_back(&heights[i]); }
     const auto dem = RoadDemSampler::make(views); if (!dem) return dem.error();
     RoadProfileLimits limits; limits.reference.allow_curvature_exceptions = true;
     if (!with_context) return build_road_geom_tile(*tile, *dem, limits);

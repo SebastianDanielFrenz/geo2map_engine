@@ -33,6 +33,7 @@ add_executable(g2m_layer_tests
   test_road_api.cpp
   test_road_surface.cpp
   test_road_junction.cpp
+  test_road_junction_height.cpp
   test_road_features.cpp
   test_road_profile.cpp
   test_road_reference.cpp
