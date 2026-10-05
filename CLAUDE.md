@@ -778,3 +778,10 @@ every key is in integer mm or counts, the loader proves `cluster_max_extent + 2*
 its file SHA is the classifier identity for the later terrain.class config hash). The shared strict JSON reader moved
 to `src/layer/strict_json.h`; `src/layer/CMakeLists.txt` embeds all three JSON files through `g2m_embed_json`.
 Tests: `test_road_rules.cpp` (junction/furniture cases), `test_carve_params.cpp`, `test_landcover_classifier.cpp`.
+
+Slice 2: `include/g2m/layer/road_surface.h` / `src/layer/road_surface.cpp`: `road_surface_height_m(tile, entry, s, t, params)`
+is the one carved road height (design 4.1: `p(s) + C(s,t) - C(s,0) + V(s,t) + F(s,t)`; helpers `road_crown_m`, `road_verge_m`).
+`RoadSurfaceParams{crown_round_m, verge_drop_m}` defaults equal `carve_default.json` (`CarveParams::surface_params()`); the
+crossfall is the profile's `attributes.crown_per_mille`. Features act over the carriageway (width 0 and cushions) or a width
+centred on it, with no lateral blend; NaN for an entry without profile or cross-section. No encoding change. Test:
+`test_road_surface.cpp` (T1, sabotage: dropping `-C(s,0)` breaks the reference-equals-profile checks).

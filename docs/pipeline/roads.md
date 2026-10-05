@@ -87,7 +87,7 @@ flowchart TD
 
 ## Planned: junctions, carving, furniture (street fidelity P2 = G3-D)
 
-Design: [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) (12 slices, section 14). Status: slice 1 (rules data) implemented, the rest planned. Implemented so far: the `junction` and `furniture` blocks of `de.json` (loader only, `JunctionRules`/`FurnitureRules`), `data/carve/carve_default.json` (`carve_params.h`) and `data/classifiers/esa_worldcover_v200.json` (`landcover_classifier.h`); no stage, layer or encoding exists yet.
+Design: [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) (12 slices, section 14). Status: slices 1-2 (rules data, `road_surface_height_m`) implemented, the rest planned. Implemented so far: `road_surface_height_m` (`road_surface.h`, the canonical road height of design 4.1, a pure library function over a `RoadGeomTile` entry); the `junction` and `furniture` blocks of `de.json` (loader only, `JunctionRules`/`FurnitureRules`), `data/carve/carve_default.json` (`carve_params.h`) and `data/classifiers/esa_worldcover_v200.json` (`landcover_classifier.h`); no stage, layer or encoding exists yet (the surface function is a library function only).
 
 - **Junctions:**
   - nodes of degree ≥ 3 in the merged context graph;

@@ -43,6 +43,13 @@ std::int32_t CarveParams::blend_for_class_mm(std::string_view highway) const {
     return it != blend.end() && it->highway == highway ? it->blend_mm : blend_default_mm;
 }
 
+RoadSurfaceParams CarveParams::surface_params() const {
+    RoadSurfaceParams p;
+    p.crown_round_m = static_cast<double>(crown_round_mm) / 1000.0;
+    p.verge_drop_m = static_cast<double>(verge_drop_mm) / 1000.0;
+    return p;
+}
+
 Result<CarveParams> load_carve_params(std::span<const std::byte> bytes) {
     const char* begin = reinterpret_cast<const char*>(bytes.data());
     const json j = json::parse(begin, begin + bytes.size(), nullptr, /*allow_exceptions=*/false);

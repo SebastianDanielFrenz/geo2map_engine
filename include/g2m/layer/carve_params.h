@@ -5,6 +5,7 @@
 // Every number is an integer (millimetres, metres or percent) like the road rules. The JSON is embedded at build time.
 #pragma once
 #include "g2m/core/result.h"
+#include "g2m/layer/road_surface.h"
 #include "g2m/layer/tile_container.h"
 #include <cstddef>
 #include <cstdint>
@@ -46,6 +47,8 @@ struct CarveParams {
 
     // The blend width class default of a highway value (the default entry for an unknown class).
     std::int32_t blend_for_class_mm(std::string_view highway) const;
+    // The two numbers road_surface_height_m reads (crown_round_mm, verge_drop_mm) in metres.
+    RoadSurfaceParams surface_params() const;
 };
 
 // Strict loader: format "g2m.carve/1", integers only, unknown or missing keys rejected, every highway class of
