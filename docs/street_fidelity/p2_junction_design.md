@@ -1,8 +1,8 @@
 # P2: junction surfaces, server-side carving and junction furniture — implementation design
 
-Status: design 2026-10-05. Slices 1-6 implemented (78d189d rules, 399b460 surface
-function, 68985c6 single-node junctions, 9826c64 clusters, 90de609 junction heights and raised tables, slice 6 profile completion
-tier). Deviations found while implementing are recorded in section 15 (D16-D26); the owner answers are in section 17.
+Status: design 2026-10-05. Slices 1-7 implemented (78d189d rules, 399b460 surface
+function, 68985c6 single-node junctions, 9826c64 clusters, 90de609 junction heights and raised tables, e73312f profile completion
+tier, slice 7 furniture). Deviations found while implementing are recorded in section 15 (D16-D28); the owner answers are in section 17.
 Audience: the implementing agents. Each slice in section 14 can be built from this
 document plus the P1 design ([p1_cross_section_design.md](p1_cross_section_design.md)).
 P2 is G3-D (PLAN.md 6.3 steps 4-7) plus the furniture additions of
@@ -980,6 +980,11 @@ lines, for each resolved direction.
 - Inside junction rings, "carriageway" means the union of the approach carriageway
   bands and the junction road bed ring.
 
+
+**As implemented (slice 7):** `road_furniture.h` / `road_furniture.cpp`; see decisions D27 (ownership) and D28 (rule readings: association
+distance to the junction node, the left post only on one-ways, one signal per line set, bit 3 never set). The crossing count of fixture A is
+123 in the road graph, not 125. Records are not yet stored (encoding 7).
+
 ---
 
 ## 8. Rules as data
@@ -1232,6 +1237,10 @@ Each test is listed with its negative control or sabotage, which must make it fa
 | T17 pyramid | carved L1 = mean-of-4 of carved L0; class L1 rank-max | — |
 | T18 completion tier | each of the game's three paths reproduces the game's profile within 1 mm on a fixture where the game's own code is run in the test (copied as a frozen reference in tests/support, libm allowed in tests only) | omit the 10 % clamp: differs |
 | T18 as implemented (slice 6) | `test_road_completion.cpp`: a bridge with a junction 15 m beyond each end (span, both ground stubs), a motorway at 11 % (clamp), a noisy 1.5 km road (retry) and a noisy 3 km road (ground) each equal the frozen game reference (`tests/support/road_completion_reference.h`) within 1 mm (measured 0 on all four); completed stretches at a bridge node agree within 1/256 m (T6 completion variant: 0 on both fixtures, flat and tilted DEM); a reversed entry list gives the same profiles; two-tile invariance and every fixture entry held by two tiles identical (828 and 853 repeated entries, 0 differ); origins validated | omit the 10 % clamp: grade0 0.109375 not 0.10, parity with the game 5.2 cm off, the 3 km ground road no longer fits; retry-from-tile-graph context: 1 of 2 entries differ on the two-tile world, 2 / 8 / 1 / 31 of ~830 on the fixtures; one stretch 2 cm off at a bridge node fails T6; the game's own tier is the order and tile control (0.035 m shift on entry reversal, differs between tiles) |
+| T9 as implemented (slice 7) | `test_road_furniture.cpp`: pattern, length, flags and entry per node on a synthetic road (zebra 4 m, `crossing=traffic_signals` Dashes 4 m + signalised, unmarked None but placed, `width` tag, `kerb=lowered`), dead end, degree-2 join (spans-join, station 0), two ways ending at the node, junction node (`JunctionNode`), tunnel, declined stretch, markings precedence; quad inside the carriageway + 0.5 m; per fixture the union over tiles has exactly one record per crossing node (A 123 = 122 placed + 1 declined, B 52 = 50 + 2 `JunctionNode`) | one record deleted: count mismatch (in-test control) |
+| T10 as implemented (slice 7) | a signal inside a two-way stretch gives one line set per direction spanning exactly `driving_lanes_at` of that direction (1 mm), a turn pocket (`lanes:forward=2`, `turn:lanes:forward=left\|through`) is inside the line; direction from tag / one-way / nearer junction end / both, `DirectionUnresolved`, `NoLanes`; crossing rule (line 3 m before the node of a signalised crossing); junction signal on an X gives 4 lines at trim + 1 m, an arm signal 30 m before it suppresses its approach's junction line; stop / give-way on a T lines only the lower rank at trim + 0.5 m, equal ranks `Ambiguous`, declined junction `JunctionDeclined`; fixtures: every placed line lies within its lanes (0 off, both fixtures) | lanes replaced by `carriageway_edges`: 4 test cases fail (two-way line, turn pocket, junction case, fixtures); crossing rule off: the signalised-crossing case fails (4 checks) |
+| T11 as implemented (slice 7) | post at the travel-right edge + 0.5 m (left edge - 0.5 m for the left post), facing opposite to the travel direction (dot -1 to 1e-9); left post only on a one-way with >= 3 lanes (3 lanes: 2 records, 2 lanes: 1, two-way 6 lanes: none) | post offset 0: 3 test cases fail (10 checks) |
+| Slice 7 tile invariance | every owner (entry or junction) emitted by two or more tiles has identical records (828 / 853 repeated owners on the fixtures, 0 differ) | node degrees and incident ways read from the tile graph instead of the context: 2 / 6 owners differ |
 | T19 zero allocation / workers | carve with 1 and 10 workers bit-identical; CarveModel::evaluate allocation-free | — |
 | Goldens | `g3xs` re-recorded (encoding 7 bodies); new `g3j` (junction + furniture sections of both fixtures), `g3d` (carved L0 + class tiles over 4 fixture L0 tiles on the synthetic DEM); Windows = Linux | — |
 
@@ -1653,7 +1662,56 @@ not computable in one tile: discovery stops at the cap, which is the point of th
   non-Strict origin ("encoding 6 cannot carry a completed profile").
 - On the tilted bumpy DEM (2 m amplitude, 23 m period, deliberately hostile) the tier completes about half of what the strict
   pass declines; the rest stays declined with its strict decline.
+
+### Decisions made while implementing (slice 7)
+
+Slice 7 is `road_furniture.h` / `road_furniture.cpp`: `build_road_furniture(tile, context builder, junctions, rules, stats)`, `furniture_quad`,
+`signal_post`, `road_node_station`. Library functions: `RoadGeomTile` does not carry the records yet and no served byte changes (encoding 7,
+slice 8, stores them; the golden `g3xs` 6681f11d1fbdbcdf is unchanged).
+
+**D27. Entry furniture belongs to ONE entry chosen from the context graph; junction furniture to the junction record.**
+- Decision: a record is owned by exactly one entry and emitted by every tile that holds that entry, identical in all of them.
+  Choice (reads the context graph only): an interior node of a stretch: that entry; a node at a degree-1 or degree-2 stretch end:
+  the incident stretch end that STARTS at the node (smallest way id, then ref), else the one that ends there (end station); a node
+  of degree >= 3: the smallest (way id, ref, at_end) incident stretch end (a crossing there is `JunctionNode`-declined; a
+  signal or sign there is junction furniture and takes the junction record instead, see below). Lines and signals derived from a
+  junction node are emitted only where the junction record is passed in (the owner tile), `junction_index` = 1 + its index in the list.
+- Alternatives: (1) every tile emits every record it can see: duplicates across tiles, the owner filter of slice 8 would have to
+  dedupe by geometry; (2) choose the owner by the tile that holds the node: the chosen entry may not be in that tile (a way is held
+  by every tile it touches), so records would go missing. Con of the decision: a tile without the chosen entry emits nothing for the
+  node (counted in `crossing_not_ours` / `controls_not_ours`), the identity per tile is `crossing_nodes == placed + declined + not_ours`.
+- Why: it is the same ownership principle as D-5.1, it needs only what every tile has, and the fixtures confirm it
+  (828 / 853 repeated entries, 0 differ; with the tile graph as context 2 / 6 owners differ, the negative control).
+
+**D28. Rule readings of 7.2 and 7.3 that the design leaves open.**
+- Case (a) association (a signal or sign node on an entry within `signal_assoc_max_m` / `sign_assoc_max_m` of a junction end) measures
+  the distance to the junction END NODE, not the trim line: the trim needs the junction, which only its owner tile builds.
+  The 60 m / 40 m are therefore 60 m / 40 m to the node. Con: the trim lies a few metres nearer, the reach is that much shorter.
+- A `crossing=traffic_signals` node is also a signal source (a signalised crossing is the "common case" of 7.2, the design says the line
+  goes before the quad); its crossing flag `signalised` is set either way.
+- Sign setback: moved back (away from the junction) by 0.5 m, the same sense as the signal setback of 1 m.
+- Left post (7.3): only where the direction has >= 3 lanes AND no opposing driving lane exists (a one-way): on a two-way road the
+  left side of a direction is the road's centre, a post there would stand in the carriageway. Deviation from the literal design,
+  which does not exclude two-way roads. Result: 3 lanes one-way gives 2 records, 2 lanes 1, a two-way road never a left post.
+- One line set per (entry or approach, travel). Signals take precedence over signs at one junction. A case (b) line is suppressed when an
+  (a) line exists for the same entry and travel (`suppressed_junction_lines`). The crossing rule (move the line upstream to the crossing
+  near edge - 1 m, never downstream) applies to (a) lines and (b) signal lines, not to (b) sign lines. A (b) approach that is a one-way
+  leaving the junction is skipped silently. All approaches of equal rank: one `Ambiguous` record per sign node. A declined junction:
+  one `JunctionDeclined` record per control node. A sign without a direction away from a junction end: `DirectionUnresolved`.
+- One signal record per line set (the first contiguous lane group); the left post carries flag bit 4. Facing is derived by
+  `signal_post` (opposite to the travel direction) and not stored. t values and widths are mm-rounded doubles.
+- `kFurnitureInsideJunction` (flag bit 3, "inside a junction ring") is reserved and never set: it needs the junction, which only the owner
+  tile builds, and setting it from the tile that holds the entry would break tile invariance. Slice 8's junction section can derive it.
+- Rank: higher `RoadGraphWay::rank` is more important (osm_roads.cpp kDefaultHighways); the lower ranks are controlled.
+
+**Slice 7 findings.**
+- Fixture A (`frankfurt_hoechst`): 123 crossing nodes in the world graph (the design's 125 counted two nodes the road graph drops),
+  122 placed, 1 declined (`StretchDeclined`), 0 `JunctionNode`; 61 stop lines + 1 give-way, 61 signal posts (2 left posts), no junction-derived lines.
+  Fixture B (`hoechst_a66`): 52 crossing nodes, 50 placed, 2 `JunctionNode`; 73 stop lines + 1 give-way (5 junction-derived), 71 posts (4 left),
+  1 `NoLanes`, 1 line decline `StretchDeclined`. Every placed crossing quad lies inside the carriageway (+- 0.6 mm), every line within its lanes.
+
 ---
+
 
 ## 16. What P2 changes in P1's implementation
 

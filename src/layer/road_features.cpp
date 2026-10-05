@@ -1,6 +1,7 @@
 // Street fidelity P1 slice 7: traffic-calming features of roads.geom section 4 (design 8.3, owner decision Q2).
 // Tag reading and station lookup at build time, the carved height function for consumers. The height function
 // uses only + - * / (road_smooth_step), so it is bit-identical on every platform.
+#include "g2m/layer/road_furniture.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/core/det_math.h"
 #include <algorithm>
@@ -101,6 +102,10 @@ std::optional<double> station_of(const RoadReferenceLine& ref, std::uint32_t ind
 }
 
 } // namespace
+
+std::optional<double> road_node_station(const RoadReferenceLine& ref, std::uint32_t ref_index, const geom::PointMm& node) {
+    return station_of(ref, ref_index, node);
+}
 
 Result<std::vector<ProfileFeature>> resolve_profile_features(const RoadGraph& graph, const RoadGeomEntry& entry,
     std::size_t entry_index, const RoadRules& rules) {

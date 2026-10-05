@@ -837,3 +837,19 @@ bridge nodes. Tests `test_road_completion.cpp` (T18, T6 completion variant, orde
 invariance with negative controls) against the frozen game code in `tests/support/road_completion_reference.h` (libm allowed there;
 do not "fix" it). `tests/support/road_fixture.h` `geometry_in_tile_with(world, key, GeomOptions)` takes the DEM, completion options
 and stats. Fixture A / B with the flat DEM: ground 12 / 5 and bridge 4 / 2 of the strict declines completed (bridge 3 / 1 stay declined, no support); see D25-D26.
+
+Slice 7: `road_furniture.h` / `road_furniture.cpp`: junction furniture of design section 7 as library functions (no stage, no served bytes,
+no change to `RoadGeomTile`; encoding 7 stores it in slice 8). `build_road_furniture(tile, context builder, junctions, rules, stats)` returns
+one `RoadFurniture` per source node and item (crossing, stop line, give-way line, signal post), placed or declined
+(`FurnitureDecline`: StretchDeclined, Tunnel, JunctionNode, DirectionUnresolved, NoLanes, Ambiguous, JunctionDeclined), sorted by
+(junction_index, entry_index, kind, station, node_id, travel, t_from, flags). Ownership (D27): entry furniture belongs to one entry chosen
+from the context graph (interior node: its entry; stretch end of degree 1 or 2: the stretch starting at the node, else the one ending;
+degree >= 3: smallest (way, ref, at_end)) and is emitted by every tile holding it, identical everywhere; furniture derived from a junction
+node only where its `RoadJunction` is passed in (owner tile). Lines span exactly `driving_lanes_at` of the controlled direction (one record
+per contiguous lane group), signal posts stand at the travel-right edge + `signal_lateral_offset_mm` (a left post only on a one-way with
+>= 3 lanes, flag bit 4), `signal_post` derives the facing (opposite to travel), `furniture_quad` the world quad of a crossing or line (a
+crossing at a way join extends back over it, flag spans-join). Flag bit 3 (inside a junction) is reserved and never set (D28). Also
+`road_node_station` (public wrapper of road_features.cpp's `station_of`). Test: `test_road_furniture.cpp` (T9-T11 plus fixture tile
+invariance with a negative control; sabotages lanes -> `carriageway_edges`, no crossing rule, post offset 0, tile graph as context).
+Fixture A / B: crossing nodes 123 / 52, placed 122 / 50, declined 1 StretchDeclined / 2 JunctionNode; stop lines 61 / 73, give-way 1 / 1,
+signal posts 61 / 71.

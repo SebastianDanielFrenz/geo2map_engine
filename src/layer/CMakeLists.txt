@@ -39,6 +39,7 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/road_envelope.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_surface.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_junction.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/road_furniture.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_features.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/derive_road_graph.cpp
   CACHE INTERNAL "g2m_layers sources (also compiled into the fuzz-instrumented copy, tests/fuzz_formats)"
