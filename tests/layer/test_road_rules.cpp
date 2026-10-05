@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "07031243858a12f2e0676c1a552c666c02e0c978aaa6e89d15b0e6c8af717e9c");
+    CHECK(to_hex(digest) == "bc58b4f720a3be30e2938da20b93b8a789b478f330d9d59d9eba1066d693b85a");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -44,7 +44,7 @@ TEST_CASE("The built-in German rules cover every road class and reproduce today'
     const auto& rules = builtin_road_rules_de();
     CHECK(rules.country == "DE");
     CHECK(rules.min_lane_mm == 2500); CHECK(rules.added_lane_side == AddedLaneSide::Right);
-    CHECK(rules.cycle_lane_mm == 1850); CHECK(rules.sidewalk_mm == 2500);
+    CHECK(rules.cycle_lane_mm == 1850); CHECK(rules.sidewalk_mm == 2500); CHECK(rules.tagged_shoulder_mm == 1500);
     CHECK(rules.parking_width_mm(ParkingOrientation::Parallel) == 2000);
     CHECK(rules.parking_width_mm(ParkingOrientation::Diagonal) == 4500);
     CHECK(rules.parking_width_mm(ParkingOrientation::Perpendicular) == 5000);

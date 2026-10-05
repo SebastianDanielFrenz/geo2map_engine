@@ -78,7 +78,7 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
     if (j.is_discarded()) return make_error(ErrorCode::Malformed, "road rules: not valid JSON");
     Reader rd;
     const auto fail = [&]() { return make_error(ErrorCode::InvalidArgument, "road rules: " + rd.err); };
-    if (!rd.keys(j, "root", {"format", "country", "min_lane_mm", "added_lane_side", "cycle_lane_mm", "sidewalk_mm",
+    if (!rd.keys(j, "root", {"format", "country", "min_lane_mm", "added_lane_side", "cycle_lane_mm", "sidewalk_mm", "tagged_shoulder_mm",
             "parking_mm", "min_edge_radius_m", "classes", "sources"})) return fail();
     std::string format;
     if (!rd.text(j, "root", "format", format)) return fail();
@@ -88,7 +88,8 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
     if (!rd.text(j, "root", "country", rules.country) || !rd.text(j, "root", "added_lane_side", side) ||
         !rd.integer(j, "root", "min_lane_mm", 1, kMaxMm, rules.min_lane_mm) ||
         !rd.integer(j, "root", "cycle_lane_mm", 1, kMaxMm, rules.cycle_lane_mm) ||
-        !rd.integer(j, "root", "sidewalk_mm", 1, kMaxMm, rules.sidewalk_mm)) return fail();
+        !rd.integer(j, "root", "sidewalk_mm", 1, kMaxMm, rules.sidewalk_mm) ||
+        !rd.integer(j, "root", "tagged_shoulder_mm", 1, kMaxMm, rules.tagged_shoulder_mm)) return fail();
     if (rules.country.empty()) { rd.fail("country must not be empty"); return fail(); }
     if (side == "right") rules.added_lane_side = AddedLaneSide::Right;
     else if (side == "left") rules.added_lane_side = AddedLaneSide::Left;

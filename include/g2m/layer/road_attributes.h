@@ -23,6 +23,9 @@ struct RoadAttributes {
     bool surface_inferred = true;
     friend bool operator==(const RoadAttributes&, const RoadAttributes&) = default;
 };
+// The width parser shared with the cross-section resolver: clean metres or a
+// trailing " m", at most six fractional digits, 0.5..100 m, result in mm.
+std::optional<std::int32_t> parse_road_width_mm(std::string_view text);
 // Resolves preserved tags against the existing highway/surface data tables.
 // Rejects unsupported highways and invalid canonical tags. Unusable optional
 // values fall back deterministically. width: clean metres or a trailing " m";

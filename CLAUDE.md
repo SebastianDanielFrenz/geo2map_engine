@@ -729,3 +729,7 @@ decodes), `include/g2m/layer/road_rules.h` + `src/layer/road_rules.cpp` (strict 
 `data/road_rules/de.json`, embedded through a CMake-generated `road_rules_de.inc`, `builtin_road_rules_de()`,
 `.gitattributes` keeps the JSON byte-exact). Tests: `test_road_context.cpp`, `test_road_rules.cpp`,
 `test_road_graph_tile.cpp` (node tags), shared helpers in `tests/support/road_fixture.h`.
+Slice 3: `include/g2m/layer/road_cross_section.h` + `src/layer/road_cross_section.cpp`: `RoadCrossSection`
+(bands, anchor, offset, joins; pure `band_width_m`/`offset_m`/`boundaries_at`, `road_smooth_step`) and
+`resolve_cross_section_base` (tags + rules -> bands, anchor, field declines; join ramps and offsets come in
+slice 4). Test: `test_road_cross_section.cpp`.

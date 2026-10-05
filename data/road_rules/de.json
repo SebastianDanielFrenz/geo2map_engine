@@ -5,6 +5,7 @@
   "added_lane_side": "right",
   "cycle_lane_mm": 1850,
   "sidewalk_mm": 2500,
+  "tagged_shoulder_mm": 1500,
   "parking_mm": { "parallel": 2000, "diagonal": 4500, "perpendicular": 5000 },
   "min_edge_radius_m": {
     "default": 10,
@@ -92,6 +93,7 @@
     "secondary_tertiary_residential_lanes": "[RASt] urban lanes 2.75 to 3.25 m, assigned per class [assumed]",
     "link_classes": "primary_link, secondary_link, tertiary_link: lane and taper values copied from the parent class [assumed]",
     "sidewalk": "[RASt] Seitenraum standard 2.50 m [unverified]",
+    "tagged_shoulder": "Width of a shoulder that a shoulder=* tag asks for on a side where the class has none (primary, tertiary, ...): 1.50 m [assumed]",
     "cycle_lane": "ERA 2010 Radfahrstreifen including marking, 1.85 m [unverified]",
     "parking": "[RASt] Parkstaende 2.0 / 4.5 / 5.0 m [unverified]",
     "motorway_tapers": "[RAA] Ein-/Ausfaedelungs-Verziehung 60 m [unverified]",

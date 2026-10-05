@@ -45,6 +45,7 @@ struct RoadRules {
     std::int32_t min_lane_mm = 0;
     AddedLaneSide added_lane_side = AddedLaneSide::Right;
     std::int32_t cycle_lane_mm = 0, sidewalk_mm = 0;
+    std::int32_t tagged_shoulder_mm = 0; // shoulder=* asks for a shoulder where the class has none
     std::array<std::int32_t, 3> parking_mm{}; // indexed by ParkingOrientation
     std::vector<RoadClassRules> classes;      // ascending highway value
     ContentHash content_sha256{};             // SHA-256 of the JSON bytes the rules were loaded from

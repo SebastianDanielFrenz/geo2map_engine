@@ -639,6 +639,9 @@ The A 66 main-line ways at degree-3 nodes, such as 23658569 → junction, have
 - The `"..."` entries above are abbreviations in this document only. The committed
   file must spell out every class in full; the loader rejects `"..."`.
 - Absent `shoulder_*` keys mean 0.
+- `tagged_shoulder_mm` (root key, 1500 in `de.json`; added in slice 3): the width of a
+  shoulder that `shoulder=yes|both|left|right` asks for on a class whose own shoulder
+  width is 0 (design section 3.4 said "width stays rules", which is nothing there).
 
 **Default lane counts and widths** reproduce today's `RoadStyle` class defaults for
 untagged two-way roads:

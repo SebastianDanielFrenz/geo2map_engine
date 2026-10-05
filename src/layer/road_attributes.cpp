@@ -34,6 +34,12 @@ std::string_view tag(const RoadGraphWay& way, std::string_view key) {
 }
 bool structure(std::string_view value) { return !value.empty() && value != "no" && value != "0" && value != "false"; }
 }
+std::optional<std::int32_t> parse_road_width_mm(std::string_view text) {
+    text = trim(text);
+    if (text.ends_with(" m")) text = trim(text.substr(0, text.size() - 2));
+    const auto width = decimal(text, 1000);
+    return width && *width >= 500 && *width <= 100000 ? width : std::nullopt;
+}
 Result<RoadAttributes> resolve_road_attributes(const RoadGraphWay& way, const RoadStyle& style) {
     for (std::size_t i = 0; i < way.tags.size(); ++i)
         if (way.tags[i].first.empty() || (i && way.tags[i - 1].first >= way.tags[i].first))
@@ -56,9 +62,7 @@ Result<RoadAttributes> resolve_road_attributes(const RoadGraphWay& way, const Ro
             lane_count >= 1 && lane_count <= 30) out.lanes = lane_count;
     }
     if (out.lanes && out.lanes * 3250 <= 100000) out.width_mm = out.lanes * 3250;
-    auto width_text = trim(tag(way, "width"));
-    if (width_text.ends_with(" m")) width_text = trim(width_text.substr(0, width_text.size() - 2));
-    if (const auto width = decimal(width_text, 1000); width && *width >= 500 && *width <= 100000) {
+    if (const auto width = parse_road_width_mm(tag(way, "width"))) {
         out.width_mm = *width; out.width_inferred = false;
     }
     if (const auto* surface = style.find_surface(tag(way, "surface"))) {
