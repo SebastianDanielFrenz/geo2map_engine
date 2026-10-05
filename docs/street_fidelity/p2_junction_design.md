@@ -1778,6 +1778,39 @@ defects fixed in the junction pass and the crossing rule.**
   stays at 3.0 m on its lane span. Sabotage (slice 7's code): line at 2.5 m with 0 lanes there, 4 assertions fail. Fixture
   counts unchanged (63 / 82 moved lines summed over tiles).
 
+**D32. Verdict on the completion tier's tile invariance; the strict far-end dependence re-measured.**
+- The tier (retry, bridge, ground; D25 anchors recomputed from the node, D29 budget, D30 strict anchors) is a function of the
+  entry's strict inputs plus the walk, all of which every tile holding the entry loads. Verdict: invariant, with one documented
+  exception it inherits from P1 (below).
+- The slice 6 test (828 / 853 repeated entries, 0 differ) compares only entries that two tiles both hold and never reads near a
+  bound; its control (the tile graph as the tier's context) shows it can see a context dependence, but not a DEM one. Added: every
+  entry of every fixture tile against a WORLD reference (the same tile built with the whole world graph as context and a DEM
+  without holes), flat and tilted bumpy DEM: 1980 (A) and 1519 (B) entries, 21 / 85 / 12 / 223 completed; the completion outcome
+  differs from the reference for 0 entries wherever the strict outcome agrees. Control (tile graph as the tier's context): 2 / 9 /
+  1 / 33 differ. The bound itself is covered by D29's fence test.
+- **Strict-pass far-end dependence (P1, latent): re-measured.** `surface_anchor` at a bridge boundary node projects both raw
+  anchors of the bridge span onto its feasible cubic rise, so it reads the span's FAR end: the graph around it (its ground approach)
+  and the DEM 32 m + 3.5 m beyond it. A tile that holds a stretch ending at the near end but not the bridge loads neither. Fixtures:
+  0 of 1980 / 1519 entries differ from the world reference in the strict outcome (flat and tilted DEM): no stretch ending at a
+  bridge boundary has the bridge outside its tile's DEM margin there. Synthetic (`test_road_completion.cpp`, "strict pass: the
+  latent far-end read ..."): a road ending 188 m outside its tile at a 600 m bridge: tile 455 declines it ("road DEM: missing
+  elevation dependency"), tile 456 profiles it; with the tier the west copy becomes a ground completion and the east stays strict.
+  Not fixed here (it changes P1 served bytes and the DEM dependency set). Options for a later slice: add every bridge way incident
+  to a node of the tile's ways to the DEM dependency segments (and its far end's ground approach to the context), or bound
+  `surface_anchor`'s far-end read to the tile's margin and decline both copies alike. Slice 12's census should count bridge
+  boundaries whose span leaves the margin.
+
+**D33. Furniture flag bit 3 (`kFurnitureInsideJunction`) stays reserved and never set; acceptable for P3 markings.**
+- Setting it needs the junction (its trims), which only the owner tile builds; entry furniture is emitted by every tile holding the
+  entry, so a tile-dependent bit would make the copies differ (D27). Encoding 7 keeps the bit defined-but-reserved: the decoder
+  rejects a record that sets it (9.2 "bits 0-4" is read as "the defined bits, of which bit 3 must be 0" until a later encoding
+  gives it a writer).
+- A later consumer (P3 markings, the carver) derives "inside a junction ring" itself: the entry furniture's (entry, station) and
+  the trim of that entry's end in the owner junction's approach list, which section 5 of the owner tile carries (σ < trim measured
+  from the junction-side end). This needs the owner tile, which the carver loads anyway (5.3: every L2 tile within 192 m). So the
+  information is not lost, only not denormalised. Alternative rejected: let the owner tile set the bit on its own copies - the
+  copies of one record would then differ between tiles.
+
 ---
 
 

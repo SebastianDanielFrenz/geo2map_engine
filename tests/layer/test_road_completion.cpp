@@ -590,3 +590,95 @@ TEST_CASE("completion: fixtures, completed stretches by kind before and after, t
         }
     }
 }
+
+TEST_CASE("strict pass: the latent far-end read of a bridge anchor makes one entry tile-dependent (P1, measured in D32)", "[layer][roads][completion][invariance]") {
+    // Way 10 runs from tile 455 to node 4 at x = 700 (tile 456, outside tile 455's 128 m halo), where a 600 m bridge (way 20)
+    // starts; a ground road (way 12) continues from its far end at x = 1300. The strict anchor of node 4 (surface_anchor)
+    // projects onto the span's feasible cubic rise, which needs the raw anchor of the FAR end: the DEM 32 m beyond x = 1300.
+    // Tile 455 loads the DEM only 65 m around its own ways (to x = 765): its strict pass declines way 10 for a missing DEM
+    // tile, tile 456 (which holds the bridge) profiles it. This is P1 behaviour, not the completion tier's.
+    const auto world = world_of({{1, -300, 0}, {2, -100, 0}, {3, 300, 0}, {4, 700, 0}, {5, 1000, 0}, {6, 1300, 0}, {7, 1600, 0}},
+        {{10, {1, 2, 3, 4}}, {20, {4, 5, 6}, kBridge}, {12, {6, 7}}});
+    const auto west = make_env(world, kTile, rolling), east = make_env(world, kTileEast, rolling);
+    const auto sw = build(*west, false), se = build(*east, false);
+    const auto& a = sw.entries[index_of(sw, 10, 0)]; const auto& b = se.entries[index_of(se, 10, 0)];
+    std::printf("D32 latent far end: way 10 in tile 455 %s, in tile 456 %s\n", a.profile ? "profiled" : a.decline->message.c_str(), b.profile ? "profiled" : b.decline->message.c_str());
+    REQUIRE_FALSE(a.profile); CHECK(a.decline->message.find("road DEM") != std::string::npos);
+    CHECK(b.profile.has_value());
+    // The tier completes the west copy (a ground completion ending at the walk's abutment plane) and leaves the east one strict.
+    const auto cw = build(*west, true);
+    CHECK(cw.origins[index_of(cw, 10, 0)].provenance == ProfileProvenance::GroundCompleted);
+}
+
+TEST_CASE("completion: fixtures against a world reference (whole world as context, a DEM without holes); strict far-end dependence measured (D32)", "[layer][roads][completion][fixtures][invariance]") {
+    // Every entry of every tile is compared with the same tile built from the WHOLE world graph as its context and a DEM
+    // covering the whole world: the reads a tile cannot have are then all available. This covers every entry (not only the
+    // ones two tiles both hold) and reads up to the bounds. The strict pass keeps P1's latent far-end dependence
+    // (surface_anchor reads the far end of a bridge span), which this counts; the completion tier must add no difference of
+    // its own: wherever the strict outcome agrees with the reference, the final outcome agrees too.
+    struct Mode { const char* name; Fn dem; };
+    const Mode modes[] = {{"flat DEM", Fn{}}, {"tilted bumpy DEM", Fn(tilted_fixture_dem)}};
+    const auto strict_key = [](const RoadGeomEntry& e) {
+        if (!e.profile) return std::string("declined:") + std::to_string(static_cast<int>(e.decline->code)) + ":" + e.decline->message;
+        std::string s;
+        for (const auto& seg : e.profile->vertical.segments)
+            for (const double d : {seg.station_m, seg.length_m, seg.height0_m, seg.height1_m, seg.grade0, seg.grade1}) s += std::to_string(std::bit_cast<std::uint64_t>(d)) + ",";
+        return s;
+    };
+    for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
+        const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + pbf);
+        const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
+        std::set<TileKey> keys;
+        for (const auto& n : world->nodes) {
+            const auto k = tile_key_at(g2m_test::kZone32N, 2, static_cast<double>(n.position.x) / 1000.0, static_cast<double>(n.position.y) / 1000.0);
+            if (k) keys.insert(*k);
+        }
+        for (const auto& mode : modes) {
+            const auto full = full_dem(*world, mode.dem);
+            std::size_t entries = 0, strict_differ = 0, strict_differ_bridge_end = 0, tier_differ = 0, completed = 0, control_differ = 0;
+            std::vector<std::string> examples;
+            for (const auto& key : keys) {
+                g2m_test::GeomOptions strict_o; strict_o.height_m = mode.dem;
+                g2m_test::GeomOptions tier_o = strict_o; tier_o.completion.enabled = true;
+                auto strict = g2m_test::geometry_in_tile_with(*world, key, strict_o); REQUIRE(strict);
+                auto tier = g2m_test::geometry_in_tile_with(*world, key, tier_o); REQUIRE(tier);
+                auto graph = select_road_graph_tile(*world, key); REQUIRE(graph);
+                RoadProfileLimits limits; limits.reference.allow_curvature_exceptions = true;
+                RoadCompletionOptions on; on.enabled = true;
+                auto ref_strict = build_road_geom_tile(*graph, *full->dem, limits, &*world); REQUIRE(ref_strict);
+                auto ref_tier = build_road_geom_tile(*graph, *full->dem, limits, &*world, builtin_road_rules_de(), on); REQUIRE(ref_tier);
+                REQUIRE(strict->entries.size() == ref_strict->entries.size()); REQUIRE(tier->entries.size() == ref_tier->entries.size());
+                // Control: the tier run on the tile's strict entries with the TILE graph as its context (and the full DEM).
+                auto narrow_entries = strict->entries; std::vector<RoadProfileOrigin> narrow_origins;
+                const auto narrow = RoadReferenceBuilder::make(graph->graph); REQUIRE(narrow);
+                REQUIRE(complete_road_profiles(narrow_entries, narrow_origins, *narrow, *full->dem, key.zone, limits, on));
+                for (std::size_t i = 0; i < tier->entries.size(); ++i) {
+                    ++entries;
+                    if (tier->origins[i].provenance != ProfileProvenance::Strict) ++completed;
+                    const bool same_strict = strict_key(strict->entries[i]) == strict_key(ref_strict->entries[i]);
+                    if (!same_strict) {
+                        ++strict_differ;
+                        const auto& e = strict->entries[i];
+                        const bool far_end = e.decline && e.decline->message.find("road DEM") != std::string::npos;
+                        if (far_end) ++strict_differ_bridge_end;
+                        if (examples.size() < 4) {
+                            char buf[512];
+                            std::snprintf(buf, sizeof buf, "way %lld ref %u: tile '%s' / reference '%s'", static_cast<long long>(e.way_id), e.stretch.start_ref,
+                                e.profile ? "profile" : e.decline->message.c_str(), ref_strict->entries[i].profile ? "profile" : ref_strict->entries[i].decline->message.c_str());
+                            examples.push_back(buf);
+                        }
+                        continue;
+                    }
+                    const auto reference = outcome_key(ref_tier->entries[i], ref_tier->origins[i]);
+                    if (outcome_key(tier->entries[i], tier->origins[i]) != reference) ++tier_differ;
+                    if (outcome_key(narrow_entries[i], narrow_origins[i]) != reference) ++control_differ;
+                }
+            }
+            std::printf("[D32] %s (%s): %zu entries over %zu tiles, %zu completed; strict outcome differs from the world reference for %zu (%zu of them a missing DEM tile); completion differs where strict agrees: %zu (control, tile graph as the tier's context: %zu)\n",
+                pbf, mode.name, entries, keys.size(), completed, strict_differ, strict_differ_bridge_end, tier_differ, control_differ);
+            for (const auto& ex : examples) std::printf("    %s\n", ex.c_str());
+            CHECK(tier_differ == 0);
+            CHECK(control_differ > 0);
+        }
+    }
+}
