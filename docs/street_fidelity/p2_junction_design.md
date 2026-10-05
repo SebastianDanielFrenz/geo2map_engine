@@ -1754,6 +1754,30 @@ slice 8, stores them; the golden `g3xs` 6681f11d1fbdbcdf is unchanged).
   same feasibility projection inside the tier - duplicates the strict computation and still differs where the strict pass
   averages several approaches.
 
+**D31. Furniture review for slice 8: no record is lost or duplicated at a tile border once the owner filter is applied; two
+defects fixed in the junction pass and the crossing rule.**
+- Ownership as encoded by slice 8: entry furniture is stored with its entry in every tile that holds the entry (5.1, like P1
+  features and the entries themselves), identical in all of them (the fixture check: 828 / 853 repeated owners, 0 differ);
+  junction furniture is built from the OWNED junction list only (the junctions section 5 stores) and stored once, with
+  `junction_index` = 1 + the index in that stored list. A junction is always resolved by its owner tile (D20) and its approach
+  entries are all in that tile (5.2), so nothing derived from a junction can go missing; a tile that is not the owner neither
+  builds nor stores it, so nothing is duplicated.
+- Defect 1: `junction_controls` read the controls of a ClusterTooLarge record as well. Its members keep their single-node records
+  (D19), so a control node inside an over-cap chain got its lines from its own junction AND a `JunctionDeclined` record from the
+  ClusterTooLarge one (contradicting, and one more per overlapping discovery set). Not on the fixtures (no ClusterTooLarge record).
+  Fix: the pass skips ClusterTooLarge records. Test: five junction nodes 18 m apart (72 m), signals on node 3: 8 records from node
+  3's own junction, 0 from the ClusterTooLarge record, 0 `JunctionDeclined`. Sabotage (no skip): 1 record from the
+  ClusterTooLarge record, 1 `JunctionDeclined`, 4 further assertions fail. The node counters counted a junction control node twice
+  (once as an entry node, once by its junction) and `junction_controls_not_owned` was never incremented; both corrected
+  (counted once; not-owned = no listed non-ClusterTooLarge junction holds the node).
+- Defect 2: the crossing rule moved a line to a station where its travel had no lane and kept the lane groups of the original
+  station: a record whose [t_from, t_to] is not a lane group at its own station, which 9.2's acceptance rule rejects at decode
+  (a whole tile would fail to encode). Reachable where a lane ramps in from zero width near a stretch end. Fix: the line moves
+  only onto a station with lanes of its travel, else it stays (`kept_without_lanes`). Test: a forward lane ramping in from 0
+  (white-box ramp searched so that 2.5 m has no lane and 3.0 m has one), a crossing moving the line from 3.0 to 2.5 m: the line
+  stays at 3.0 m on its lane span. Sabotage (slice 7's code): line at 2.5 m with 0 lanes there, 4 assertions fail. Fixture
+  counts unchanged (63 / 82 moved lines summed over tiles).
+
 ---
 
 

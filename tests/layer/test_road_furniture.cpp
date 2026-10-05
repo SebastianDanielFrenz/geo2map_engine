@@ -428,6 +428,87 @@ TEST_CASE("T10: a junction control of a declined junction is a JunctionDeclined 
     REQUIRE(none); CHECK(none->empty());
 }
 
+TEST_CASE("D31: a ClusterTooLarge record adds no furniture; each member's own junction controls it", "[layer][roads][furniture][T10]") {
+    // Five junction nodes 18 m apart on way 10 (72 m, beyond the 48 m cluster extent), each crossed by a 400 m way at 30
+    // degrees: five single-node junctions plus one ClusterTooLarge record from node 1 (D19). Node 3 carries signals.
+    std::vector<N> nodes = {{900, -300, 0}, {901, 390, 0}};
+    std::vector<W> ways; std::vector<std::int64_t> main = {900};
+    for (int i = 1; i <= 5; ++i) {
+        const double x = 18.0 * (i - 1);
+        nodes.push_back({i, x, 0, i == 3 ? Tags{{"highway", "traffic_signals"}} : Tags{}});
+        nodes.push_back({100 + i, x - 173.20508075688772, -100}); nodes.push_back({200 + i, x + 173.20508075688772, 100});
+        ways.push_back({100 + i, {100 + i, i, 200 + i}});
+        main.push_back(i);
+    }
+    main.push_back(901); ways.push_back({10, main});
+    const auto scene = make_scene(nodes, ways);
+    std::size_t too_large = scene->junctions.size(), single3 = scene->junctions.size();
+    for (std::size_t j = 0; j < scene->junctions.size(); ++j) {
+        const auto& jn = scene->junctions[j];
+        if (jn.decline == JunctionDecline::ClusterTooLarge) too_large = j;
+        else if (jn.nodes == std::vector<std::int64_t>{3}) single3 = j;
+    }
+    REQUIRE(too_large < scene->junctions.size()); REQUIRE(single3 < scene->junctions.size());
+    REQUIRE(std::binary_search(scene->junctions[too_large].nodes.begin(), scene->junctions[too_large].nodes.end(), 3));
+    REQUIRE(scene->junctions[single3].decline == JunctionDecline::None);
+    FurnitureBuildStats stats;
+    const auto all = furniture_of(*scene, &stats);
+    std::size_t from_single = 0, from_too_large = 0, declined = 0;
+    for (const auto& f : all) {
+        if (f.junction_index == single3 + 1) ++from_single;
+        if (f.junction_index == too_large + 1) ++from_too_large;
+        if (f.decline == FurnitureDecline::JunctionDeclined) ++declined;
+    }
+    std::printf("D31 cluster-too-large scene: %zu records from node 3's own junction, %zu from the ClusterTooLarge record, %zu JunctionDeclined; signal nodes counted %zu\n",
+        from_single, from_too_large, declined, stats.signal_nodes);
+    CHECK(from_single > 0);
+    CHECK(from_too_large == 0);
+    CHECK(declined == 0);
+    CHECK(stats.signal_nodes == 1);   // the node is counted once, by the junction that controls it
+    CHECK(stats.junction_controls_not_owned == 0);
+    // Only the ClusterTooLarge record passed in: nothing, and the node is reported as not owned by any listed junction.
+    FurnitureBuildStats only_stats;
+    const auto only = build_road_furniture(scene->tile, *scene->builder, std::span<const RoadJunction>(&scene->junctions[too_large], 1), builtin_road_rules_de(), &only_stats);
+    REQUIRE(only); CHECK(only->empty());
+    CHECK(only_stats.junction_controls_not_owned == 1); CHECK(only_stats.signal_nodes == 0);
+}
+
+TEST_CASE("D31: a line is moved before a crossing only onto a station that has lanes of its travel", "[layer][roads][furniture][T10]") {
+    // A forward signal 3 m into the way, a crossing 2 m further on: the line moves upstream to the crossing's near edge - 1 m.
+    auto scene = make_scene({{1, -200, 0}, {2, -197, 0, {{"highway", "traffic_signals"}, {"direction", "forward"}}}, {3, -195, 0, {{"highway", "crossing"}}}, {4, 0, 0}, {5, 200, 0}},
+        {{10, {1, 2, 3, 4, 5}}});
+    const auto plain = furniture_of(*scene);
+    const auto crossing = pick(plain, FurnitureKind::Crossing, 3).at(0);
+    const auto line = pick(plain, FurnitureKind::StopLine, 2).at(0);
+    const double moved = crossing.station_m - crossing.length_m / 2 - 1.0, original = 3.0;
+    REQUIRE(line.station_m == Approx(moved).margin(1e-9));
+    REQUIRE(moved < original);
+    // White-box: the forward lane ramps in from zero width at the stretch start, so it is narrower than 0.5 m (no lane)
+    // at the moved station and a lane at the original one. The ramp length is searched, the scene stays the same.
+    const std::size_t e = line.entry_index;
+    auto& xs = *scene->tile.entries[e].cross_section;
+    bool found = false;
+    for (int r = 2; r <= 200 && !found; ++r) {
+        auto bands = xs.bands;
+        for (auto& b : xs.bands) if (b.counted && b.kind == LaneKind::Driving && b.direction == LaneDirection::Forward) b.start = WidthRamp{r * 500, 0};
+        if (lane_span(*scene, e, moved, LaneDirection::Forward).count == 0 && lane_span(*scene, e, original, LaneDirection::Forward).count > 0) found = true;
+        else xs.bands = bands;
+    }
+    REQUIRE(found);
+    FurnitureBuildStats stats;
+    const auto all = furniture_of(*scene, &stats);
+    const auto lines = pick(all, FurnitureKind::StopLine, 2);
+    REQUIRE_FALSE(lines.empty());
+    for (const auto& l : lines) {
+        const auto span = lane_span(*scene, l.entry_index, l.station_m, l.travel);
+        std::printf("D31 lanes at the moved station: line at %.3f m (moved %.3f, original %.3f), %zu lanes there, t %.3f..%.3f vs lane span %.3f..%.3f\n",
+            l.station_m, moved, original, span.count, l.t_from, l.t_to, span.lo, span.hi);
+        CHECK(span.count > 0);
+        CHECK(l.t_from == Approx(span.lo).margin(0.0006)); CHECK(l.t_to == Approx(span.hi).margin(0.0006));
+    }
+    CHECK(stats.kept_without_lanes == 1); CHECK(stats.moved_before_crossing == 0);
+}
+
 // ---- fixtures ----
 
 namespace {

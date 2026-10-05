@@ -59,8 +59,11 @@ struct FurnitureBuildStats {
     std::size_t crossing_placed = 0;
     std::array<std::size_t, kFurnitureDeclineCount> crossing_declined{};   // by FurnitureDecline value (index 0 unused)
     std::array<std::size_t, 6> crossing_patterns{};       // placed crossings by CrossingPattern
-    std::size_t signal_nodes = 0, sign_nodes = 0;         // nodes of the tile graph with highway=traffic_signals (or a signalised crossing) / stop / give_way
-    std::size_t junction_controls_not_owned = 0;          // control nodes of degree >= 3 that no junction of the list contains
+    // Control nodes (highway=traffic_signals or a signalised crossing / stop / give_way) handled by this build: those on an entry
+    // (counted once, also when the chosen entry is another tile's) and those of a listed junction (once, by that junction; D31:
+    // slice 7 counted a junction node twice).
+    std::size_t signal_nodes = 0, sign_nodes = 0;
+    std::size_t junction_controls_not_owned = 0;          // control nodes of degree >= 3 that no junction of the list contains (ClusterTooLarge records excluded)
     std::size_t controls_not_ours = 0;                    // entry-bound control nodes whose chosen entry is not in this tile
     std::size_t lines_stop = 0, lines_give_way = 0, lines_signal = 0;   // placed line records (one per contiguous lane group)
     std::size_t line_sets = 0;                            // (entry or approach, travel) pairs with at least one placed line
@@ -68,6 +71,7 @@ struct FurnitureBuildStats {
     std::size_t junction_lines = 0;                       // lines derived from a junction (included in the line counts)
     std::size_t suppressed_junction_lines = 0;            // an approach already controlled by a node on its entry (7.2: case (a) wins)
     std::size_t moved_before_crossing = 0;                // lines moved upstream of a crossing
+    std::size_t kept_without_lanes = 0;                   // ... not moved: the moved station has no lane of the travel (D31)
     std::array<std::size_t, kFurnitureDeclineCount> line_declined{};
 };
 

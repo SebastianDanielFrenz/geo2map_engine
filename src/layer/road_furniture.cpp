@@ -305,7 +305,6 @@ private:
                 if (station - c1 <= before + s.width_m && c0 < station) result = std::max(result, c1 + before);
             }
         }
-        if (result != station && stats_) ++stats_->moved_before_crossing;
         return result;
     }
     // Places the line (one record per contiguous lane group) and its signal posts. Returns true iff a line was placed.
@@ -322,7 +321,14 @@ private:
         }
         if (s.crossing_rule) {
             const double moved = std::clamp(before_crossing(s, station), 0.0, length);
-            if (moved != station) { station = moved; lanes = lanes_at(s.entry, station, s.travel); if (lanes.count == 0) lanes = lanes_at(s.entry, s.station, s.travel); }
+            // The line moves only onto a station that has lanes of its travel (D31): a record's [t_from, t_to] must be a
+            // lane group AT its own station (the acceptance rule of 7.2, checked at decode by 9.2). Slice 7 kept the
+            // moved station with the lanes of the original one. Without lanes there the line stays where it was.
+            if (moved != station) {
+                LaneInfo at_moved = lanes_at(s.entry, moved, s.travel);
+                if (at_moved.count != 0) { station = moved; lanes = std::move(at_moved); if (stats_) ++stats_->moved_before_crossing; }
+                else if (stats_) ++stats_->kept_without_lanes;
+            }
         }
         const double width = mm_round(s.width_m);
         for (const auto& g : lanes.groups) {
@@ -364,9 +370,12 @@ private:
     void entry_control(const NodeInfo& info) {
         const auto& node = *info.node;
         const bool sign = info.control != Control::Signal;
-        if (stats_) { if (sign) ++stats_->sign_nodes; else ++stats_->signal_nodes; }
         const Chosen c = choose(node.osm_id);
-        if (c.role == Role::Junction) return;                       // the junction pass handles it
+        if (c.role == Role::Junction) {                             // the junction pass handles (and counts) it
+            if (stats_ && !listed_junction_holds(node.osm_id)) ++stats_->junction_controls_not_owned;
+            return;
+        }
+        if (stats_) { if (sign) ++stats_->sign_nodes; else ++stats_->signal_nodes; }
         if (c.role == Role::Absent || c.entry == kNoEntry) { if (stats_) ++stats_->controls_not_ours; return; }
         RoadFurniture r;
         r.kind = info.control == Control::Signal ? FurnitureKind::Signal : line_kind(info.control);
@@ -406,9 +415,18 @@ private:
         }
         return false;
     }
+    bool listed_junction_holds(std::int64_t node) const {
+        for (const auto& jn : junctions_)
+            if (jn.decline != JunctionDecline::ClusterTooLarge && std::binary_search(jn.nodes.begin(), jn.nodes.end(), node)) return true;
+        return false;
+    }
     void junction_controls() {
         for (std::size_t j = 0; j < junctions_.size(); ++j) {
             const RoadJunction& jn = junctions_[j];
+            // A ClusterTooLarge record is not the junction of its nodes: every member keeps its own single-node record (D19),
+            // which places or declines the member's controls. Reading the controls here as well emitted a second,
+            // contradicting JunctionDeclined record per control node (D31).
+            if (jn.decline == JunctionDecline::ClusterTooLarge) continue;
             std::vector<NodeInfo> controls;
             for (const auto id : jn.nodes) {
                 const auto* node = find_node(graph_, id);
