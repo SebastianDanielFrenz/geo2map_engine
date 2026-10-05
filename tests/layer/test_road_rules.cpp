@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "bc58b4f720a3be30e2938da20b93b8a789b478f330d9d59d9eba1066d693b85a");
+    CHECK(to_hex(digest) == "7e387db84d3d06a91de799e6394fee6e3b79492500e1cbc1ed4bc931d5aeb69a");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -72,6 +72,17 @@ TEST_CASE("The built-in German rules cover every road class and reproduce today'
     CHECK_FALSE(rules.find_class("residential")->markings_default);
 }
 
+TEST_CASE("The traffic-calming defaults of the German rules", "[layer][road_rules]") {
+    const auto& rules = builtin_road_rules_de();
+    CHECK(rules.calming(ProfileFeatureKind::Hump) == TrafficCalmingRules{3700, 70, 0});
+    CHECK(rules.calming(ProfileFeatureKind::Table) == TrafficCalmingRules{6000, 80, 0});
+    for (const auto kind : {ProfileFeatureKind::Chicane, ProfileFeatureKind::Choker, ProfileFeatureKind::Island})
+        CHECK(rules.calming(kind).height_mm == 0); // lateral kinds: render only
+    for (const auto kind : {ProfileFeatureKind::Bump, ProfileFeatureKind::MiniBumps, ProfileFeatureKind::RumbleStrip, ProfileFeatureKind::Cushion,
+                            ProfileFeatureKind::Hump, ProfileFeatureKind::Table, ProfileFeatureKind::Dip})
+        CHECK(rules.calming(kind).height_mm > 0);
+}
+
 TEST_CASE("The rules loader is strict", "[layer][road_rules]") {
     const auto good = load_text(embedded_text()); REQUIRE(good);
     CHECK(good->classes == builtin_road_rules_de().classes);
@@ -92,6 +103,13 @@ TEST_CASE("The rules loader is strict", "[layer][road_rules]") {
     CHECK_FALSE(load_text(mutated("\"single_lane_both\": true, \"single_lane_mm\": 5000", "\"single_lane_both\": true, \"lane_mm\": 3000, \"single_lane_mm\": 5000")));
     CHECK_FALSE(load_text(mutated("\"min_edge_radius_m\": {", "\"min_edge_radius_m\": { \"footway\": 5,")));
     CHECK_FALSE(load_text(mutated("\"default\": 10,", "\"default\": 0,")));
+    // traffic_calming: every kind present, integers in range, no unknown key.
+    CHECK_FALSE(load_text(mutated("\"island\":       { \"length_mm\": 4000,", "\"islandx\":      { \"length_mm\": 4000,")));
+    CHECK_FALSE(load_text(mutated("\"hump\":         { \"length_mm\": 3700, \"height_mm\": 70,", "\"hump\":         { \"length_mm\": 3700, \"height_mm\": 301,")));
+    CHECK_FALSE(load_text(mutated("\"length_mm\": 3700", "\"length_mm\": 0")));
+    CHECK_FALSE(load_text(mutated("\"length_mm\": 3700", "\"length_mm\": 3700.5")));
+    CHECK_FALSE(load_text(mutated("\"length_mm\": 3700, \"height_mm\": 70, \"width_mm\": 0", "\"length_mm\": 3700, \"height_mm\": 70")));
+    CHECK_FALSE(load_text(mutated("\"length_mm\": 3700, \"height_mm\": 70, \"width_mm\": 0", "\"length_mm\": 3700, \"height_mm\": 70, \"width_mm\": 0, \"carve\": true")));
     // A taper too short for the radius: motorway 3750 mm over 20 m needs R <= 20^2 / (4 * 3.75) = 26.7 m, not 200 m.
     CHECK_FALSE(load_text(mutated("\"lane_add_m\": 60, \"width_change_m\": 60", "\"lane_add_m\": 20, \"width_change_m\": 60")));
     // ... but the same taper is fine once the stated radius allows it.

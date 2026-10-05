@@ -7,6 +7,18 @@
   "sidewalk_mm": 2500,
   "tagged_shoulder_mm": 1500,
   "parking_mm": { "parallel": 2000, "diagonal": 4500, "perpendicular": 5000 },
+  "traffic_calming": {
+    "bump":         { "length_mm": 900,  "height_mm": 70, "width_mm": 0 },
+    "mini_bumps":   { "length_mm": 2000, "height_mm": 30, "width_mm": 0 },
+    "rumble_strip": { "length_mm": 1000, "height_mm": 10, "width_mm": 0 },
+    "cushion":      { "length_mm": 1800, "height_mm": 70, "width_mm": 0 },
+    "hump":         { "length_mm": 3700, "height_mm": 70, "width_mm": 0 },
+    "table":        { "length_mm": 6000, "height_mm": 80, "width_mm": 0 },
+    "chicane":      { "length_mm": 10000, "height_mm": 0, "width_mm": 0 },
+    "choker":       { "length_mm": 6000, "height_mm": 0, "width_mm": 0 },
+    "island":       { "length_mm": 4000, "height_mm": 0, "width_mm": 0 },
+    "dip":          { "length_mm": 4000, "height_mm": 60, "width_mm": 0 }
+  },
   "min_edge_radius_m": {
     "default": 10,
     "motorway": 200,
@@ -96,6 +108,7 @@
     "tagged_shoulder": "Width of a shoulder that a shoulder=* tag asks for on a side where the class has none (primary, tertiary, ...): 1.50 m [assumed]",
     "cycle_lane": "ERA 2010 Radfahrstreifen including marking, 1.85 m [unverified]",
     "parking": "[RASt] Parkstaende 2.0 / 4.5 / 5.0 m [unverified]",
+    "traffic_calming": "Defaults of a traffic_calming=* node without traffic_calming:length. All [assumed], typical German values: hump (Aufpflasterung) 3.7 m x 70 mm, table (Plateauaufpflasterung) 6 m x 80 mm, cushion (Berliner Kissen) 1.8 m x 70 mm, bump (Schwelle) 0.9 m x 70 mm, mini_bumps 2 m x 30 mm, rumble_strip 1 m x 10 mm, dip 4 m x 60 mm deep. height_mm 0 means render only (chicane, choker, island have no height); width_mm 0 means across the full carriageway. The carved shape is widened to the 1 m grid by the minimum ramp (kFeatureMinRampMm), see road_geom_tile.h.",
     "motorway_tapers": "[RAA] Ein-/Ausfaedelungs-Verziehung 60 m [unverified]",
     "other_tapers_and_shift_rates": "[assumed] rule of thumb 1:20 urban, 1:40 rural, 1:60 motorway lateral rate",
     "min_edge_radius": "Tapers are validated so that the lateral S-ramp (max curvature 4 W / a^2 for a lane width W over a taper of length a) stays at or below 1 / min_edge_radius_m. The radii are [assumed]: 200 m motorway, 60 m other arterial classes, 10 m local classes; the design draft's single default of 60 m contradicted its own urban taper lengths."

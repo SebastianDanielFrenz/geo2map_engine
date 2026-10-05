@@ -79,7 +79,7 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
     Reader rd;
     const auto fail = [&]() { return make_error(ErrorCode::InvalidArgument, "road rules: " + rd.err); };
     if (!rd.keys(j, "root", {"format", "country", "min_lane_mm", "added_lane_side", "cycle_lane_mm", "sidewalk_mm", "tagged_shoulder_mm",
-            "parking_mm", "min_edge_radius_m", "classes", "sources"})) return fail();
+            "parking_mm", "traffic_calming", "min_edge_radius_m", "classes", "sources"})) return fail();
     std::string format;
     if (!rd.text(j, "root", "format", format)) return fail();
     if (format != "g2m.road_rules/1") return make_error(ErrorCode::Unsupported, "road rules: format '" + format + "'");
@@ -99,6 +99,21 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
         !rd.integer(*parking, "parking_mm", "parallel", 1, kMaxMm, rules.parking_mm[0]) ||
         !rd.integer(*parking, "parking_mm", "diagonal", 1, kMaxMm, rules.parking_mm[1]) ||
         !rd.integer(*parking, "parking_mm", "perpendicular", 1, kMaxMm, rules.parking_mm[2])) return fail();
+    {
+        static constexpr const char* kKinds[kProfileFeatureKindCount] = {"bump", "mini_bumps", "rumble_strip", "cushion", "hump",
+            "table", "chicane", "choker", "island", "dip"};
+        const auto* calming = rd.field(j, "root", "traffic_calming");
+        if (!calming || !rd.keys(*calming, "traffic_calming", {"bump", "mini_bumps", "rumble_strip", "cushion", "hump", "table",
+                "chicane", "choker", "island", "dip"})) return fail();
+        for (std::size_t k = 0; k < kProfileFeatureKindCount; ++k) {
+            const std::string path = std::string("traffic_calming.") + kKinds[k];
+            const auto* entry = rd.field(*calming, "traffic_calming", kKinds[k]);
+            if (!entry || !rd.keys(*entry, path, {"length_mm", "height_mm", "width_mm"})) return fail();
+            auto& out = rules.traffic_calming[k];
+            if (!rd.integer(*entry, path, "length_mm", 1, 50000, out.length_mm) || !rd.integer(*entry, path, "height_mm", 0, 300, out.height_mm) ||
+                !rd.integer(*entry, path, "width_mm", 0, 100000, out.width_mm)) return fail();
+        }
+    }
     const auto* sources = rd.field(j, "root", "sources");
     if (!sources || !rd.object(*sources, "sources")) return fail();
     for (auto it = sources->begin(); it != sources->end(); ++it)

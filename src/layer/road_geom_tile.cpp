@@ -112,6 +112,9 @@ Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const Road
                 if (!xs) return xs.error();
                 entry.cross_section = std::move(xs->xs); entry.cross_section_decline = xs->decline;
             } else entry.decline = profile.error();
+            const auto features = resolve_profile_features(graph.graph, entry, result.entries.size(), rules);
+            if (!features) return features.error();
+            result.features.insert(result.features.end(), features->begin(), features->end());
             result.entries.push_back(std::move(entry));
         }
     }

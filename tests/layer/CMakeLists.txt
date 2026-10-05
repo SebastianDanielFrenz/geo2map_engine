@@ -29,6 +29,7 @@ add_executable(g2m_layer_tests
   test_road_cross_section.cpp
   test_road_joins.cpp
   test_road_api.cpp
+  test_road_features.cpp
   test_road_profile.cpp
   test_road_reference.cpp
   test_vertical_profile.cpp

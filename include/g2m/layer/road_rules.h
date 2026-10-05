@@ -19,6 +19,18 @@ namespace g2m {
 enum class AddedLaneSide : std::uint8_t { Left = 0, Right = 1 };
 enum class ParkingOrientation : std::uint8_t { Parallel = 0, Diagonal = 1, Perpendicular = 2 };
 
+// Vertical traffic-calming and similar features at a way node (design 8.3, owner decision Q2). The values are the
+// encoded kind byte of roads.geom section 4 and the order of RoadRules::traffic_calming.
+enum class ProfileFeatureKind : std::uint8_t { Bump = 0, MiniBumps = 1, RumbleStrip = 2, Cushion = 3, Hump = 4,
+    Table = 5, Chicane = 6, Choker = 7, Island = 8, Dip = 9 };
+inline constexpr std::size_t kProfileFeatureKindCount = 10;
+// Defaults of one traffic_calming=* value. A kind with height_mm > 0 is carved into the road heights; height 0 is
+// render only (the lateral kinds: chicane, choker, island). width_mm 0 = across the full carriageway.
+struct TrafficCalmingRules {
+    std::int32_t length_mm = 0, height_mm = 0, width_mm = 0;
+    friend bool operator==(const TrafficCalmingRules&, const TrafficCalmingRules&) = default;
+};
+
 struct RoadTaperRules {
     std::int32_t lane_add_m = 0;      // length of a counted lane that starts or ends
     std::int32_t width_change_m = 0;  // length of a width change of a matched band
@@ -47,12 +59,14 @@ struct RoadRules {
     std::int32_t cycle_lane_mm = 0, sidewalk_mm = 0;
     std::int32_t tagged_shoulder_mm = 0; // shoulder=* asks for a shoulder where the class has none
     std::array<std::int32_t, 3> parking_mm{}; // indexed by ParkingOrientation
+    std::array<TrafficCalmingRules, kProfileFeatureKindCount> traffic_calming{}; // indexed by ProfileFeatureKind
     std::vector<RoadClassRules> classes;      // ascending highway value
     ContentHash content_sha256{};             // SHA-256 of the JSON bytes the rules were loaded from
 
     // nullptr for a highway value without rules.
     const RoadClassRules* find_class(std::string_view highway) const;
     std::int32_t parking_width_mm(ParkingOrientation o) const { return parking_mm[static_cast<std::size_t>(o)]; }
+    const TrafficCalmingRules& calming(ProfileFeatureKind k) const { return traffic_calming[static_cast<std::size_t>(k)]; }
 };
 
 // Strict loader: format "g2m.road_rules/1", integers only, unknown or missing

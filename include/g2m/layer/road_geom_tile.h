@@ -18,10 +18,11 @@ struct RoadGeomEntry {
     std::optional<RoadCrossSection> cross_section;
     std::optional<CrossSectionDecline> cross_section_decline;
 };
-// Vertical traffic-calming and similar features at a way node (design 8.3, owner decision Q2: every feature that
-// has a height is carved; lateral kinds render only). Order is the encoded kind byte.
-enum class ProfileFeatureKind : std::uint8_t { Bump = 0, MiniBumps = 1, RumbleStrip = 2, Cushion = 3, Hump = 4,
-    Table = 5, Chicane = 6, Choker = 7, Island = 8, Dip = 9 };
+// A traffic-calming feature at a shape node inside a stretch (design 8.3, owner decision Q2: every feature that has
+// a height is carved, the lateral kinds render only; ProfileFeatureKind is declared in road_rules.h).
+// Lateral extent: width_mm 0 = across the whole carriageway (carriageway_edges), else that width centred on it;
+// a cushion is carved across the lane group because a partial width cannot be represented on the 1 m grid.
+// height_mm is a height above the profile, except for a Dip where it is the depth below it.
 struct ProfileFeature {
     std::size_t entry_index = 0;     // into RoadGeomTile::entries; the entry has a cross-section
     std::int64_t node_id = 0;
@@ -42,6 +43,19 @@ struct RoadGeomTile {
     // features (consumers fall back to the symmetric RoadAttributes::width_mm path).
     std::uint16_t encoding = kRoadGeomEncoding;
 };
+// Feature shape (owner decision Q2: representable on the 1 m grid). Every carved feature is a plateau with two C1
+// smooth-step ramps (road_smooth_step), at least kFeatureMinRampMm per side, so the narrowest carved feature is 2 m
+// long. Bump, MiniBumps, RumbleStrip, Cushion, Dip and Hump have no plateau: ramp = half the length. A Table ramps
+// at 1:kFeatureTableRampRatio (ramp = 10 x height), clamped to [kFeatureMinRampMm, length / 2]. `length_mm` stays
+// the nominal length; the carved length is feature_effective_length_m.
+inline constexpr std::int32_t kFeatureMinRampMm = 1000;
+inline constexpr std::int32_t kFeatureTableRampRatio = 10;
+double feature_ramp_m(const ProfileFeature& f) noexcept;             // per side
+double feature_effective_length_m(const ProfileFeature& f) noexcept; // max(length, 2 x ramp)
+// The carved height of one feature at station s of its entry: 0 for a render-only feature, a plateau of height h
+// with smooth-step ramps otherwise, negative for a Dip. Pure, + - * / only.
+double feature_height_contribution_m(const ProfileFeature& f, double station_m) noexcept;
+
 // `context` (optional) is a canonical graph holding every way incident to the
 // nodes of graph.graph's ways (merge_road_graphs over the tiles named by
 // road_context_dependencies). Stretch extents, join headings and profiles then
@@ -50,6 +64,20 @@ struct RoadGeomTile {
 Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph,
     const RoadDemSampler& dem, const RoadProfileLimits& limits = {}, const RoadGraph* context = nullptr,
     const RoadRules& rules = builtin_road_rules_de());
+// Sum of every carved feature of `entry` at station s (metres, 0 without one). Features are sorted by entry, so this
+// is a binary search plus the entry's own features. A consumer adds it to the vertical profile and the crown:
+// z = profile(s) + crown(t) + feature_height_m(tile, entry, s), over the feature's lateral extent.
+double feature_height_m(const RoadGeomTile& tile, std::size_t entry, double s) noexcept;
+// The features of one entry from the node tags of its way (build_road_geom_tile calls this). Every INTERIOR node of
+// the stretch (end nodes belong to the junction, P2) with a recognised `traffic_calming` value (bump, mini_bumps,
+// rumble_strip, cushion, hump, table, chicane, choker, island, painted_island as Island, dip; anything else, `yes`
+// included, is ignored). Length: a clean `traffic_calming:length` in metres (0 < L <= 50, Tagged) else the rules
+// default (Inferred). A feature whose carved length would cross a stretch end is shortened to fit (Derived); one
+// with less than 1 m to either end (render-only kinds: 0.5 m) is dropped. The station is that of the reference
+// point nearest the node: the knot itself or the middle of the rounded corner arc. Sorted by (station, node id).
+// `entry` needs its profile; an entry without a cross-section has no features.
+Result<std::vector<ProfileFeature>> resolve_profile_features(const RoadGraph& graph, const RoadGeomEntry& entry,
+    std::size_t entry_index, const RoadRules& rules);
 Result<void> validate_road_geom_tile(const RoadGeomTile& tile);
 Result<TileBody> encode_road_geom(const RoadGeomTile& tile);
 Result<RoadGeomTile> decode_road_geom(const TileBody& body);

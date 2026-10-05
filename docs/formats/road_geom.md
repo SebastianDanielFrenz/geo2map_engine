@@ -72,8 +72,27 @@ cross-section), `svarint node_id`, binary64 station, `u8 kind` (0..9: Bump,
 MiniBumps, RumbleStrip, Cushion, Hump, Table, Chicane, Choker, Island, Dip),
 `u8 carve` (0 render only, 1 carved), `varint length_mm` (at most 50000),
 `varint height_mm` (at most 300), `varint width_mm` (0 = full carriageway),
-`u8 provenance` (0..3). The section is empty until street fidelity P1 slice 7
-fills it from node tags.
+`u8 provenance` (0..3: 0 Tagged, 1 Derived, 2 Inferred, 3 Official as in
+`Provenance`). Street fidelity P1 slice 7 fills it from the way-node tag
+`traffic_calming` of every interior shape node of an entry's stretch (end nodes
+belong to the junction and are skipped; unknown values and `yes` are ignored;
+`painted_island` counts as Island). The nominal length is the clean
+`traffic_calming:length` in metres (0 < L <= 50, Tagged) or the rules default
+(`data/road_rules/de.json`, Inferred); a feature that would leave the stretch is
+shortened to fit (Derived) or dropped when less than 1 m of room remains. `station`
+is the reference point nearest the node (a clothoid knot, or the middle of the
+rounded corner arc before it). `carve` is 1 exactly when `height_mm` > 0; the
+lateral kinds (Chicane, Choker, Island) have height 0 and are render only.
+
+Height function (`feature_height_m`, sum over the entry's features, only + - * /):
+a plateau with two C1 smooth-step ramps (`road_smooth_step`). The ramp is half the
+stored length, but at least 1 m (`kFeatureMinRampMm`, the grid's Nyquist limit), and
+for a Table at most `10 * height` (1:10, `kFeatureTableRampRatio`), again not under
+1 m. The carved length is `max(length_mm, 2 * ramp)`, so the narrowest carved feature
+is 2 m; the nominal length stays in the file and the carved length is computed.
+Dip is a depression (negative height). `width_mm` 0 means the whole carriageway;
+cushions are carved across the lane group they sit in like any other feature
+(owner decision 2026-10-05). Several features add.
 
 ## Cross-section validation
 

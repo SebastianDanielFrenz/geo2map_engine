@@ -742,8 +742,8 @@ edge continuity over every degree-2 join of both fixtures, context invariance).
 Slice 5: `roads.geom` encoding 6 (`kRoadGeomEncoding`; 5 still decodes, `RoadGeomTile::encoding`): section 1 is the
 roads.graph encoding-5 payload, section 2 unchanged, section 3 one cross-section record per entry
 (`RoadGeomEntry::cross_section` / `cross_section_decline`, built by `build_road_geom_tile` via
-`resolve_cross_section` with `builtin_road_rules_de()`), section 4 profile features (`ProfileFeature`, empty
-until slice 7). Validation per design 7.2 in `validate_road_geom_tile`. Config hash carries `xs=1 enc=6
+`resolve_cross_section` with `builtin_road_rules_de()`), section 4 profile features (`ProfileFeature`, filled
+in slice 7). Validation per design 7.2 in `validate_road_geom_tile`. Config hash carries `xs=1 enc=6
 rules=de:<hex>`. Golden `g3xs` (`tests/golden/golden_g3xs.cpp`, `testdata/golden/g3xs_golden.txt`, Windows =
 Linux), fuzz `Target::RoadCrossSectionEval`. Tests: `test_road_geom_xs.cpp`. Roadgeom golden body SHA is now
 `17d9b7c7...5ee2f9` (was `4dcfcbca...445f8`, the encoding-5 body, still reproduced by the test).
@@ -752,3 +752,15 @@ kerb line, `kRoadKerbHeightM`), `driving_lanes_at` (`LaneQuery`); implemented in
 `src/layer/road_cross_section_api.cpp`. `include/g2m/layer/road_envelope.h` / `src/layer/road_envelope.cpp`:
 `envelope_road_segments(tile, l0_key, spacing_m)` (grip-raster capsules from the same footprint; half-width = mean over
 the station pair, not the design text's max, because the round caps already overpaint). Test: `test_road_api.cpp`.
+Slice 7: profile features (D-SF8, owner decision Q2). `src/layer/road_features.cpp`: `resolve_profile_features` (called by
+`build_road_geom_tile` per entry with a cross-section) turns `traffic_calming` on the interior nodes of a stretch into
+`ProfileFeature` records; defaults per kind live in `data/road_rules/de.json` (`traffic_calming`, `TrafficCalmingRules`,
+`RoadRules::calming`; `ProfileFeatureKind` moved to `road_rules.h`). Every kind with a height is carved (bump,
+mini_bumps, rumble_strip, cushion, hump, table, dip as a negative depth), chicane/choker/island are render only. The
+height function `feature_height_m` / `feature_height_contribution_m` is a plateau with two C1 smooth-step ramps;
+`kFeatureMinRampMm` = 1000 (1 m ramp per side, grid property, not a country rule), tables use 1:10 ramps
+(`kFeatureTableRampRatio`); carved length = `max(length, 2 * ramp)` computed, nominal length stored. Features are
+shortened to stay inside the stretch (Derived) or dropped under 1 m of room. The `de.json` hash changed
+(`7e387db8...b69a`), so the config hash and release id changed; golden `g3xs` changed in exactly one tile (the
+frankfurt_hoechst tile that holds the fixture's one island node, +22 bytes). Tests: `test_road_features.cpp`, rules tests
+in `test_road_rules.cpp`; `[.][diag]` case prints the effective carved shapes on the 1 m grid.
