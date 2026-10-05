@@ -64,6 +64,11 @@ std::vector<Entry> compute_g2roads();
 // testdata/golden/g2paint_golden.txt.
 std::vector<Entry> compute_g2paint();
 
+// G3xs (golden_g3xs.cpp, street fidelity P1 slice 5): roads.geom encoding 6 (cross-sections) over the
+// committed frankfurt_hoechst and hoechst_a66 OSM fixtures - per-tile encoded bodies plus every stretch's
+// band count, join kinds and boundary values; testdata/golden/g3xs_golden.txt.
+std::vector<Entry> compute_g3xs();
+
 // "name count hash\n" per entry, the golden file's line format.
 std::string format(const std::vector<Entry>& entries);
 

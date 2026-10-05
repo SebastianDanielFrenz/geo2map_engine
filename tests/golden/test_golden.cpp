@@ -82,6 +82,12 @@ TEST_CASE("G2paint golden hashes match testdata/golden/g2paint_golden.txt", "[go
     check_against("g2paint_golden.txt", g2m_golden::compute_g2paint());
 }
 
+// Street fidelity P1 slice 5: roads.geom encoding 6 (cross-sections) over the committed OSM fixtures
+// (golden_g3xs.cpp); the same file is compared Windows vs Linux by tools/ci.ps1.
+TEST_CASE("G3xs golden hashes match testdata/golden/g3xs_golden.txt", "[golden][road_cross_section]") {
+    check_against("g3xs_golden.txt", g2m_golden::compute_g3xs());
+}
+
 // dem.h/osm.h/landcover.h all document their sink output as independent of
 // `jobs` (only DemImportReport's scheduling-dependent counters are not, and
 // the fixture's 2 unique 1km DGM1 keys never evict from the default 256-

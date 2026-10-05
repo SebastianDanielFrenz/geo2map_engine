@@ -36,16 +36,19 @@ TEST_CASE("roads.geom round trips complete profiles and explicit declines", "[la
     REQUIRE(geometry->entries.size() == 2); REQUIRE(geometry->entries[0].profile); REQUIRE(geometry->entries[1].decline);
     CHECK(geometry->entries[1].decline->code == ErrorCode::Unsupported);
     const auto body = encode_road_geom(*geometry); REQUIRE(body);
-    CHECK(to_hex(content_hash(*encode_body(*body))) == "4dcfcbca39838a8922c2749a9513eae7eecdbb398dec9a81b724d2970ff445f8");
+    CHECK(to_hex(content_hash(*encode_body(*body))) == "17d9b7c708b1bda9513ae80f8be1255d1f7c7cc1d6977af8e98a24dfd05ee2f9");
     const auto decoded = decode_road_geom(*body); REQUIRE(decoded);
     CHECK(decoded->source == graph);
     CHECK(decoded->entries[0].profile->at(50)->height_m == 100);
     CHECK(decoded->entries[1].decline->message == geometry->entries[1].decline->message);
     CHECK(*encode_body(*encode_road_geom(*decoded)) == *encode_body(*body));
-    for (std::size_t i = 0; i < body->sections[1].data.size(); ++i) {
-        auto truncated = *body; truncated.sections[1].data.resize(i); CHECK_FALSE(decode_road_geom(truncated));
+    CHECK(body->encoding == 6); REQUIRE(body->sections.size() == 4);
+    for (std::size_t section = 1; section < 4; ++section) {
+        for (std::size_t i = 0; i < body->sections[section].data.size(); ++i) {
+            auto truncated = *body; truncated.sections[section].data.resize(i); CHECK_FALSE(decode_road_geom(truncated));
+        }
+        auto trailing = *body; trailing.sections[section].data.push_back(0); CHECK_FALSE(decode_road_geom(trailing));
     }
-    auto trailing = *body; trailing.sections[1].data.push_back(0); CHECK_FALSE(decode_road_geom(trailing));
     geometry->entries[0].profile->vertical.segments[0].grade0 = 1.0; CHECK_FALSE(encode_road_geom(*geometry));
     geometry = build_road_geom_tile(graph, *dem); geometry->entries.pop_back(); CHECK_FALSE(encode_road_geom(*geometry));
     geometry = build_road_geom_tile(graph, *dem);

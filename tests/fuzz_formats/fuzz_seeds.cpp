@@ -186,7 +186,8 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
     case Target::Elev: return elev_bodies();
     case Target::Landcover: return landcover_bodies();
     case Target::Osm: return osm_bodies();
-    case Target::Roadgeom: {
+    case Target::Roadgeom:
+    case Target::RoadCrossSectionEval: {
         g2m::RoadGraphTile graph; graph.key = g2m_test::home_tile();
         const auto x = graph.key.min_easting() * 1000, y = graph.key.min_northing() * 1000;
         graph.graph.nodes = {{1, {x + 10000, y + 10000}}, {2, {x + 80000, y + 10000}}};
@@ -195,9 +196,23 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         g2m::HeightTile height; height.key = graph.key.child(0, 0).child(0, 0); height.h.fill(25600);
         const g2m::HeightTile* views[] = {&height}; auto dem = must(g2m::RoadDemSampler::make(views), "road geom DEM");
         auto tile = must(g2m::build_road_geom_tile(graph, dem), "road geom profile");
-        auto first = body(must(g2m::encode_road_geom(tile), "road geom encode"));
-        tile.entries[0].profile.reset(); tile.entries[0].decline = g2m::make_error(g2m::ErrorCode::Unsupported, "fixture decline");
-        return {std::move(first), body(must(g2m::encode_road_geom(tile), "road geom decline encode"))};
+        if (!tile.entries[0].cross_section) { std::fprintf(stderr, "fuzz seeds: no cross-section\n"); std::abort(); }
+        const auto first_body = must(g2m::encode_road_geom(tile), "road geom encode");
+        // The same tile as an encoding-5 body: legacy graph section, the unchanged profile section.
+        const auto legacy_graph = must(g2m::encode_road_graph(tile.source, g2m::kRoadGraphEncodingLegacy), "road geom legacy graph");
+        const g2m::TileBody legacy{g2m::kRoadGeomEncodingLegacy, 1, {legacy_graph.sections[0], first_body.sections[1]}};
+        auto first = body(first_body);
+        // Features and a non-trivial cross-section (a turn pocket and a placement offset).
+        auto featured = tile; auto& xs = *featured.entries[0].cross_section;
+        xs.offset = {g2m::OffsetMode::Ramps, 300, 10000, -200, 20000};
+        xs.start_join = {g2m::JoinKind::LaneChange, 11, 3500}; xs.bands.front().turn = g2m::kTurnLeft | g2m::kTurnThrough;
+        featured.features.push_back({0, 1, 0.0, g2m::ProfileFeatureKind::Table, true, 6000, 80, 0, g2m::Provenance::Tagged});
+        featured.features.push_back({0, 2, featured.entries[0].profile->reference.length_m, g2m::ProfileFeatureKind::Chicane, false, 0, 0, 0, g2m::Provenance::Tagged});
+        auto with_features = body(must(g2m::encode_road_geom(featured), "road geom features encode"));
+        tile.entries[0].cross_section.reset(); tile.entries[0].cross_section_decline = g2m::CrossSectionDecline{g2m::CrossSectionDeclineCode::NoCountedLane, 0};
+        auto cross_decline = body(must(g2m::encode_road_geom(tile), "road geom cross-section decline encode"));
+        tile.entries[0].cross_section_decline.reset(); tile.entries[0].profile.reset(); tile.entries[0].decline = g2m::make_error(g2m::ErrorCode::Unsupported, "fixture decline");
+        return {std::move(first), body(legacy), std::move(with_features), std::move(cross_decline), body(must(g2m::encode_road_geom(tile), "road geom decline encode"))};
     }
     case Target::Roadgraph: {
         g2m::RoadGraphTile tile;

@@ -46,7 +46,7 @@ flowchart TB
 
 What the diagram hides, in short:
 
-- **Terrain heights are not carved on the server.** `g2m.terrain.height` is a plain DGM1 pyramid. Road carving into the height tile happens in `racing_game` today (stage "client derivations" below). A server-side carving step is planned (G3-D).
+- **Terrain heights are not carved on the server.** `g2m.terrain.height` is a plain DGM1 pyramid. Road carving into the height tile happens in `racing_game` today (stage "client derivations" below). A server-side carving step is planned (G3-D); once it ships the game consumes the carved heights and its own carve step is removed (owner decision 2026-10-05).
 - **`roads.graph` and `roads.geom` are opt-in.** They are only added to a release when asked for, so the release id of terrain-only releases did not change when they were added.
 - **Some things never travel over the wire.** Render meshes, LOD selection, the road colour raster and physics surface ids are computed in the client from tiles.
 
@@ -105,10 +105,10 @@ Details: [terrain.md](terrain.md).
 |---|---|
 | Inputs | `roads.graph`: `g2m.src.osm` for the 3 x 3 level-2 neighbourhood. `roads.geom`: the same-tile `roads.graph`, the `roads.graph` tiles that hold every way incident to a node of its ways (stretch context), plus every `g2m.elev.base` level-0 tile the road segments touch (margin 65 m). |
 | Code | `src/layer/derive_road_graph.cpp`, `road_graph.cpp`, `road_attributes.cpp`, `osm_roads.cpp`; `derive_road_geom.cpp`, `road_reference.cpp`, `road_profile.cpp`, `vertical_profile.cpp`, `road_dem_dependencies.cpp`, `road_dem_sampler.cpp`; `road_rules.cpp` with `data/road_rules/de.json` (embedded, loader only so far). Builtin wiring: `include/g2m/server/builtin_release.h` (`BuiltinTerrainDerivers::ordered(include_roads, include_geometry)`). |
-| Output | `roads.graph` v1, encoding 5 (nodes carry whitelisted tags; 4 still decodes; [road_graph.md](../formats/road_graph.md)), level 2. `roads.geom` v1, encoding 5 ([road_geom.md](../formats/road_geom.md)), level 2: reference line, vertical profile, declined stretches with reasons. |
+| Output | `roads.graph` v1, encoding 5 (nodes carry whitelisted tags; 4 still decodes; [road_graph.md](../formats/road_graph.md)), level 2. `roads.geom` v1, encoding 6 ([road_geom.md](../formats/road_geom.md)), level 2: reference line, vertical profile, declined stretches with reasons, plus (street fidelity P1 slice 5) one lane-aware cross-section per profiled stretch (bands, anchor, ramps, offset correction, join records) and a feature section for vertical traffic-calming features (empty until slice 7). Encoding 5 bodies still decode (no cross-sections). |
 | Halo | `roads.graph` uses a 128 m halo and complete ways. An edge belongs to the tile that contains its midpoint (integer mm). `roads.geom` reads DEM tiles up to 65 m outside the road. |
-| Config hash | graph: `g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours node-tags=1 enc=5`. geom: `g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph join-bisector=1 context=nodes`. |
-| Tests | `tests/layer/test_road_*.cpp`, `test_vertical_profile.cpp`; golden `g2roads_golden.txt`; probe `tools/road_probe`. |
+| Config hash | graph: `g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours node-tags=1 enc=5`. geom: `g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=6 rules=de:<sha256 of de.json> join-bisector=1 context=nodes`. The rules hash ties a release id to the exact `data/road_rules/de.json` bytes. |
+| Tests | `tests/layer/test_road_*.cpp`, `test_vertical_profile.cpp`; goldens `g2roads_golden.txt` and `g3xs_golden.txt` (encoding-6 bodies and cross-section boundaries of the two committed OSM fixtures, compared Windows = Linux); probe `tools/road_probe`. |
 | Consumers | `racing_game`: road surface patch (carving into the level-0 height tile), road visuals, bridge structures, NPC traffic and trucks. |
 | Status | Slices A and B of G3 implemented. C has a tested foundation, acceptance open. D to F open. See [roads.md](roads.md) and [../g3_road_pipeline.md](../g3_road_pipeline.md). |
 
@@ -122,7 +122,7 @@ Details: [terrain.md](terrain.md).
 | Physics tile fill (255 m tiles, 256 samples, node-registered, anchored on DGM1 cell centres by integer offset copy) | `include/g2m/phys/fill_physics_heights.h` | No interpolation. |
 | Physics surface ids per cell | `include/g2m/phys/fill_physics_surfaces.h` | |
 | Residency, gate, prefetch, look-ahead | `include/g2m/phys/{resident_heights,height_tile_loader,physics_streamer}.h` | |
-| Road carving into a copy of the level-0 height tile | `racing_game/core/src/world_terrain.cpp` (`fetch_and_decode`) | Planned to move to the server (G3-D). |
+| Road carving into a copy of the level-0 height tile | `racing_game/core/src/world_terrain.cpp` (`fetch_and_decode`) | Stays in the game until G3-D ships server-side carved heights; then the game step is removed, not kept as a fallback (owner decision 2026-10-05). |
 
 Details: [client_side.md](client_side.md).
 
@@ -280,7 +280,7 @@ flowchart TB
   G7["G7 hosted server - planned"]
   G8["G8 worldwide - planned"]
   P0["P0 OSM tag coverage probe - done"]
-  P1["P1 lane-aware cross-section - design only"]
+  P1["P1 lane-aware cross-section - slices 1-5 done, 6-7 open"]
   P2["P2 junction surfaces - planned"]
   P3["P3 markings - planned"]
   P4["P4 buildings - planned"]
@@ -317,7 +317,7 @@ flowchart TB
 | G3 E: ribbons, markings, bridge bodies | Open | section E |
 | G3 F: route acceptance | Open | section F |
 | Street fidelity P0 (tag probe) | Done | [../osm_tag_coverage_home.md](../osm_tag_coverage_home.md) |
-| Street fidelity P1 (lane-aware cross-section) | Design only | [../street_fidelity/p1_cross_section_design.md](../street_fidelity/p1_cross_section_design.md) |
+| Street fidelity P1 (lane-aware cross-section) | Slices 1 to 5 implemented (context, node tags, base and join resolution, encoding 6); consumer API and features open | [../street_fidelity/p1_cross_section_design.md](../street_fidelity/p1_cross_section_design.md) |
 | Street fidelity P2 to P8 | Planned, nothing written | [../street_fidelity/plan.md](../street_fidelity/plan.md) section 6 |
 | HTTP server, packs, hosted CDN (G6, G7) | Planned | [../formats/protocol.md](../formats/protocol.md), [../formats/pack.md](../formats/pack.md) |
 
@@ -428,10 +428,10 @@ Any change to a deriver's config text, a layer version, an encoding version, a c
 
 These are listed, not resolved. Each needs an owner decision or a check.
 
-1. **G3 endpoint heights vs class grade.** [../g3_road_pipeline.md](../g3_road_pipeline.md) (checkpoint, top) says the priority between endpoint heights and class grade "needs an owner choice". [../g3_profile_foundation.md](../g3_profile_foundation.md) says endpoint heights and class bounds "retain priority". `racing_game/PLAN.md` G3 status says the grade-policy question "is withdrawn" (it came from reading an underpass as a deck slope). The geo2map docs still show it pending. Which is current?
-2. **HVBG LoD2 licence.** `geo2map_data/SOURCES.md` records dl-de/**by**-2.0 (attribution required) after reading the primary metadata. [../street_fidelity/plan.md](../street_fidelity/plan.md) and `PLAN.md` 3.9, 5.3 and 13 plan with dl-de/**zero**-2.0 for HVBG products. The plans need updating before buildings ship, and the attribution list must include it.
+1. **G3 endpoint heights vs class grade.** [../g3_road_pipeline.md](../g3_road_pipeline.md) (checkpoint, top) says the priority between endpoint heights and class grade "needs an owner choice". [../g3_profile_foundation.md](../g3_profile_foundation.md) says endpoint heights and class bounds "retain priority". `racing_game/PLAN.md` G3 status says the grade-policy question "is withdrawn" (it came from reading an underpass as a deck slope). The geo2map docs still show it pending. **Resolved 2026-10-05 (owner):** measured endpoint heights win. Where honouring them needs a grade steeper than the class bound, the profile keeps the endpoint heights and the stretch is flagged as a grade exception (the existing exception mechanism), not clamped. [../g3_road_pipeline.md](../g3_road_pipeline.md) and [../g3_profile_foundation.md](../g3_profile_foundation.md) say so now; the `racing_game` note about a withdrawn question stays true for the underpass case.
+2. **HVBG LoD2 licence.** `geo2map_data/SOURCES.md` records dl-de/**by**-2.0 (attribution required) after reading the primary metadata. [../street_fidelity/plan.md](../street_fidelity/plan.md) and `PLAN.md` 3.9, 5.3 and 13 plan with dl-de/**zero**-2.0 for HVBG products. **Resolved 2026-10-05 (documents):** `street_fidelity/plan.md` and `PLAN.md` 3.9, 5.3 and 13 now plan with dl-de/by-2.0 and attribution for LoD2; the attribution list must include it before buildings ship.
 3. **Attribution is not shown to players.** `racing_game`'s manifest lists only the DGM1 attribution. OSM (ODbL), WorldCover (CC BY 4.0) and Copernicus are in use or downloaded, but the credits screen (R5) is not built.
-4. **Where road carving lives.** Today `racing_game` carves a road patch into the level-0 height tile after decode. The roadmap (G3-D) says the server derives carved heights and `terrain.class` from the same geometry. Until G3-D, two consumers that skip the game's step would see uncarved terrain. Decide whether the game step is removed or stays as a fallback.
+4. **Where road carving lives.** Today `racing_game` carves a road patch into the level-0 height tile after decode. The roadmap (G3-D) says the server derives carved heights and `terrain.class` from the same geometry. Until G3-D, two consumers that skip the game's step would see uncarved terrain. **Resolved 2026-10-05 (owner):** carving stays in `racing_game` (`WorldTerrain::fetch_and_decode`, level 0) until G3-D ships server-side carved heights. When G3-D lands, the game consumes the server's carved heights and its own carve step is REMOVED, not kept as a fallback: one source of truth for render and physics (same principle as the G2M-010 grip rule).
 5. **`CLAUDE.md` of this repo is partly stale.** It still describes `elev.base`, `terrain.height`, `bake`, roads and the road probe as not built or planned in places. This docs folder is checked against code; `CLAUDE.md` should be reconciled.
 6. **PLAN.md vs code, terrain.** PLAN.md 6.1 describes multi-source blending and a 16 m halo for `elev.base`. The code is DGM1-only without halo. `g2m.terrain.class` has no deriver although the slot exists.
 7. **PLAN.md vs code, CLI.** PLAN.md 3.10 and 5.5 describe a CLI that differs from the real `g2m_tiler` subcommands. `apps/g2m_server` and `g2m_cli` are not built.
@@ -440,7 +440,7 @@ These are listed, not resolved. Each needs an owner decision or a check.
 10. **85 DGM1 halo tiles without coverage.** Accepted until the GLO-30 fallback exists. Heights there are NoData.
 11. **Pin values differ between documents.** `bridges/physics_sim/physics_sim.pin` holds `b90a531...`; older PLAN text mentions `5c648a5` and `be36545`; `racing_game` pins other commits. Which is the supported combination? Check `git submodule status` in `racing_game`.
 12. **Is roads baked for the home store?** `bake` accepts the road layers (code verified), but this review did not run it and did not check whether `S:\claude_code\geo2map_cache\home-r1\baked` already holds `roads.*` tiles.
-13. **Street fidelity plan is partly outdated.** Its section 9 says nothing is downloaded; since 2026-10-05 LoD2, DOM1, DOP20, Basis-DLM, tree datasets, HRL and phenology are downloaded ([section 5](#5-data-sources)).
+13. **Street fidelity plan is partly outdated.** Resolved 2026-10-05: its section 9 now says what has been downloaded. Since 2026-10-05 LoD2, DOM1, DOP20, Basis-DLM, tree datasets, HRL and phenology are downloaded ([section 5](#5-data-sources)).
 14. **Road curvature exceptions: decided or not?** `tools/road_probe/README.md` says the owner must choose how served geometry represents curvature exceptions. [../g3_reference_lines.md](../g3_reference_lines.md) says the owner continuation selects "preservation with explicit curvature exceptions", and the `roads.geom` config hash text contains `curvature-exceptions=true`. The probe README reads as undecided, the other two as decided.
 15. **Stale bake flags in a format doc.** Resolved 2026-10-05: road_graph.md and g3_road_pipeline.md now say `--levels 2-2` (the real tiler flag, `apps/g2m_tiler/main.cpp`).
 

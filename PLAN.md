@@ -441,7 +441,8 @@ GET /releases/{rid}/hashes/{layer}/{scheme}/{level}/{x}/{y}
   - ODbL covers the data, not the game code or art.
 - **Copernicus DEM:** attribution text for modified data ("produced using Copernicus WorldDEM-30 ..." per the licence; exact wording from the licence PDF [unverified: the PDF did not parse]).
 - **ESA WorldCover (CC BY 4.0):** attribution plus indication of changes.
-- **Hessen DGM1/LoD2 (dl-de/zero-2-0):** no conditions. If credited ("ATKIS-DGM1 © HVBG"), modifications must be marked.
+- **Hessen DGM1 (dl-de/zero-2-0):** no conditions. If credited ("ATKIS-DGM1 © HVBG"), modifications must be marked.
+- **Hessen LoD2 3D building models (dl-de/by-2-0, corrected 2026-10-05):** the primary metadata record requires attribution (not share-alike): "Datenquelle: Hessische Verwaltung für Bodenmanagement und Geoinformation (HVBG), 3D-Gebäudemodelle LoD2, dl-de/by-2.0". The manifest carries it per source; see `S:\claude_code\geo2map_data\SOURCES.md`.
 - **Other German states:** dl-de/by-2-0 or CC BY 4.0 require attribution. The manifest carries it per source.
 - **Mapterhorn:** per-source licences in its `attribution.json`.
 - **Custom endpoints** are responsible for their own data. The client simply displays whatever attributions their manifest lists.
@@ -839,7 +840,7 @@ across all 533 interior tiles, so these three specifically now read
   - 11 classes (tree cover, shrubland, grassland, cropland, built-up, bare, snow, water, wetland, mangroves, moss).
   - Versions: 2020 v100 and 2021 v200; static.
 - **Buildings:** OSM footprints.
-  - Hessen LoD2 CityGML 1.0 (dl-de/zero, EPSG:25832 + DHHN2016, standardised roofs, annual updates) is an optional later upstream for exact roofs in Hessen [size per Kreis unverified].
+  - Hessen LoD2 CityGML 1.0 (dl-de/by-2.0, attribution required; EPSG:25832 + DHHN2016, standardised roofs, annual updates) is an optional later upstream for exact roofs in Hessen [size per Kreis unverified].
 
 ### 5.4 Home region: area and first-download estimate
 
@@ -895,7 +896,7 @@ Principles:
 - **Hosted server:** COG range reads, or a mirror (124 GB).
 - **Cadence:** static (2021 v200).
 
-**Buildings (licences: ODbL; dl-de/zero for LoD2).**
+**Buildings (licences: ODbL; dl-de/by-2.0 for LoD2, attribution required).**
 - **Development now:** OSM footprints, via the same extract as roads.
 - **Integrated server:** same as roads.
 - **Hosted server:** same as roads, plus optional Hessen LoD2 (manual) later.
@@ -1355,7 +1356,7 @@ Nothing below has been downloaded or installed. The setup scripts will install o
 | Copernicus GLO-30 N50E008 (+ N49E008 if needed) | Copernicus DEM licence | 25–40 MB each [unverified] | range reads (or one download) from AWS open data |
 | ESA WorldCover v200 N48E006 map | CC BY 4.0 | ~47 MB average [estimate] | range reads (or one download) from AWS open data |
 | CC0 dev textures (13 sets, 2K) from ambientCG / Poly Haven | CC0 1.0 | 150–400 MB [estimate] | setup script, listed per asset |
-| Hessen LoD2 for the region (optional, G5+) | dl-de/zero-2-0 | unknown [unverified] | manual |
+| Hessen LoD2 for the region (optional, G5+) | dl-de/by-2-0 (corrected 2026-10-05) | 1.2 GB (downloaded 2026-10-05) | manual |
 
 **Later (hosted server, G7/G8; each approved separately at that time):**
 - Germany DGM1, all states: 0.4–1 TB as delivered [estimate].

@@ -39,7 +39,11 @@ LayerDesc road_geom_desc() {
         {std::string(kRoadGraphLayer), std::string(kElevBaseLayer)}, "complete parametric road profiles and explicit declined stretches"};
 }
 ContentHash RoadGeomDeriver::config_hash() const {
-    return Sha256::of("g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph join-bisector=1 context=nodes");
+    // xs=1 enc=6: encoding-6 cross-section and feature sections; the rules hash ties a release to the exact de.json bytes.
+    const auto& rules_hash = builtin_road_rules_de().content_sha256;
+    const std::string text = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph"
+        " xs=1 enc=6 rules=de:" + to_hex(std::span<const std::uint8_t>(rules_hash.data(), rules_hash.size())) + " join-bisector=1 context=nodes";
+    return Sha256::of(text);
 }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {
     if (!target.valid() || target.level != 2) return {}; return {{std::string(kRoadGraphLayer), target}};

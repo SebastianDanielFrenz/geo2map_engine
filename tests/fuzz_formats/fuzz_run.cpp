@@ -17,9 +17,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -151,9 +153,34 @@ void run(Target target, std::span<const std::uint8_t> data) {
     case Target::Roadgeom: {
         const auto body = body_of(data); if (!body) return;
         const auto tile = g2m::decode_road_geom(*body); if (!tile) return;
+        if (tile->encoding == g2m::kRoadGeomEncodingLegacy) {
+            // A legacy body decodes, carries no cross-sections, and is never written back.
+            check(!g2m::encode_road_geom(*tile).ok(), "roads.geom: legacy encode refused");
+            for (const auto& entry : tile->entries) check(!entry.cross_section && !entry.cross_section_decline, "roads.geom: legacy cross-section");
+            check(tile->features.empty(), "roads.geom: legacy features");
+            return;
+        }
         const auto encoded = g2m::encode_road_geom(*tile); check(encoded.ok(), "roads.geom: encode");
         const auto back = g2m::decode_road_geom(*encoded); check(back.ok(), "roads.geom: decode");
         const auto again = g2m::encode_road_geom(*back); check(again.ok() && *again == *encoded, "roads.geom: stable round trip");
+        return;
+    }
+    case Target::RoadCrossSectionEval: {
+        const auto body = body_of(data); if (!body) return;
+        const auto tile = g2m::decode_road_geom(*body); if (!tile) return;
+        for (const auto& entry : tile->entries) {
+            if (!entry.cross_section) continue;
+            const auto& xs = *entry.cross_section; std::array<double, 33> t{};
+            const std::span<double> out(t.data(), xs.bands.size() + 1);
+            for (int i = 0; i <= 16; ++i) {
+                const double s = xs.length_m * static_cast<double>(i) / 16.0;
+                check(xs.boundaries_at(s, out), "xs eval: boundaries_at");
+                for (std::size_t j = 0; j < out.size(); ++j) {
+                    check(std::isfinite(out[j]), "xs eval: finite");
+                    if (j > 0) check(out[j] <= out[j - 1], "xs eval: non-increasing");
+                }
+            }
+        }
         return;
     }
     case Target::Roadgraph:

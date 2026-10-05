@@ -43,7 +43,7 @@
 
 | Feature | Source | Licence |
 |---|---|---|
-| Roof shapes, footprints, heights | HVBG LoD2 CityGML | dl-de/zero |
+| Roof shapes, footprints, heights | HVBG LoD2 CityGML | dl-de/by-2.0 (attribution required; corrected 2026-10-05 after the primary metadata record, see geo2map_data/SOURCES.md) |
 | Roof colour | sampled deterministically from DOP20 orthophotos | dl-de/zero |
 | Tree positions and heights | nDOM = DOM1 − DGM1, local-maximum crown segmentation | dl-de/zero |
 | Tree species | Frankfurt Baumkataster | dl-de/by |
@@ -113,11 +113,11 @@ Tag semantics: OSM wiki pages for each key (References). Overture transportation
 
 ### 3.2 Hessen official geodata (HVBG)
 
-HVBG's general statement: the data and their automated retrieval are free under **Datenlizenz Deutschland – Zero – Version 2.0** (§ 24 HVGG). geo2map PLAN.md 5.1 records "open since 1 Feb 2022". dl-de/zero has no conditions: no attribution, no share-alike, commercial use allowed.
+HVBG's general statement: the data and their automated retrieval are free under **Datenlizenz Deutschland – Zero – Version 2.0** (§ 24 HVGG). geo2map PLAN.md 5.1 records "open since 1 Feb 2022". dl-de/zero has no conditions: no attribution, no share-alike, commercial use allowed. **Exception, corrected 2026-10-05:** the primary metadata record of the LoD2 building models states dl-de/**by**-2.0 (attribution required, not share-alike), not zero; `S:\claude_code\geo2map_data\SOURCES.md` records the attribution text. DOM1, DOP20, DGM1 and Basis-DLM stay dl-de/zero-2.0.
 
 | Product | Content and resolution | Licence | Access | Update cycle | Volume for ~1,000 km² | Use here |
 |---|---|---|---|---|---|---|
-| **LoD2 3D building models** | CityGML 1.0 (AdV profile), standardised roof forms, ~1 m height accuracy, ETRS89/UTM32 + DHHN2016; LoD1 is fee-based | dl-de/zero-2-0 (opendata.hessen.de record "INSPIRE HE Gebäude – 3D LoD2"; HVBG 3D page) | free self-service in the Download-Center at gds.hessen.de; INSPIRE ATOM feed per municipality; INSPIRE WFS | annual | 0.3–1.5 GB zipped [estimate: ~200–300 k buildings × 5–15 KB of XML] | roof shapes and footprints (G5) |
+| **LoD2 3D building models** | CityGML 1.0 (AdV profile), standardised roof forms, ~1 m height accuracy, ETRS89/UTM32 + DHHN2016; LoD1 is fee-based | dl-de/by-2.0 (primary metadata record, corrected 2026-10-05; first read as zero from the HVBG general statement; opendata.hessen.de record "INSPIRE HE Gebäude – 3D LoD2"; HVBG 3D page) | free self-service in the Download-Center at gds.hessen.de; INSPIRE ATOM feed per municipality; INSPIRE WFS | annual | 0.3–1.5 GB zipped [estimate: ~200–300 k buildings × 5–15 KB of XML] | roof shapes and footprints (G5) |
 | **DOP20 (ATKIS DOP / TrueDOP)** | 20 cm, captured RGBI. Free download is RGB JPEG; CIR and RGBI are WMS only (or fee-based files). TrueDOP is rectified on the bDOM from flight 2020 onward. Positional accuracy better than ±1 m. | dl-de/zero-2.0 (GDI-DE record) | Download-Center (RGB, JPEG); Shop (small areas, TIFF/JPEG); WMS (RGB and CIR) | 2-year cycle since 2008 | 8–15 GB JPEG [estimate: 25 Mpx/km² at ~0.3–0.6 B/px] | roof colour sampling, QA; optional tree and crown checks |
 | **DOM1** (laser surface model) | 1 m float32 GeoTIFF, LZW, NoData −9999, ±0.3 m on hard surfaces | "HVBG terms (Zero)" | free self-service in the Download-Center; free arbitrary areas in the Shop | ALS campaigns 2015–2021, flown in **winter months** (leaf-off); target 6-year cycle | 2.5–4 GB [estimate, using DGM1's measured 2.8 MB/km²] | nDOM = DOM1 − DGM1 → tree heights, crowns, canopy |
 | **bDOM20** (image-matched surface) | 20 cm LAS/LAZ 1.2 rasterised point grid with RGB+NIR attributes, unclassified, ±0.6 m height | (as above) | **free only for areas up to 5 km² per order** in the Shop; larger areas are fee-based (time-based fee + 19 % VAT) | 2-year cycle since 2022 (50 %/year) | large (≈ 25 M points/km²) | not recommended (cost, volume); possible leaf-on spot checks |
@@ -170,8 +170,8 @@ HVBG's general statement: the data and their automated retrieval are free under 
 
 | Licence | Sources | Commercial | Share-alike / NC | Consequence for our served layers |
 |---|---|---|---|---|
-| dl-de/zero-2.0 | HVBG LoD2, DOP20, DOM1, DGM1, Basis-DLM | yes | none | No obligation. A layer built **only** from these stays free of ODbL. |
-| dl-de/by-2.0 | Frankfurt Baumkataster | yes | attribution + licence reference (+ mark changes) | Manifest attribution only. |
+| dl-de/zero-2.0 | HVBG DOP20, DOM1, DGM1, Basis-DLM | yes | none | No obligation. A layer built **only** from these stays free of ODbL. |
+| dl-de/by-2.0 | HVBG LoD2 (3D-Gebäudemodelle), Frankfurt Baumkataster | yes | attribution + licence reference (+ mark changes) | Manifest attribution only. |
 | CC BY 4.0 | Thünen species, DWD, WorldCover, Meta/ETH CHM, Google Open Buildings | yes | attribution + indicate changes | Manifest attribution. |
 | Copernicus | Sentinel-2, HRL, Urban Atlas | yes | source notice | Manifest attribution. |
 | **ODbL 1.0 (share-alike)** | OSM, Overture, EUBUCCO, Microsoft footprints | yes | **SA on Derivative Databases that are publicly used** | Anything that **merges** OSM data with other data in one database (e.g. OSM building + LoD2 roof matched into one record) is ODbL as a whole. Keeping sources as separate, independent layers or sections forms a Collective Database, and the non-OSM part keeps its own licence (ODbL 4.5(b) reading). Owner ruling D3 says the server is private now. D7 already plans ODbL publication of OSM-derived packs if that ever changes. |
@@ -519,14 +519,14 @@ Columns:
 
 **D-SF5. Building footprint authority in Hessen: LoD2 vs OSM.**
 - **Recommend: LoD2 geometry, OSM tags merged by footprint overlap.**
-- LoD2: official, consistent with DGM1/DOP, has real roofs, dl-de/zero.
+- LoD2: official, consistent with DGM1/DOP, has real roofs, dl-de/by-2.0 (attribution in the manifest).
 - OSM: has ids, tags and shops, but its footprints differ from LoD2 by up to metres.
 - Collision (R7) and render must use the same footprint, or players hit invisible walls. This is also physics-relevant, so the owner should confirm.
 
 **D-SF6. Licence hygiene for `g2m.features`: one merged layer under ODbL vs per-source sections (Collective Database).**
 - **Recommend: per-source sections now.** Cost: a little extra code.
 - Merged: simpler, but the whole layer becomes ODbL, and so do LoD2/DOP-derived roof data.
-- Separate: the dl-de/zero parts stay unencumbered if the server is ever opened (D3/D7).
+- Separate: the dl-de/zero parts stay unencumbered if the server is ever opened (D3/D7); LoD2 needs only attribution (dl-de/by-2.0).
 - My reading only; a legal check is needed before any public server (as D7 says).
 
 **D-SF7. Kerbs and sidewalks in physics: flush carving + visual kerb vs a real kerb step.**
@@ -571,11 +571,11 @@ Columns:
 
 ---
 
-## 9. Approvals needed (nothing below has been downloaded)
+## 9. Approvals needed (written before the downloads; status 2026-10-05: LoD2, DOM1, DOP20, Basis-DLM, Baumkataster, tree datasets, HRL and phenology are downloaded, see `geo2map_data/SOURCES.md` and [section 5](#5-data-sources))
 
 | # | Item | Licence | Size | Access | Phase | Account? |
 |---|---|---|---|---|---|---|
-| A1 | HVBG **LoD2 CityGML**: MTK, HTK, Frankfurt am Main (+ margin municipalities as for DGM1) | dl-de/zero-2.0 | 0.3–1.5 GB zipped [estimate] | manual, gds.hessen.de Download-Center (or the INSPIRE ATOM feed per municipality, which may be scriptable [unverified]) | P4 | no |
+| A1 | HVBG **LoD2 CityGML**: MTK, HTK, Frankfurt am Main (+ margin municipalities as for DGM1) | dl-de/by-2.0 (corrected 2026-10-05; attribution required) | 0.3–1.5 GB zipped [estimate; downloaded 2026-10-05: 1.2 GB] | manual, gds.hessen.de Download-Center (or the INSPIRE ATOM feed per municipality, which may be scriptable [unverified]) | P4 | no |
 | A2 | HVBG **DOM1**, same districts | dl-de/zero ("HVBG terms Zero") | 2.5–4 GB [estimate; DGM1 was 2.8 MB/km² delivered] | manual, Download-Center | P5 | no |
 | A3 | HVBG **DOP20 RGB JPEG**, same districts | dl-de/zero-2.0 | 8–15 GB [estimate] | manual, Download-Center (bulk WMS harvesting is possible but hammers their service; not recommended) | P4 (roof colour) | no |
 | A4 | Frankfurt **Baumkataster** CSV (Aug 2023) | dl-de/by-2.0 | 20–40 MB [estimate] | offenedaten.frankfurt.de | P5 | no |
@@ -635,7 +635,7 @@ Total for the core set (A1–A6): about **11–21 GB** [estimate], to `S:\claude
 **Hessen (HVBG) and other official sources**
 - Open data overview: https://hvbg.hessen.de/geoinformation/open-data
 - 3D building models (LoD1/LoD2): https://hvbg.hessen.de/landesvermessung/geotopographie/3d-daten/3d-gebaeudemodelle
-- LoD2 open-data record (dl-de/zero, ATOM): https://opendata.hessen.de/dataset/inspire-he-gebaude-3d-lod2
+- LoD2 open-data record (primary metadata: dl-de/by-2.0; ATOM): https://opendata.hessen.de/dataset/inspire-he-gebaude-3d-lod2
 - LoD2 WFS: https://www.geoportal.hessen.de/spatial-objects/831
 - DOP/TrueDOP product sheet (09/2022): https://hvbg.hessen.de/sites/hvbg.hessen.de/files/2022-09/produktblatt_true_dop.pdf
 - DOP20 metadata (dl-de/zero-2.0): https://gdk.gdi-de.org/geonetwork/srv/api/records/0b30f537-3bd0-44d4-83b0-e3c1542ca265

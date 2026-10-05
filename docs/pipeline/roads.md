@@ -10,29 +10,30 @@ flowchart TD
   ATTR["road_attributes: class policy, width, lanes, surface, bridge, tunnel, incline"]
   GRAPH["g2m.roads.graph L2: complete ways, nodes with whitelisted tags, owned edges"]
   RULES["road_rules: data/road_rules/de.json embedded, strict loader"]
-  XS["cross-section resolver, bands and joins - planned, street fidelity P1"]
+  XS["road_cross_section + _join: bands, anchor, join ramps and offsets, street fidelity P1 slices 3-5"]
   REF["road_reference: junction-aware stretches, G1 clothoid fit, corner arcs"]
   DEMDEP["road_dem_dependencies: elev.base L0 tiles within 65 m of the roads"]
   PROF["vertical_profile + road_profile: constrained cubics on DEM, bridge spans, junction planes"]
-  GEOM["g2m.roads.geom L2: parametric profile or explicit decline per stretch"]
+  GEOM["g2m.roads.geom L2 encoding 6: profile or decline per stretch + cross-section record + features"]
   CARVE["carving, junction surfaces - planned, G3-D"]
   RIB["ribbons, markings, bridge bodies - planned, G3-E"]
   OSM9 --> GRAPH
   ATTR --> GRAPH
   GRAPH --> REF --> PROF
   GRAPH --> DEMDEP --> PROF
-  RULES -.-> XS
-  GRAPH -.-> XS
-  XS -.-> GEOM
+  RULES --> XS
+  GRAPH --> XS
+  REF --> XS
+  XS --> GEOM
   PROF --> GEOM
   GEOM -.-> CARVE
   GEOM -.-> RIB
   classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
   classDef part fill:#fff3cd,stroke:#b58900,stroke-dasharray:4 3,color:#000;
   classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
-  class OSM9,ATTR,GRAPH,REF,DEMDEP,GEOM,RULES done;
+  class OSM9,ATTR,GRAPH,REF,DEMDEP,GEOM,RULES,XS done;
   class PROF part;
-  class CARVE,RIB,XS plan;
+  class CARVE,RIB plan;
 ```
 
 ## `g2m.roads.graph` (G3 slices A and B: implemented)
@@ -48,13 +49,14 @@ flowchart TD
 ## `g2m.roads.geom` (G3 slice B implemented, slice C foundation)
 
 - Code: `src/layer/derive_road_geom.cpp`, `road_geom_tile.cpp`, `road_reference.cpp`, `road_profile.cpp`, `vertical_profile.cpp`, `road_dem_dependencies.cpp`, `road_dem_sampler.cpp`, `include/g2m/layer/road_geom_tile.h`.
-- Version 1, level 2, encoding 5 ([road_geom.md](../formats/road_geom.md)). Section 1 is the unchanged graph section; section 2 holds one outcome per stretch: a parametric profile or an explicit decline with an error code and text. A tile does not promise every road is driveable.
+- Version 1, level 2, encoding 6 ([road_geom.md](../formats/road_geom.md)); encoding 5 still decodes. Section 1 is the roads.graph payload (encoding 5, node tags); section 2 holds one outcome per stretch (unchanged since encoding 5): a parametric profile or an explicit decline with an error code and text; section 3 one cross-section record per section-2 entry (Absent for a declined profile, a cross-section, or a whole-section decline); section 4 the profile features. A tile does not promise every road is driveable.
+- Cross-sections (street fidelity P1, [design](../street_fidelity/p1_cross_section_design.md)): `resolve_cross_section` in `src/layer/road_cross_section.cpp` / `road_cross_section_join.cpp` builds lateral bands from the way tags and `de.json`, then matches lanes at degree-two way joins (width ramps, a placement-offset correction, `JoinRecord`). It reads only tags, topology, the reference length and the rules, never the DEM, so it is independent of the vertical-profile question. It runs in `build_road_geom_tile` for every stretch that has a profile. Evaluation (`boundaries_at`, `band_width_m`, `offset_m`) is allocation-free and uses only + - * /.
 - Inputs: the same-key `roads.graph` tile (drives coverage), the `roads.graph` tiles that hold every way incident to a node of its ways (stretch context, at most 512 tiles, absent ones skipped), and all `g2m.elev.base` level-0 tiles that the complete ways touch plus a 65 m margin.
 - Stretch context (street fidelity P1 slice 1): node degrees come from the merged context graph, so stretches and profiles of a long way are identical in every tile that owns part of it (before, a node whose other ways lay outside the tile halo counted as degree 2). At a degree-two way join both stretches take one shared bisector heading (`join-bisector=1` in the config hash), so the two references have no heading kink there; stretches that fall back to the corner-arc/chord path keep their own end headings. A missing dependency, mixed datum or hash mismatch fails the whole derivation before anything is written.
 - Policy fixed in the config hash text: class policy 2026-10-02, 5 m station spacing, bounded solver (2048 samples, 4096 iterations), curvature exceptions on, sloping junction planes, 32 m approach, 0.25 m bridge height correction, soft incline target.
 - Tunnels return `Unsupported` (declined, not driveable in v1). Bridges use abutment interpolation; the bare-earth DEM under a bridge is never queried.
 - Home-region probe (`tools/road_probe`, 2026-10-02, single run): 478 stretches in 344 ways all fit horizontally with 47 flagged curvature exceptions; vertical profiles succeed for 339; 19 tunnels unsupported, 76 curvature-bound failures, 1 over class grade, 43 solver non-convergence. Acceptance of complete profiles is **not** reached.
-- Tests: `tests/layer/test_road_geom.cpp`, `test_road_reference.cpp`, `test_road_profile.cpp`, `test_vertical_profile.cpp`, `test_road_dem_*.cpp`; probe in `tools/road_probe/README.md`.
+- Tests: `tests/layer/test_road_geom.cpp`, `test_road_geom_xs.cpp` (encoding 6, one rejection test per validation rule of design 7.2, encoding-5 compatibility, config hash and release id), `test_road_cross_section.cpp`, `test_road_joins.cpp`, `test_road_reference.cpp`, `test_road_profile.cpp`, `test_vertical_profile.cpp`, `test_road_dem_*.cpp`; probe in `tools/road_probe/README.md`.
 
 ## Who uses it
 

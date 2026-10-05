@@ -739,3 +739,11 @@ width ramps, absorber offsets Ramps/Hold/Transition, ramp clipping to the stretc
 `lateral_point(reference, s, t)`. Second committed fixture `testdata/fixtures/osm/hoechst_a66.osm.pbf`
 (see testdata/fixtures/README.md). Test: `test_road_joins.cpp` (synthetic joins, design F1-F10/H1-H7,
 edge continuity over every degree-2 join of both fixtures, context invariance).
+Slice 5: `roads.geom` encoding 6 (`kRoadGeomEncoding`; 5 still decodes, `RoadGeomTile::encoding`): section 1 is the
+roads.graph encoding-5 payload, section 2 unchanged, section 3 one cross-section record per entry
+(`RoadGeomEntry::cross_section` / `cross_section_decline`, built by `build_road_geom_tile` via
+`resolve_cross_section` with `builtin_road_rules_de()`), section 4 profile features (`ProfileFeature`, empty
+until slice 7). Validation per design 7.2 in `validate_road_geom_tile`. Config hash carries `xs=1 enc=6
+rules=de:<hex>`. Golden `g3xs` (`tests/golden/golden_g3xs.cpp`, `testdata/golden/g3xs_golden.txt`, Windows =
+Linux), fuzz `Target::RoadCrossSectionEval`. Tests: `test_road_geom_xs.cpp`. Roadgeom golden body SHA is now
+`17d9b7c7...5ee2f9` (was `4dcfcbca...445f8`, the encoding-5 body, still reproduced by the test).

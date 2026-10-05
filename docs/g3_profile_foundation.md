@@ -110,7 +110,7 @@ inferred heights by at most 0.25 m per endpoint; approaches use the same anchors
 Unsupported topology or larger corrections fail explicitly. Interior bridge
 bare-earth DEM is never queried. This does not establish clearance, deck thickness or collision
 acceptance. Tunnels return Unsupported. Numeric incline metadata supplies a soft interior slope target; shared endpoint
-heights/slopes and road-class grade/curvature bounds retain priority. Sample, extent and
+heights/slopes and road-class grade/curvature bounds retain priority (owner decision 2026-10-05: where an endpoint height needs a steeper grade than the class bound, the endpoint height wins and the stretch is flagged as a grade exception, not clamped). Sample, extent and
 iteration budgets fail explicitly; long stretches are not clipped to fit.
 
 Profile and reference regressions pass on Windows release/ASan and Linux TSan

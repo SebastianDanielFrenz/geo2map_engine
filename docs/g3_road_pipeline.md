@@ -5,8 +5,11 @@ complete-stretch DEM/bridge profile construction, but is not accepted. The home
 probe fits all 478 horizontal stretches with 47 flagged curvature exceptions.
 Strict vertical fitting succeeds for 339 stretches; 19 tunnels are unsupported,
 76 fail curvature constraints, one exceeds its class grade and 43 hit bounded
-solver convergence. The endpoint-height/class-grade priority needs an owner
-choice before serving incompatible geometry. D, E and F remain pending.
+solver convergence. Owner decision (2026-10-05): measured endpoint heights WIN over
+the class grade. Where honouring them needs a grade steeper than the class bound, the
+profile keeps the endpoint heights and the stretch is flagged as a grade exception
+(the existing exception mechanism, like the curvature exceptions), not clamped. D, E
+and F remain pending.
 Physics fixture contact fix bd41ac4 is verified; real bridge approaches remain
 an E/F acceptance check. No runtime carving or bridge layer is enabled.
 
