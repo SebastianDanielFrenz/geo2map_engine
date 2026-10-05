@@ -1,0 +1,22 @@
+{
+  "format": "g2m.classifier_table/1",
+  "name": "g2m.esa_worldcover_v200",
+  "scheme": "esa_worldcover_v200",
+  "classes": {
+    "10":  { "land_class": "tree_cover", "surface": "dirt" },
+    "20":  { "land_class": "shrub",      "surface": "grass" },
+    "30":  { "land_class": "grassland",  "surface": "grass" },
+    "40":  { "land_class": "cropland",   "surface": "dirt" },
+    "50":  { "land_class": "built_up",   "surface": "asphalt" },
+    "60":  { "land_class": "bare",       "surface": "compacted" },
+    "70":  { "land_class": "snow_ice",   "surface": "unknown" },
+    "80":  { "land_class": "water",      "surface": "water" },
+    "90":  { "land_class": "wetland",    "surface": "grass" },
+    "95":  { "land_class": "wetland",    "surface": "dirt" },
+    "100": { "land_class": "bare",       "surface": "grass" }
+  },
+  "sources": {
+    "classes": "ESA WorldCover v200 legend: 10 tree cover, 20 shrubland, 30 grassland, 40 cropland, 50 built-up, 60 bare / sparse vegetation, 70 snow and ice, 80 permanent water, 90 herbaceous wetland, 95 mangroves, 100 moss and lichen. Value 0 is the scheme's no-data class and has no entry (it classifies as unknown).",
+    "surfaces": "The default ground surface of each class is [assumed]: forest floor and fields dirt, shrub and grass land grass, built-up ground asphalt (courtyards and car parks), bare ground compacted, water water. Snow has no SurfaceKind (the enum is append-only) and stays unknown. Roads, sidewalks and junctions override this from their own attributes (design 6.5); the game reads only paved / unpaved road versus the rest today, so this base class is new information it ignores at first."
+  }
+}

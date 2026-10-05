@@ -1,0 +1,26 @@
+{
+  "format": "g2m.carve/1",
+  "smoothing": { "enabled": true, "radius_m": 2, "kernel": [138, 621, 1024, 621, 138], "strength_percent": 35 },
+  "crown_round_mm": 500,
+  "verge_drop_mm": 60,
+  "blend_mm": {
+    "default": 4000,
+    "track": 3000, "service": 3000,
+    "living_street": 5000, "residential": 5000, "unclassified": 5000,
+    "tertiary_link": 8000, "tertiary": 8000,
+    "secondary_link": 10000, "secondary": 10000,
+    "primary_link": 12000, "primary": 12000,
+    "trunk_link": 15000, "trunk": 15000,
+    "motorway_link": 15000, "motorway": 15000
+  },
+  "blend_slope_factor": 3,
+  "blend_min_mm": 3000,
+  "blend_max_mm": 15000,
+  "deck": { "clearance_mm": 550, "ramp_mm": 4000, "margin_mm": 1000 },
+  "sources": {
+    "smoothing": "Ported from racing_game terrain_smoothing (radius 2 m, sigma 1, strength 0.35, one pass) as an integer kernel [game]. Weights are round-down(exp(-i^2 / 2) * 1024) = 1024, 621, 138; the exact value for i = 2 is 138.6, so the outer taps are 0.4 of a unit light, far below the 1/256 m height quantum.",
+    "crown_and_verge": "Crown ridge rounding 0.5 m (the game's sqrt(d^2 + 0.25) - 0.5 form without the square root) and verge drop 0.06 m [game].",
+    "blend": "Blend widths per highway class are the RoadAttributes::blend_mm defaults the game uses today (src/layer/road_attributes.cpp: 3, 3, 5, 5, 5, 8, 10, 12, 15, 15 m by class rank, a link shares its parent's rank), read at implementation time; test_carve_params compares every entry against resolve_road_attributes. The default entry is [assumed]. The design's illustrative table (primary 10 m, trunk 12 m, ...) was not used, because the design says the table records the game's own values. Within [blend_min_mm, blend_max_mm] = 3 m .. 15 m of PLAN.md 6.3 step 4; blend_slope_factor 3 caps the smooth step's peak slope (2 |dz| / b) at the 1:1.5 cut/fill limit.",
+    "deck": "Deck clearance 0.55 m, ramp 4 m [game]; the footprint is the paved band plus a 1 m margin [assumed]."
+  }
+}

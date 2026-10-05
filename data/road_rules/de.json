@@ -19,6 +19,23 @@
     "island":       { "length_mm": 4000, "height_mm": 0, "width_mm": 0 },
     "dip":          { "length_mm": 4000, "height_mm": 60, "width_mm": 0 }
   },
+  "junction": {
+    "trim_min_mm": 1000, "trim_margin_mm": 500, "edge_station_spacing_mm": 500,
+    "link_trim_cap_m": 30, "cluster_max_extent_m": 48, "cluster_max_nodes": 12,
+    "reach_max_m": 128, "bowtie_rounds": 3, "bowtie_step_mm": 1000
+  },
+  "furniture": {
+    "crossing_length_mm": { "zebra": 4000, "signalised": 4000, "other": 3000 },
+    "stop_line_before_crossing_mm": 1000,
+    "junction_stop_setback_mm": 1000, "sign_line_setback_mm": 500,
+    "line_width_mm": { "stop": 500, "give_way": 500, "signal": 500 },
+    "signal_assoc_max_m": 60, "sign_assoc_max_m": 40,
+    "signal_lateral_offset_mm": 500, "signal_left_min_lanes": 3,
+    "crossing_markings": { "zebra": "zebra", "ladder": "ladder", "ladder:skewed": "ladder", "lines": "lines",
+                           "dashes": "dashes", "dots": "dashes", "surface": "surface", "no": "none" },
+    "crossing_kind": { "traffic_signals": "dashes", "zebra": "zebra", "marked": "zebra", "uncontrolled": "zebra",
+                       "unmarked": "none", "no": "none", "informal": "none" }
+  },
   "min_edge_radius_m": {
     "default": 10,
     "motorway": 200,
@@ -111,6 +128,8 @@
     "traffic_calming": "Defaults of a traffic_calming=* node without traffic_calming:length. All [assumed], typical German values: hump (Aufpflasterung) 3.7 m x 70 mm, table (Plateauaufpflasterung) 6 m x 80 mm, cushion (Berliner Kissen) 1.8 m x 70 mm, bump (Schwelle) 0.9 m x 70 mm, mini_bumps 2 m x 30 mm, rumble_strip 1 m x 10 mm, dip 4 m x 60 mm deep. height_mm 0 means render only (chicane, choker, island have no height); width_mm 0 means across the full carriageway. The carved shape is widened to the 1 m grid by the minimum ramp (kFeatureMinRampMm), see road_geom_tile.h.",
     "motorway_tapers": "[RAA] Ein-/Ausfaedelungs-Verziehung 60 m [unverified]",
     "other_tapers_and_shift_rates": "[assumed] rule of thumb 1:20 urban, 1:40 rural, 1:60 motorway lateral rate",
+    "junction": "Junction geometry parameters of street fidelity P2 (docs/street_fidelity/p2_junction_design.md sections 3 and 8.1). The design draft wrote the sub-metre values in metres with decimals; this loader is integer-only like every other rules block, so those are millimetres here. trim_min 1 m, trim_margin 0.5 m, edge_station_spacing 0.5 m (chord sagitta 3.1 mm at the 10 m minimum radius), bowtie_step 1 m, link_trim_cap 30 m, cluster caps 48 m / 12 nodes and reach 128 m are [assumed] project defaults. The loader enforces the tile-invariance proof: cluster_max_extent + 2 * link_trim_cap <= reach_max, and reach_max + 15 (carve blend) + cluster_max_extent <= 192 (carver radius).",
+    "furniture": "Junction furniture of street fidelity P2 (design sections 7 and 8.1), lengths in integer millimetres. Crossing length along the road (the node width tag wins): zebra 4 m [R-FGUe, unverified], signalised 4 m and other 3 m [assumed]. Stop and give-way lines 0.50 m wide [RMS, unverified], signal stop line 0.50 m [assumed]. Setbacks (1 m before a crossing, 1 m at a junction trim, 0.5 m for a sign line), association distances (60 m signal, 40 m sign), the signal post offset (0.5 m outside the carriageway) and the lane count for a second post (3) are [assumed]. crossing_markings maps a crossing:markings value to a pattern, crossing_kind a crossing=* value ([RMS, unverified]: German signalised crossings are Furt dashes, marked and uncontrolled ones zebra stripes). The value yes of crossing:markings is not a key: it falls through to crossing_kind.",
     "min_edge_radius": "Tapers are validated so that the lateral S-ramp (max curvature 4 W / a^2 for a lane width W over a taper of length a) stays at or below 1 / min_edge_radius_m. The radii are [assumed]: 200 m motorway, 60 m other arterial classes, 10 m local classes; the design draft's single default of 60 m contradicted its own urban taper lengths."
   }
 }

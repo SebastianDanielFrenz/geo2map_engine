@@ -30,6 +30,8 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/road_graph.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_graph_tile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_rules.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/carve_params.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/landcover_classifier.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_cross_section.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_cross_section_join.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_cross_section_api.cpp
@@ -43,14 +45,22 @@ set(G2M_LAYERS_SOURCES
 # library has no runtime data directory. The generated include lives in the build
 # tree; the fuzz-instrumented copy of these sources (tests/fuzz_formats) adds the
 # same directory. Editing the JSON re-runs configure.
-set(G2M_ROAD_RULES_DE_JSON ${PROJECT_SOURCE_DIR}/data/road_rules/de.json)
+#
+# Street fidelity P2 embeds two more data files the same way: data/carve/carve_default.json
+# (carve_default.inc, hashed only into the carved/class layer configs) and
+# data/classifiers/esa_worldcover_v200.json (esa_worldcover_v200.inc).
 set(G2M_GENERATED_INCLUDE_DIR ${PROJECT_BINARY_DIR}/generated/g2m_layers CACHE INTERNAL "generated includes of g2m_layers")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${G2M_ROAD_RULES_DE_JSON})
-file(READ ${G2M_ROAD_RULES_DE_JSON} _g2m_rules_hex HEX)
-string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _g2m_rules_bytes "${_g2m_rules_hex}")
-file(CONFIGURE OUTPUT ${G2M_GENERATED_INCLUDE_DIR}/road_rules_de.inc
-  CONTENT "const unsigned char kRoadRulesDe[] = {${_g2m_rules_bytes}};
+function(g2m_embed_json json_file inc_name array_name)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${json_file})
+  file(READ ${json_file} _hex HEX)
+  string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _bytes "${_hex}")
+  file(CONFIGURE OUTPUT ${G2M_GENERATED_INCLUDE_DIR}/${inc_name}
+    CONTENT "const unsigned char ${array_name}[] = {${_bytes}};
 " @ONLY)
+endfunction()
+g2m_embed_json(${PROJECT_SOURCE_DIR}/data/road_rules/de.json road_rules_de.inc kRoadRulesDe)
+g2m_embed_json(${PROJECT_SOURCE_DIR}/data/carve/carve_default.json carve_default.inc kCarveDefault)
+g2m_embed_json(${PROJECT_SOURCE_DIR}/data/classifiers/esa_worldcover_v200.json esa_worldcover_v200.inc kEsaWorldcoverV200)
 
 add_library(g2m_layers STATIC ${G2M_LAYERS_SOURCES})
 target_include_directories(g2m_layers PUBLIC ${PROJECT_SOURCE_DIR}/include)

@@ -15,3 +15,8 @@ testdata/** -text
 # data/road_rules/*.json is embedded into the library and its SHA-256 enters the
 # roads.geom release id: it must be byte-identical on every checkout (street fidelity P1).
 data/road_rules/** -text
+
+# data/carve/*.json and data/classifiers/*.json are embedded the same way; their SHA-256 enters the
+# carved / class layer configs (street fidelity P2).
+data/carve/** -text
+data/classifiers/** -text

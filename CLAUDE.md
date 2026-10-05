@@ -764,3 +764,17 @@ shortened to stay inside the stretch (Derived) or dropped under 1 m of room. The
 (`7e387db8...b69a`), so the config hash and release id changed; golden `g3xs` changed in exactly one tile (the
 frankfurt_hoechst tile that holds the fixture's one island node, +22 bytes). Tests: `test_road_features.cpp`, rules tests
 in `test_road_rules.cpp`; `[.][diag]` case prints the effective carved shapes on the 1 m grid.
+
+## Street fidelity P2 (junctions, carving, furniture; design `docs/street_fidelity/p2_junction_design.md`)
+
+Slice 1 (rules and parameter files, no new stage): `data/road_rules/de.json` gained the `junction` and `furniture`
+blocks (`JunctionRules`, `FurnitureRules`, `CrossingPattern`, `RoadRules::junction`/`::furniture` in `road_rules.h`;
+every key is in integer mm or counts, the loader proves `cluster_max_extent + 2*link_trim_cap <= reach_max` and
+`reach_max + kCarveBlendMaxM + extent <= kCarverRadiusM`). The de.json SHA moved to `186e11c4...8435` (was
+`7e387db8...b69a`), which moves the roads.geom config hash and release id; goldens did not move. New embedded data:
+`data/carve/carve_default.json` (`g2m.carve/1`, `include/g2m/layer/carve_params.h`, `load_carve_params`,
+`builtin_carve_default()`, deliberately NOT in the roads.geom config hash) and
+`data/classifiers/esa_worldcover_v200.json` (`g2m.classifier_table/1`, `landcover_classifier.h`, `LandcoverClassifier`,
+its file SHA is the classifier identity for the later terrain.class config hash). The shared strict JSON reader moved
+to `src/layer/strict_json.h`; `src/layer/CMakeLists.txt` embeds all three JSON files through `g2m_embed_json`.
+Tests: `test_road_rules.cpp` (junction/furniture cases), `test_carve_params.cpp`, `test_landcover_classifier.cpp`.

@@ -31,6 +31,49 @@ struct TrafficCalmingRules {
     friend bool operator==(const TrafficCalmingRules&, const TrafficCalmingRules&) = default;
 };
 
+// Junction geometry parameters (P2 design 3 and 8.1). Lengths are integer millimetres or metres as the key says.
+// The loader enforces the tile-invariance proof of design 5.2/5.3 (cap sums against reach and carver radius).
+struct JunctionRules {
+    std::int32_t trim_min_mm = 0;              // smallest approach trim before the margin
+    std::int32_t trim_margin_mm = 0;           // added to the farthest corner station
+    std::int32_t edge_station_spacing_mm = 0;  // spacing of the sampled approach edge polylines
+    std::int32_t link_trim_cap_m = 0;          // cap of a single trim in the cluster link test
+    std::int32_t cluster_max_extent_m = 0;     // bounding box limit per axis
+    std::int32_t cluster_max_nodes = 0;
+    std::int32_t reach_max_m = 0;              // farthest ring vertex from the nearest cluster node
+    std::int32_t bowtie_rounds = 0;            // trim-extension rounds before the hull fallback
+    std::int32_t bowtie_step_mm = 0;           // trim extension per round
+    friend bool operator==(const JunctionRules&, const JunctionRules&) = default;
+};
+// Painted pattern of a crossing (design 2). The values are the encoded pattern byte of roads.geom section 6.
+enum class CrossingPattern : std::uint8_t { None = 0, Zebra = 1, Dashes = 2, Ladder = 3, Lines = 4, Surface = 5 };
+inline constexpr std::size_t kCrossingPatternCount = 6;
+struct CrossingPatternEntry {
+    std::string value;                          // the OSM tag value (key of the JSON map)
+    CrossingPattern pattern = CrossingPattern::None;
+    friend bool operator==(const CrossingPatternEntry&, const CrossingPatternEntry&) = default;
+};
+// Junction furniture parameters (P2 design 7 and 8.1).
+struct FurnitureRules {
+    std::int32_t crossing_zebra_mm = 0, crossing_signalised_mm = 0, crossing_other_mm = 0; // crossing length along the road
+    std::int32_t stop_line_before_crossing_mm = 0;
+    std::int32_t junction_stop_setback_mm = 0, sign_line_setback_mm = 0;
+    std::int32_t line_stop_mm = 0, line_give_way_mm = 0, line_signal_mm = 0; // line width along the road
+    std::int32_t signal_assoc_max_m = 0, sign_assoc_max_m = 0;
+    std::int32_t signal_lateral_offset_mm = 0, signal_left_min_lanes = 0;
+    std::vector<CrossingPatternEntry> crossing_markings; // crossing:markings=* value -> pattern, ascending value
+    std::vector<CrossingPatternEntry> crossing_kind;     // crossing=* value -> pattern, ascending value
+    friend bool operator==(const FurnitureRules&, const FurnitureRules&) = default;
+
+    // The pattern a crossing:markings / crossing value maps to (nullptr for a value without an entry).
+    const CrossingPattern* find_marking(std::string_view value) const;
+    const CrossingPattern* find_kind(std::string_view value) const;
+};
+// Constants the junction block is validated against (design 5.2, 5.3): the widest carve blend and the radius
+// of roads.geom tiles a carved L0 tile reads.
+inline constexpr std::int32_t kCarveBlendMaxM = 15;
+inline constexpr std::int32_t kCarverRadiusM = 192;
+
 struct RoadTaperRules {
     std::int32_t lane_add_m = 0;      // length of a counted lane that starts or ends
     std::int32_t width_change_m = 0;  // length of a width change of a matched band
@@ -60,6 +103,8 @@ struct RoadRules {
     std::int32_t tagged_shoulder_mm = 0; // shoulder=* asks for a shoulder where the class has none
     std::array<std::int32_t, 3> parking_mm{}; // indexed by ParkingOrientation
     std::array<TrafficCalmingRules, kProfileFeatureKindCount> traffic_calming{}; // indexed by ProfileFeatureKind
+    JunctionRules junction;
+    FurnitureRules furniture;
     std::vector<RoadClassRules> classes;      // ascending highway value
     ContentHash content_sha256{};             // SHA-256 of the JSON bytes the rules were loaded from
 
@@ -71,7 +116,9 @@ struct RoadRules {
 
 // Strict loader: format "g2m.road_rules/1", integers only, unknown or missing
 // keys rejected, every highway class of the default RoadStyle present, widths
-// 0..20000 mm, tapers consistent with min_edge_radius_m.
+// 0..20000 mm, tapers consistent with min_edge_radius_m, junction and furniture
+// blocks (P2) with every length in (0, 200] m and the cluster caps consistent
+// with reach_max_m and the carver radius.
 Result<RoadRules> load_road_rules(std::span<const std::byte> json);
 // The embedded data/road_rules/de.json, parsed once. A corrupt build aborts.
 const RoadRules& builtin_road_rules_de();
