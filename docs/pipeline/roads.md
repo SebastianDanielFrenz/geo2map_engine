@@ -18,7 +18,7 @@ flowchart TD
   FEAT["road_features: traffic_calming nodes to carved profile features, street fidelity P1 slice 7"]
   GEOM["g2m.roads.geom L2 encoding 6: profile or decline per stretch + cross-section record + features"]
   COMPL["profile completion tier: retry, bridge spans, relaxed ground - planned, P2 slice 6"]
-  JUNC["junctions: trim-overlap clusters, offset-intersect-trim rings, Shepard heights - planned, P2 slices 3-5"]
+  JUNC["junctions: offset-intersect-trim rings and trims implemented as a library function (P2 slice 3, no layer yet); clusters, Shepard heights planned, P2 slices 4-5"]
   FURN["furniture: crossings, stop and give-way lines, signals - planned, P2 slice 7"]
   GEOM7["roads.geom encoding 7: sections 5 junctions, 6 furniture, 7 provenance - planned, P2 slice 8"]
   CARVE["g2m.terrain.carved and g2m.terrain.class from one CarveModel - planned, P2 slices 9-10 = G3-D"]
@@ -87,7 +87,7 @@ flowchart TD
 
 ## Planned: junctions, carving, furniture (street fidelity P2 = G3-D)
 
-Design: [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) (12 slices, section 14). Status: slices 1-2 (rules data, `road_surface_height_m`) implemented, the rest planned. Implemented so far: `road_surface_height_m` (`road_surface.h`, the canonical road height of design 4.1, a pure library function over a `RoadGeomTile` entry); the `junction` and `furniture` blocks of `de.json` (loader only, `JunctionRules`/`FurnitureRules`), `data/carve/carve_default.json` (`carve_params.h`) and `data/classifiers/esa_worldcover_v200.json` (`landcover_classifier.h`); no stage, layer or encoding exists yet (the surface function is a library function only).
+Design: [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) (12 slices, section 14). Status: slices 1-3 (rules data, `road_surface_height_m`, per-node junction rings and trims) implemented, the rest planned. Implemented so far: `build_node_junction` (`road_junction.h`, offset-intersect-trim rings, trims, bow-tie repair, convex-hull fallback, declines; library function, no stage or served bytes yet); `road_surface_height_m` (`road_surface.h`, the canonical road height of design 4.1, a pure library function over a `RoadGeomTile` entry); the `junction` and `furniture` blocks of `de.json` (loader only, `JunctionRules`/`FurnitureRules`), `data/carve/carve_default.json` (`carve_params.h`) and `data/classifiers/esa_worldcover_v200.json` (`landcover_classifier.h`); no stage, layer or encoding exists yet (the surface function is a library function only).
 
 - **Junctions:**
   - nodes of degree ≥ 3 in the merged context graph;

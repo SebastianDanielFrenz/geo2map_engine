@@ -785,3 +785,14 @@ is the one carved road height (design 4.1: `p(s) + C(s,t) - C(s,0) + V(s,t) + F(
 crossfall is the profile's `attributes.crown_per_mille`. Features act over the carriageway (width 0 and cushions) or a width
 centred on it, with no lateral blend; NaN for an entry without profile or cross-section. No encoding change. Test:
 `test_road_surface.cpp` (T1, sabotage: dropping `-C(s,0)` breaks the reference-equals-profile checks).
+
+Slice 3: `include/g2m/layer/road_junction.h` / `src/layer/road_junction.cpp`: `build_node_junction(tile, context, node_id, rules, stats)`
+and `build_node_junctions(...)` (offset-intersect-trim per design 3.3-3.8, pure, no tile or layer output yet). Per node: approaches
+sorted by azimuth, three rings (RoadBed, Paved, Outer) from the P1 `carve_footprint`/`lateral_point` edges as integer-mm polylines,
+corners by exact int64 segment intersection (`geom::orient`/`segments_intersect`), trims from the Outer layer, bow-tie repair by
+1 m extension rounds of the involved approaches (`junction.bowtie_rounds`), convex-hull fallback with `JunctionFlags::HullFallback`,
+reach cap (`ReachExceeded`), declines `ClusterTooLarge/ReachExceeded/SingleApproach/Degenerate/Underground`, per-approach status
+(Used/NoProfile/NoCrossSection/Tunnel...). A node is built only when the tile holds every approach of it (else skipped, counted).
+`junction_ring_valid` is the simple-and-counter-clockwise check. Test: `test_road_junction.cpp` (X/T/Y/fork/star scenes, Hoechst
+and Frankfurt fixture census, multi-tile identity). Sabotages: swapping left/right in `edge_t` fails the corner/trim checks;
+disabling bow-tie repair and hull fallback fails the repair/hull cases and the census. No served bytes change.
