@@ -151,9 +151,9 @@ Result<RoadGraphTile> decode_road_graph(const TileBody& body) {
             if (!r.ok() || count > kMaxTags - node_tags_total || count > r.remaining() / 2) return malformed("node tag count");
             node_tags_total += static_cast<std::size_t>(count);
             for (std::uint64_t j = 0; j < count; ++j) {
-                auto key = string(r); if (!key) return key.error();
+                auto tag_key = string(r); if (!tag_key) return tag_key.error();
                 auto value = string(r); if (!value) return value.error();
-                n.tags.emplace_back(std::move(*key), std::move(*value));
+                n.tags.emplace_back(std::move(*tag_key), std::move(*value));
             }
         }
         g.nodes.push_back(std::move(n));
