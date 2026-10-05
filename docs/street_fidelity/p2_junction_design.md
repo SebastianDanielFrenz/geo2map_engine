@@ -1795,7 +1795,7 @@ defects fixed in the junction pass and the crossing rule.**
   bridge boundary has the bridge outside its tile's DEM margin there. Synthetic (`test_road_completion.cpp`, "strict pass: the
   latent far-end read ..."): a road ending 188 m outside its tile at a 600 m bridge: tile 455 declines it ("road DEM: missing
   elevation dependency"), tile 456 profiles it; with the tier the west copy becomes a ground completion and the east stays strict.
-  Not fixed here (it changes P1 served bytes and the DEM dependency set). Options for a later slice: add every bridge way incident
+  Fixed by D35 (option 1, a second discovery stage). Options considered: add every bridge way incident
   to a node of the tile's ways to the DEM dependency segments (and its far end's ground approach to the context), or bound
   `surface_anchor`'s far-end read to the tile's margin and decline both copies alike. Slice 12's census should count bridge
   boundaries whose span leaves the margin.
@@ -1860,6 +1860,42 @@ defects fixed in the junction pass and the crossing rule.**
 - Far-end dependence of the strict pass (D32) re-measured on the served build: unchanged - A 1980 entries over 10 tiles (21 / 85
   completed flat / tilted), B 1519 over 12 (12 / 223), 0 strict and 0 completion differences against the world reference.
 
+
+### Decisions made while implementing (D32 follow-up, before slice 9)
+
+**D35. The strict far-end read is closed by a second dependency-discovery stage (D32 option 1).**
+- **Decision.** roads.geom's dependency set gains every bridge way incident to a node of the tile's ways (found in the merged
+  stretch context): the elev.base L0 tiles along those bridges plus the 65 m margin (`road_dem_dependencies`) and the roads.graph
+  tiles of every node of those bridges (`road_context_dependencies`), so the far end's ground approach is in the context.
+  `road_bridge_dependencies(tile_graph, context, zone, exclude)` names them. A tile that holds a stretch ending at the near end of
+  a bridge now loads exactly what `surface_anchor` reads at the far end (the 32 m approach walk plus the 3.5 m support footprint,
+  inside the 65 m DEM margin and the far-end node's graph tile, whose 128 m halo holds the approach).
+- **Why a second stage.** The bridge is not always in the tile's own graph: it is known only once the stage-1 context tiles (the
+  tiles of every node of the tile's ways) are resolved. `IDeriver` therefore gains `discovery_stages()` (default 1, at most
+  `kMaxDiscoveryStages` = 4): the server calls `additional_inputs_for` again with every input resolved so far until a stage names
+  nothing new or the count is reached. roads.geom uses 2; stage 2 is a fixed point (bridges incident to a tile-way node are fully
+  known from the stage-1 tiles, and the far end needs one hop, not a walk), so the set stays bounded: at most the bridges' graph
+  tiles and DEM along them. `derive()` recomputes both stages from its inputs and rejects an incomplete set ("incomplete
+  dependency set"), so a stage-1-only input list cannot silently derive the old tile. Every other deriver keeps one stage and
+  identical behaviour.
+- **Alternatives.** (a) D32 option 2, bound the far-end read to the tile's margin and decline both copies alike: no server change,
+  but it declines profiles that are well defined (every bridge longer than the margin with a stretch ending at it) and changes
+  served bytes for the worse. (b) Widen stage 1 to a fixed radius (e.g. all graph tiles within 1 km): a single stage, but an
+  arbitrary radius is still a bound a long bridge can cross, and it multiplies every tile's inputs. (c) Read the far end through
+  the bridge's own tile output: violates the "no stage reads neighbouring outputs" rule of `IDeriver`. Option 1 with a generic,
+  bounded multi-stage discovery is exact and costs only on tiles that touch a bridge.
+- **Effect.** Served bytes on both fixtures are unchanged: stage 2 adds no graph tile and no DEM tile on any of the 10 / 12 fixture
+  tiles (no stretch ends at a bridge whose span leaves its tile's margin), goldens `g3xs` and `g3j` unchanged. The config text gains
+  ` bridge-far-end=1`, so the roads.geom config hash and every release id containing roads.geom move.
+- **Tests.** The synthetic far-end case (`test_road_completion.cpp`, "strict pass: the far-end read of a bridge anchor is
+  tile-invariant ...") is now an invariance assertion at spans 600 and 1000 m: tiles 455 and 456 give the same strict outcome.
+  Sabotage / negative control: the stage-1 set alone (`road_geom_inputs(..., false)`) - tile 455 declines ("road DEM: missing
+  elevation dependency" at 600 m, "bridge boundary requires ground approach context" at 1000 m). The world-reference test asserts
+  0 strict differences (was counted only). `test_road_geom.cpp` ("... second stage (D35)") checks the deriver's stages (stage 1
+  without the far-end graph tile, stage 2 with it, the east tile complete at stage 1) and that `derive()` rejects the stage-1
+  inputs; `test_server.cpp` checks the server's stage loop (1, 2 and 4 stages, stop at the first stage that adds nothing).
+  D29's fence test now builds on the stage-1 set explicitly (D35 would add DEM around its bridge and hide the control's missing
+  cell; the fence is a property of the stage-1 read).
 ---
 
 

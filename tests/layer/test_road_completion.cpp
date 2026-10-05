@@ -53,20 +53,15 @@ struct Env {
     std::optional<RoadDemSampler> dem;
     RoadProfileLimits limits;
 };
-std::unique_ptr<Env> make_env(const RoadGraph& world, const TileKey& key, const Fn& height) {
+// The deriver's inputs (both discovery stages); `bridge_far_end` = false stops after stage 1 (the pre-D35 set).
+std::unique_ptr<Env> make_env(const RoadGraph& world, const TileKey& key, const Fn& height, bool bridge_far_end = true) {
     auto env = std::make_unique<Env>();
-    auto tile = select_road_graph_tile(world, key); REQUIRE(tile); env->tile = std::move(*tile);
-    const auto deps = road_dem_dependencies(env->tile.graph, key.zone); REQUIRE(deps);
-    env->heights.resize(deps->size());
+    auto in = g2m_test::road_geom_inputs(world, key, bridge_far_end); REQUIRE(in);
+    env->tile = std::move(in->tile); env->context = std::move(in->context);
+    env->heights.resize(in->dem_keys.size());
     std::vector<const HeightTile*> views;
-    for (std::size_t i = 0; i < env->heights.size(); ++i) { env->heights[i].key = (*deps)[i].key; g2m_test::fill_dem(env->heights[i], height); views.push_back(&env->heights[i]); }
+    for (std::size_t i = 0; i < env->heights.size(); ++i) { env->heights[i].key = in->dem_keys[i]; g2m_test::fill_dem(env->heights[i], height); views.push_back(&env->heights[i]); }
     auto dem = RoadDemSampler::make(views); REQUIRE(dem); env->dem = std::move(*dem);
-    const auto cdeps = road_context_dependencies(env->tile.graph, key.zone, &key); REQUIRE(cdeps);
-    std::vector<RoadGraphTile> others;
-    for (const auto& d : *cdeps) { auto t = select_road_graph_tile(world, d.key); REQUIRE(t); others.push_back(std::move(*t)); }
-    std::vector<const RoadGraph*> graphs{&env->tile.graph};
-    for (const auto& t : others) graphs.push_back(&t.graph);
-    auto context = merge_road_graphs(graphs); REQUIRE(context); env->context = std::move(*context);
     env->limits.reference.allow_curvature_exceptions = true;
     return env;
 }
@@ -457,6 +452,9 @@ std::unique_ptr<FullDem> full_dem(const RoadGraph& world, const Fn& height) {
 // the 128 m halo of tile 455. From node 5 a second bridge (way 41, `span` m) and a ground road (way 31) run east, so the
 // walk from node 5 crosses `span` m of bridge and finds its support 32 m further: path span + 32. Tile 455's DEM
 // dependencies end at x = 768 (65 m beyond B's last segment); tile 455 does not hold ways 41 and 31 (its context does).
+// The fence is built on the stage-1 dependency set (make_env(..., false)): D29 bounds the walk by the entry's OWN way
+// margin, which every tile holding the entry loads. D35's second stage adds the DEM around incident bridges (way 41
+// here), which would hide the control's missing cell, so it is left out to keep the bound itself under test.
 RoadGraph fence_world(double span) {
     return world_of({{1, 300, 0}, {2, 400, 0}, {3, 500, 0}, {4, 600, 0}, {5, 702.7, 0}, {6, 702.7 + span, 0}, {7, 802.7 + span, 0}},
         {{30, {1, 2, 3}}, {40, {3, 4, 5}, kBridge}, {41, {5, 6}, kBridge}, {31, {6, 7}}});
@@ -467,7 +465,7 @@ TEST_CASE("completion: the walk budget bound keeps every DEM read inside the ent
     RoadCompletionOptions opts; opts.enabled = true;
     // The bound itself: 61.5 m accepted, anything beyond refused before any work.
     {
-        const auto env = make_env(fence_world(29.4), kTile, rolling);
+        const auto env = make_env(fence_world(29.4), kTile, rolling, false);
         const auto builder = RoadReferenceBuilder::make(env->context); REQUIRE(builder);
         auto entries = build(*env, false).entries; std::vector<RoadProfileOrigin> origins;
         opts.abutment_path_m = kRoadCompletionMaxAbutmentPathM;
@@ -483,7 +481,7 @@ TEST_CASE("completion: the walk budget bound keeps every DEM read inside the ent
     // the same tier result for every entry.
     for (const double span : {29.4, 29.9}) {
         const auto world = fence_world(span);
-        const auto env = make_env(world, kTile, rolling); const auto full = full_dem(world, rolling);
+        const auto env = make_env(world, kTile, rolling, false); const auto full = full_dem(world, rolling);
         const auto builder = RoadReferenceBuilder::make(env->context); REQUIRE(builder);
         const auto strict = build(*env, false);
         const auto bridge = index_of(strict, 40, 0); REQUIRE_FALSE(strict.entries[bridge].profile);   // two bridges meet at node 5
@@ -499,7 +497,7 @@ TEST_CASE("completion: the walk budget bound keeps every DEM read inside the ent
     // full DEM has, so the abutment exists in one and not the other.
     {
         const auto world = fence_world(29.9);
-        const auto env = make_env(world, kTile, rolling); const auto full = full_dem(world, rolling);
+        const auto env = make_env(world, kTile, rolling, false); const auto full = full_dem(world, rolling);
         RoadCompletionOptions wide; wide.abutment_path_m = 62;
         const auto fenced = road_bridge_anchor(env->context, *env->dem, zone, 5, wide), open = road_bridge_anchor(env->context, *full->dem, zone, 5, wide);
         std::printf("D29 control, 62 m budget at path 61.9 m: abutment with the tile's DEM %d, with the full DEM %d\n", fenced.plane.has_value(), open.plane.has_value());
@@ -596,31 +594,49 @@ TEST_CASE("completion: fixtures, completed stretches by kind before and after, t
     }
 }
 
-TEST_CASE("strict pass: the latent far-end read of a bridge anchor makes one entry tile-dependent (P1, measured in D32)", "[layer][roads][completion][invariance]") {
-    // Way 10 runs from tile 455 to node 4 at x = 700 (tile 456, outside tile 455's 128 m halo), where a 600 m bridge (way 20)
-    // starts; a ground road (way 12) continues from its far end at x = 1300. The strict anchor of node 4 (surface_anchor)
-    // projects onto the span's feasible cubic rise, which needs the raw anchor of the FAR end: the DEM 32 m beyond x = 1300.
-    // Tile 455 loads the DEM only 65 m around its own ways (to x = 765): its strict pass declines way 10 for a missing DEM
-    // tile, tile 456 (which holds the bridge) profiles it. This is P1 behaviour, not the completion tier's.
-    const auto world = world_of({{1, -300, 0}, {2, -100, 0}, {3, 300, 0}, {4, 700, 0}, {5, 1000, 0}, {6, 1300, 0}, {7, 1600, 0}},
-        {{10, {1, 2, 3, 4}}, {20, {4, 5, 6}, kBridge}, {12, {6, 7}}});
-    const auto west = make_env(world, kTile, rolling), east = make_env(world, kTileEast, rolling);
-    const auto sw = build(*west, false), se = build(*east, false);
-    const auto& a = sw.entries[index_of(sw, 10, 0)]; const auto& b = se.entries[index_of(se, 10, 0)];
-    std::printf("D32 latent far end: way 10 in tile 455 %s, in tile 456 %s\n", a.profile ? "profiled" : a.decline->message.c_str(), b.profile ? "profiled" : b.decline->message.c_str());
-    REQUIRE_FALSE(a.profile); CHECK(a.decline->message.find("road DEM") != std::string::npos);
-    CHECK(b.profile.has_value());
-    // The tier completes the west copy (a ground completion ending at the walk's abutment plane) and leaves the east one strict.
-    const auto cw = build(*west, true);
-    CHECK(cw.origins[index_of(cw, 10, 0)].provenance == ProfileProvenance::GroundCompleted);
+TEST_CASE("strict pass: the far-end read of a bridge anchor is tile-invariant with the bridge dependencies (D32, fixed by D35)", "[layer][roads][completion][invariance]") {
+    // Way 10 runs from tile 455 to node 4 at x = 700 (tile 456, outside tile 455's 128 m halo), where a bridge (way 20)
+    // starts; a ground road (way 12) continues from its far end. The strict anchor of node 4 (surface_anchor) projects onto
+    // the span's feasible cubic rise, which needs the raw anchor of the FAR end: the 32 m walk along way 12 and the DEM
+    // around it. Tile 455 does not hold the bridge. Two spans:
+    //   600 m: the far end (x = 1300) lies in tile 456, whose graph tile is already in tile 455's stretch context, so only
+    //          the DEM beyond x = 765 is missing from the stage-1 set;
+    //   1000 m: the far end (x = 1700) lies in tile 457, 164 m east of tile 456: way 12 is in neither stage-1 context tile,
+    //          so the far end's ground approach is missing as well.
+    // D35: the second discovery stage adds every incident bridge's DEM (65 m margin) and the graph tiles of its nodes, so
+    // both tiles derive way 10 alike. Negative control: the stage-1 set (the pre-D35 deriver) - tile 455 declines way 10,
+    // tile 456 profiles it (the D32 measurement).
+    for (const double span : {600.0, 1000.0}) {
+        const double far = 700 + span;
+        const auto world = world_of({{1, -300, 0}, {2, -100, 0}, {3, 300, 0}, {4, 700, 0}, {5, 700 + span / 2, 0}, {6, far, 0}, {7, far + 300, 0}},
+            {{10, {1, 2, 3, 4}}, {20, {4, 5, 6}, kBridge}, {12, {6, 7}}});
+        const auto west = make_env(world, kTile, rolling), east = make_env(world, kTileEast, rolling);
+        const auto sw = build(*west, false), se = build(*east, false);
+        const auto ia = index_of(sw, 10, 0), ib = index_of(se, 10, 0);
+        const auto& a = sw.entries[ia]; const auto& b = se.entries[ib];
+        std::printf("D35 far end, span %.0f m: way 10 in tile 455 %s, in tile 456 %s\n", span, a.profile ? "profiled" : a.decline->message.c_str(),
+            b.profile ? "profiled" : b.decline->message.c_str());
+        REQUIRE(b.profile.has_value());   // a real profile, not two equal declines
+        CHECK(same_outcome(a, sw.origins[ia], b, se.origins[ib]));
+        // With the tier the two copies stay strict and equal too.
+        const auto cw = build(*west, true), ce = build(*east, true);
+        CHECK(cw.origins[index_of(cw, 10, 0)].provenance == ProfileProvenance::Strict);
+        CHECK(same_outcome(cw.entries[index_of(cw, 10, 0)], cw.origins[index_of(cw, 10, 0)], ce.entries[index_of(ce, 10, 0)], ce.origins[index_of(ce, 10, 0)]));
+        // Negative control: without the second stage tile 455 declines (missing DEM or missing ground-approach context).
+        const auto stage1 = make_env(world, kTile, rolling, false);
+        const auto s1 = build(*stage1, false); const auto& c = s1.entries[index_of(s1, 10, 0)];
+        std::printf("    stage-1 dependencies only (pre-D35): way 10 in tile 455 %s\n", c.profile ? "profiled" : c.decline->message.c_str());
+        CHECK_FALSE(c.profile.has_value());
+        CHECK_FALSE(same_outcome(c, s1.origins[index_of(s1, 10, 0)], b, se.origins[ib]));
+    }
 }
 
-TEST_CASE("completion: fixtures against a world reference (whole world as context, a DEM without holes); strict far-end dependence measured (D32)", "[layer][roads][completion][fixtures][invariance]") {
+TEST_CASE("completion: fixtures against a world reference (whole world as context, a DEM without holes); strict far-end reads tile-invariant (D32, D35)", "[layer][roads][completion][fixtures][invariance]") {
     // Every entry of every tile is compared with the same tile built from the WHOLE world graph as its context and a DEM
     // covering the whole world: the reads a tile cannot have are then all available. This covers every entry (not only the
-    // ones two tiles both hold) and reads up to the bounds. The strict pass keeps P1's latent far-end dependence
-    // (surface_anchor reads the far end of a bridge span), which this counts; the completion tier must add no difference of
-    // its own: wherever the strict outcome agrees with the reference, the final outcome agrees too.
+    // ones two tiles both hold) and reads up to the bounds. P1's latent far-end dependence (surface_anchor reads
+    // the far end of a bridge span, D32) is closed by D35's second discovery stage: the strict outcome must agree everywhere,
+    // and the completion tier must add no difference of its own.
     struct Mode { const char* name; Fn dem; };
     const Mode modes[] = {{"flat DEM", Fn{}}, {"tilted bumpy DEM", Fn(tilted_fixture_dem)}};
     const auto strict_key = [](const RoadGeomEntry& e) {
@@ -637,6 +653,18 @@ TEST_CASE("completion: fixtures against a world reference (whole world as contex
         for (const auto& n : world->nodes) {
             const auto k = tile_key_at(g2m_test::kZone32N, 2, static_cast<double>(n.position.x) / 1000.0, static_cast<double>(n.position.y) / 1000.0);
             if (k) keys.insert(*k);
+        }
+        {   // D35: how much the second discovery stage adds on the fixture (graph and DEM tiles beyond stage 1).
+            std::size_t tiles_added = 0, graph_added = 0, dem_added = 0;
+            for (const auto& key : keys) {
+                const auto s1 = g2m_test::road_geom_inputs(*world, key, false), s2 = g2m_test::road_geom_inputs(*world, key, true);
+                REQUIRE(s1); REQUIRE(s2);
+                const auto ways_of = [](const RoadGraph& g) { std::set<std::int64_t> w; for (const auto& x : g.ways) w.insert(x.osm_id); return w; };
+                const std::size_t g = ways_of(s2->context).size() - ways_of(s1->context).size(), d = s2->dem_keys.size() - s1->dem_keys.size();
+                if (g || d) ++tiles_added;
+                graph_added += g; dem_added += d;
+            }
+            std::printf("[D35] %s: %zu tiles, stage 2 adds dependencies in %zu (context ways +%zu, DEM tiles +%zu)\n", pbf, keys.size(), tiles_added, graph_added, dem_added);
         }
         for (const auto& mode : modes) {
             const auto full = full_dem(*world, mode.dem);
@@ -682,6 +710,7 @@ TEST_CASE("completion: fixtures against a world reference (whole world as contex
             std::printf("[D32] %s (%s): %zu entries over %zu tiles, %zu completed; strict outcome differs from the world reference for %zu (%zu of them a missing DEM tile); completion differs where strict agrees: %zu (control, tile graph as the tier's context: %zu)\n",
                 pbf, mode.name, entries, keys.size(), completed, strict_differ, strict_differ_bridge_end, tier_differ, control_differ);
             for (const auto& ex : examples) std::printf("    %s\n", ex.c_str());
+            CHECK(strict_differ == 0);   // D35: no far-end read left outside the dependency set
             CHECK(tier_differ == 0);
             CHECK(control_differ > 0);
         }

@@ -129,3 +129,63 @@ TEST_CASE("roads.geom server and four-worker bake agree and pin complete depende
     const auto body = decode_body((*stored)->body); REQUIRE(body); const auto tile = decode_road_geom(*body); REQUIRE(tile);
     REQUIRE(tile->entries.size() == 1); REQUIRE(tile->entries[0].profile); CHECK(tile->entries[0].profile->at(50)->height_m == 100);
 }
+
+TEST_CASE("roads.geom discovers the far end of an incident bridge in a second stage (D35)", "[layer][road_geom]") {
+    // Way 10 ends at node 4 (tile x = 1, beyond tile 0's 128 m halo) where a 1000 m bridge (way 20) starts; the ground
+    // road way 12 leaves its far end in tile x = 2. Tile 0 holds way 10 only; neither the bridge nor its far end is in
+    // its graph or its stage-1 dependencies.
+    RoadGraph world;
+    for (const auto& [id, x] : std::vector<std::pair<std::int64_t, std::int64_t>>{{1, 100000}, {2, 500000}, {3, 900000},
+             {4, 1200000}, {5, 1700000}, {6, 2200000}, {7, 2500000}})
+        world.nodes.push_back({id, {x, 128000}});
+    world.ways = {{10, 3, {1, 2, 3, 4}, {{"highway", "tertiary"}}}, {12, 3, {6, 7}, {{"highway", "tertiary"}}},
+        {20, 3, {4, 5, 6}, {{"bridge", "yes"}, {"highway", "tertiary"}}}};
+    for (const auto& w : world.ways) for (std::size_t i = 1; i < w.node_ids.size(); ++i)
+        world.edges.push_back({w.osm_id, static_cast<std::uint32_t>(i - 1), w.node_ids[i - 1], w.node_ids[i]});
+    const RoadGeomDeriver deriver; CHECK(deriver.discovery_stages() == 2);
+    const TileKey west{zone, 2, 0, 0}, east{zone, 2, 1, 0};
+    const InputTileRef far_graph{std::string(kRoadGraphLayer), {zone, 2, 2, 0}};
+    struct Run { std::vector<InputTileRef> stage1, stage2; Result<DeriveResult> result; };
+    const auto run = [&](const TileKey& target, bool second_stage) {
+        const auto graph = select_road_graph_tile(world, target); REQUIRE(graph);
+        std::vector<InputTile> inputs{input(std::string(kRoadGraphLayer), target, *encode_road_graph(*graph))};
+        const auto resolve = [&](const std::vector<InputTileRef>& refs) {
+            for (const auto& ref : refs) {
+                if (std::any_of(inputs.begin(), inputs.end(), [&](const auto& in) { return in.ref == ref; })) continue;
+                if (ref.layer == kRoadGraphLayer) inputs.push_back(input(ref.layer, ref.key, *encode_road_graph(*select_road_graph_tile(world, ref.key))));
+                else { HeightTile t; t.key = ref.key; t.h.fill(25600); inputs.push_back(input(ref.layer, ref.key, *encode_height_tile(t), VerticalDatum::DHHN2016)); }
+            }
+            std::sort(inputs.begin(), inputs.end(), [](const auto& a, const auto& b) { return a.ref < b.ref; });
+        };
+        Run out{{}, {}, make_error(ErrorCode::NotFound, "not run")};
+        const auto stage1 = deriver.additional_inputs_for({target, 0, inputs}); REQUIRE(stage1); out.stage1 = *stage1; resolve(*stage1);
+        const auto stage2 = deriver.additional_inputs_for({target, 0, inputs}); REQUIRE(stage2); out.stage2 = *stage2;
+        if (second_stage) resolve(*stage2);
+        out.result = deriver.derive({target, 0, inputs});
+        return out;
+    };
+    const auto a = run(west, true);
+    // Stage 1 names tile 1 (node 4) but not the far end; stage 2 adds its graph tile and the DEM along the span.
+    CHECK(std::binary_search(a.stage1.begin(), a.stage1.end(), InputTileRef{std::string(kRoadGraphLayer), east}));
+    CHECK_FALSE(std::binary_search(a.stage1.begin(), a.stage1.end(), far_graph));
+    CHECK(std::binary_search(a.stage2.begin(), a.stage2.end(), far_graph));
+    CHECK(a.stage2.size() > a.stage1.size());
+    CHECK(std::includes(a.stage2.begin(), a.stage2.end(), a.stage1.begin(), a.stage1.end()));
+    REQUIRE(a.result);
+    // The east tile holds the bridge itself: its stage 1 is already complete, stage 2 adds nothing.
+    const auto b = run(east, true); CHECK(b.stage2 == b.stage1); REQUIRE(b.result);
+    const auto entry_of = [](const DeriveResult& r) {
+        const auto geometry = decode_road_geom(*decode_body(r.body)); REQUIRE(geometry);
+        for (const auto& e : geometry->entries) if (e.way_id == 10) return e;
+        FAIL("way 10 missing"); return geometry->entries.front();
+    };
+    const auto ea = entry_of(*a.result), eb = entry_of(*b.result);
+    REQUIRE(ea.profile); REQUIRE(eb.profile);
+    for (double s : {0.0, 100.0, 500.0, 1000.0}) {
+        const auto ha = ea.profile->at(s), hb = eb.profile->at(s); REQUIRE(ha); REQUIRE(hb); CHECK(ha->height_m == hb->height_m);
+    }
+    // Sabotage: stage 1 alone is an incomplete dependency set; the deriver refuses instead of deriving the old tile.
+    const auto stage1_only = run(west, false);
+    REQUIRE_FALSE(stage1_only.result);
+    CHECK(stage1_only.result.error().message.find("incomplete dependency set") != std::string::npos);
+}

@@ -53,7 +53,7 @@ the initial inputs resolve. A road deriver can inspect its complete graph before
 naming distant DEM inputs. The resolver validates discovered refs, deduplicates
 initial overlaps, resolves absent/unavailable inputs with the usual semantics,
 and includes all present input hashes in cached headers. At most 4096 combined
-dependencies are allowed. The default method returns no additional refs.
+dependencies are allowed. The default method returns no additional refs. A deriver may ask for more stages (`discovery_stages()`, at most 4): the resolver calls `additional_inputs_for` again with every input resolved so far until a stage names nothing new; roads.geom uses two (P2 decision D35).
 
 ## Horizontal and vertical fitting primitives
 

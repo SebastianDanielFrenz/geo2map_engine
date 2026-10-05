@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <optional>
+#include <span>
 #include <string>
 #include <set>
 namespace g2m {
@@ -28,13 +30,46 @@ Result<RoadGraphTile> graph_input(const DeriveRequest& request) {
     if (!graph) return make_error(ErrorCode::NotFound, "roads.geom: graph dependency absent");
     return decode_graph_input(*graph);
 }
-// DEM tiles under the complete ways plus the roads.graph tiles that hold every
-// way incident to their nodes (stretch context), sorted and unique.
+// Stage 1: DEM tiles under the complete ways plus the roads.graph tiles that hold
+// every way incident to their nodes (stretch context), sorted and unique.
 Result<std::vector<InputTileRef>> dependencies(const RoadGraphTile& graph, geo::UtmZone zone) {
     auto dem = road_dem_dependencies(graph.graph, zone); if (!dem) return dem.error();
     auto context = road_context_dependencies(graph.graph, zone, &graph.key); if (!context) return context.error();
     dem->insert(dem->end(), context->begin(), context->end()); std::sort(dem->begin(), dem->end());
     return dem;
+}
+// Stage 2 (decision D35): the stage-1 context tiles found among `inputs` (nullopt while any is still missing, i.e. in
+// stage 1 itself; an explicitly absent tile counts as present and adds nothing), merged with the tile graph, give the
+// bridge ways incident to the tile's nodes; road_bridge_dependencies names their DEM and their nodes' graph tiles.
+Result<std::optional<std::vector<InputTileRef>>> bridge_dependencies(const RoadGraphTile& graph, geo::UtmZone zone,
+    std::span<const InputTile> inputs) {
+    const auto context_refs = road_context_dependencies(graph.graph, zone, &graph.key); if (!context_refs) return context_refs.error();
+    std::vector<RoadGraphTile> tiles;
+    for (const auto& ref : *context_refs) {
+        const InputTile* found = nullptr;
+        for (const auto& input : inputs) if (input.ref == ref) { found = &input; break; }
+        if (!found) return std::optional<std::vector<InputTileRef>>{};
+        if (!found->header) continue;
+        auto tile = decode_graph_input(*found); if (!tile) return tile.error();
+        tiles.push_back(std::move(*tile));
+    }
+    std::vector<const RoadGraph*> graphs{&graph.graph};
+    for (const auto& tile : tiles) graphs.push_back(&tile.graph);
+    const auto context = merge_road_graphs(graphs); if (!context) return context.error();
+    auto bridges = road_bridge_dependencies(graph.graph, *context, zone, &graph.key); if (!bridges) return bridges.error();
+    return std::optional<std::vector<InputTileRef>>(std::move(*bridges));
+}
+// Stage 1 plus, once the context is resolved, stage 2: sorted and unique.
+Result<std::vector<InputTileRef>> all_dependencies(const RoadGraphTile& graph, geo::UtmZone zone, std::span<const InputTile> inputs,
+    bool* complete = nullptr) {
+    auto deps = dependencies(graph, zone); if (!deps) return deps.error();
+    const auto bridges = bridge_dependencies(graph, zone, inputs); if (!bridges) return bridges.error();
+    if (complete) *complete = bridges->has_value();
+    if (*bridges) {
+        deps->insert(deps->end(), (*bridges)->begin(), (*bridges)->end());
+        std::sort(deps->begin(), deps->end()); deps->erase(std::unique(deps->begin(), deps->end()), deps->end());
+    }
+    return deps;
 }
 }
 LayerDesc road_geom_desc() {
@@ -58,7 +93,8 @@ std::string road_geom_config_text() {
         " xs=1 enc=7 rules=de:" + to_hex(std::span<const std::uint8_t>(rules_hash.data(), rules_hash.size())) + " join-bisector=1 context=nodes"
         " junction=1 furniture=1 completion=1 completion-retry=" + option_value(c.retry_spacing_m) + "/" + std::to_string(c.retry_iterations) +
         " completion-abutment=" + option_value(c.abutment_ground_m) + "/" + option_value(c.abutment_path_m) +
-        " completion-ground=" + option_value(c.ground_spacing_m) + "/" + option_value(c.ground_ramp_m) + " strict-anchor=1 ring-nesting=2mm";
+        " completion-ground=" + option_value(c.ground_spacing_m) + "/" + option_value(c.ground_ramp_m) + " strict-anchor=1 ring-nesting=2mm"
+        " bridge-far-end=1";   // D35: two discovery stages, the DEM and graph tiles of every incident bridge's far end
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {
@@ -66,11 +102,13 @@ std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) con
 }
 Result<std::vector<InputTileRef>> RoadGeomDeriver::additional_inputs_for(const DeriveRequest& request) const {
     const auto graph = graph_input(request); if (!graph) return graph.error();
-    return dependencies(*graph, request.target.zone);
+    return all_dependencies(*graph, request.target.zone, request.inputs);
 }
 Result<DeriveResult> RoadGeomDeriver::derive(const DeriveRequest& request) const {
     const auto graph = graph_input(request); if (!graph) return graph.error();
-    auto expected = dependencies(*graph, request.target.zone); if (!expected) return expected.error();
+    bool complete = false;
+    auto expected = all_dependencies(*graph, request.target.zone, request.inputs, &complete); if (!expected) return expected.error();
+    if (!complete) return make_error(ErrorCode::InvalidArgument, "roads.geom: incomplete dependency set");
     expected->push_back({std::string(kRoadGraphLayer), request.target}); std::sort(expected->begin(), expected->end());
     if (request.inputs.size() != expected->size()) return make_error(ErrorCode::InvalidArgument, "roads.geom: incomplete dependency set");
     std::set<InputTileRef> seen; std::vector<HeightTile> heights; std::vector<RoadGraphTile> context_tiles;

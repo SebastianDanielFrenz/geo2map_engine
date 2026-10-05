@@ -158,6 +158,8 @@ public:
     std::span<const std::string> coverage_inputs() const override { return std::span<const std::string>(desc_.inputs).first(1); }
     std::vector<InputTileRef> inputs_for(const TileKey& target) const override;
     Result<std::vector<InputTileRef>> additional_inputs_for(const DeriveRequest& request) const override;
+    // Two stages (D35): the stretch context first, then the far ends of the bridges incident to the tile's nodes.
+    std::size_t discovery_stages() const override { return 2; }
     Result<DeriveResult> derive(const DeriveRequest& request) const override;
 private:
     LayerDesc desc_;

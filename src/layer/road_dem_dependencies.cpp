@@ -1,5 +1,6 @@
 #include "g2m/layer/road_dem_dependencies.h"
 #include "g2m/layer/road_graph_tile.h"
+#include "g2m/layer/road_attributes.h"
 #include "g2m/layer/terrain_layers.h"
 #include <algorithm>
 #include <set>
@@ -42,5 +43,31 @@ Result<std::vector<InputTileRef>> road_dem_dependencies(const RoadGraph& graph,
     std::vector<InputTileRef> out; out.reserve(keys.size());
     for (const auto& tile : keys) out.push_back({std::string(kElevBaseLayer), tile});
     return out;
+}
+Result<std::vector<InputTileRef>> road_bridge_dependencies(const RoadGraph& tile_graph, const RoadGraph& context,
+    geo::UtmZone zone, const TileKey* exclude) {
+    const auto valid_tile = validate_road_graph(tile_graph); if (!valid_tile) return valid_tile.error();
+    const auto valid_context = validate_road_graph(context); if (!valid_context) return valid_context.error();
+    std::set<std::int64_t> tile_nodes;
+    for (const auto& way : tile_graph.ways) tile_nodes.insert(way.node_ids.begin(), way.node_ids.end());
+    // The bridge ways incident to a tile-way node, in way-id order (context.ways is sorted), as a canonical sub-graph.
+    RoadGraph bridges; std::set<std::int64_t> used;
+    for (const auto& way : context.ways) {
+        const auto attributes = resolve_road_attributes(way);
+        if (!attributes || !attributes->bridge) continue;
+        if (std::none_of(way.node_ids.begin(), way.node_ids.end(), [&](auto id) { return tile_nodes.count(id) != 0; })) continue;
+        bridges.ways.push_back(way); used.insert(way.node_ids.begin(), way.node_ids.end());
+        for (std::size_t i = 1; i < way.node_ids.size(); ++i) {
+            if (way.node_ids[i - 1] == way.node_ids[i]) { ++bridges.repeated_ref_pairs; continue; }
+            bridges.edges.push_back({way.osm_id, static_cast<std::uint32_t>(i - 1), way.node_ids[i - 1], way.node_ids[i]});
+        }
+    }
+    if (bridges.ways.empty()) return std::vector<InputTileRef>{};
+    for (const auto& node : context.nodes) if (used.count(node.osm_id)) bridges.nodes.push_back(node);
+    auto dem = road_dem_dependencies(bridges, zone); if (!dem) return dem.error();
+    auto graph = road_context_dependencies(bridges, zone, exclude); if (!graph) return graph.error();
+    dem->insert(dem->end(), graph->begin(), graph->end());
+    std::sort(dem->begin(), dem->end()); dem->erase(std::unique(dem->begin(), dem->end()), dem->end());
+    return dem;
 }
 }

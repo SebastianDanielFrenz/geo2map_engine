@@ -80,6 +80,16 @@ public:
     virtual Result<std::vector<InputTileRef>> additional_inputs_for(const DeriveRequest&) const {
         return std::vector<InputTileRef>{};
     }
+    // Number of discovery stages (1..kMaxDiscoveryStages). With more than one,
+    // additional_inputs_for is called again with every input resolved so far
+    // (the first-stage refs plus every earlier stage's discoveries, sorted)
+    // until a stage names no ref that is not already an input, or the count is
+    // reached. Each call must be a pure function of the inputs it is given, so
+    // the resolved set is too. The default (1) is the historical single call.
+    // roads.geom uses 2 (decision D35: the far end of incident bridges is only
+    // known once the stretch-context tiles are resolved).
+    static constexpr std::size_t kMaxDiscoveryStages = 4;
+    virtual std::size_t discovery_stages() const { return 1; }
     virtual Result<DeriveResult> derive(const DeriveRequest& request) const = 0;
 };
 

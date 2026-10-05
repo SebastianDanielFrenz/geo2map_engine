@@ -223,6 +223,49 @@ TEST_CASE("server: discovered dependencies are resolved, hashed and cached", "[s
     CHECK(cached.container == response.container); CHECK(deriver.discoveries == 1); CHECK(deriver.sum.calls == 1);
 }
 
+TEST_CASE("server: later discovery stages see the resolved inputs and stop at the first stage that adds nothing", "[server][discovery]") {
+    // Stage k names landcover tiles dx = 1..k east of the target, each one only once the previous one is resolved and
+    // present; dx = 3 does not exist in the source store (absent), so its successor is never named. With 4 stages the
+    // chain stops at the fixed point (stage 4 adds nothing); with 2 stages at dx = 2; with 1 stage (the default) at dx = 1.
+    for (const std::size_t stages : {std::size_t{1}, std::size_t{2}, std::size_t{4}}) {
+        World w;
+        class Staged final : public IDeriver {
+        public:
+            SumDeriver sum; std::size_t stages = 1;
+            const LayerDesc& output() const override { return sum.output(); }
+            ContentHash config_hash() const override { return sum.config_hash(); }
+            std::size_t discovery_stages() const override { return stages; }
+            std::vector<InputTileRef> inputs_for(const TileKey& t) const override { return {{kOsm, t}}; }
+            Result<std::vector<InputTileRef>> additional_inputs_for(const DeriveRequest& req) const override {
+                sizes.push_back(req.inputs.size());
+                std::vector<InputTileRef> out;
+                auto key = req.target;
+                for (int dx = 1; dx <= 8; ++dx) {
+                    key.x = req.target.x + dx; out.push_back({kLc, key});
+                    const auto it = std::find_if(req.inputs.begin(), req.inputs.end(), [&](const auto& in) { return in.ref == out.back(); });
+                    if (it == req.inputs.end() || !it->header) break;   // the next one only once this one is resolved and present
+                }
+                std::sort(out.begin(), out.end());
+                return out;
+            }
+            Result<DeriveResult> derive(const DeriveRequest& req) const override { derived = req.inputs.size(); return sum.derive(req); }
+            mutable std::vector<std::size_t> sizes; mutable std::size_t derived = 0;
+        } deriver;
+        deriver.stages = stages;
+        LocalSourceUpstream upstream(*w.sources);
+        ServerConfig config; config.derived_store = w.derived.get(); config.derivers = {&deriver}; config.upstreams = {&upstream};
+        Server server(config); REQUIRE(server.add_release(w.release, "snap1"));
+        const auto response = get_tile(server, w.release.rid, kSum, home_tile()); REQUIRE(response.meta.status == Status::Ok);
+        // Inputs: the osm target plus landcover dx = 1 .. min(stages, 3) (dx = 3 is named but absent).
+        CHECK(deriver.derived == 1 + std::min<std::size_t>(stages, 3));
+        const std::vector<std::size_t> expected_sizes = stages == 1 ? std::vector<std::size_t>{1}
+            : stages == 2 ? std::vector<std::size_t>{1, 2} : std::vector<std::size_t>{1, 2, 3, 4};
+        CHECK(deriver.sizes == expected_sizes);
+        const auto parsed = parse_container(response.container); REQUIRE(parsed);
+        CHECK(parsed->header.inputs.size() == std::min<std::size_t>(stages, 2) + 1);   // absent inputs carry no hash
+    }
+}
+
 TEST_CASE("server: invalid or failed discovered dependencies never cache output", "[server][discovery]") {
     for (int mode = 0; mode < 4; ++mode) {
         World w;

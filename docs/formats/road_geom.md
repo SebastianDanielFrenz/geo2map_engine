@@ -230,7 +230,10 @@ Bernstein grade bounds and endpoint second-derivative bounds. Truncated,
 trailing, forged-count and invalid-profile inputs fail by value.
 
 Derivation first resolves the target roads.graph, then discovers every L0
-elev.base dependency for complete ways plus 65 m support margin. Missing
+elev.base dependency for complete ways plus 65 m support margin and the roads.graph
+tiles of every node of the tile's ways (stretch context); a second discovery
+stage (decision D35) adds the DEM along every bridge incident to those nodes
+and the roads.graph tiles of its nodes (the far end of the span). Missing
 dependencies, mixed datums, hash/header mismatches and offset overflow fail
 the whole derivation before a cache write. Native 1/256 m height offsets are
 applied once; output offset is zero and datum is retained. Every dependency
@@ -253,7 +256,7 @@ The release id changes with the encoding: the deriver config hash
 (`road_geom_config_text()`) carries `xs=1 enc=7 rules=de:<sha256 of de.json>`
 and, since slice 8, `junction=1 furniture=1 completion=1
 completion-retry=20/16384 completion-abutment=32/60 completion-ground=40/32
-strict-anchor=1 ring-nesting=2mm` - every value of
+strict-anchor=1 ring-nesting=2mm bridge-far-end=1` - every value of
 `served_road_completion_options()` the deriver builds with (retry spacing and
 iterations, abutment ground path and walk budget, ground spacing and ramp), the
 strict-anchor rule (D30) and the nesting allowance (D34). Terrain-only release

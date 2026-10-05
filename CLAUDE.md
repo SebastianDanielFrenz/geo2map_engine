@@ -716,7 +716,7 @@ Remaining slices and acceptance are in `docs/g3_road_pipeline.md`; G3 is not yet
 complete. The opt-in g2m.roads.graph layer now has a bounded codec and nine-input deriver.
 Physical tags, complete DEM dependency enumeration, immutable DEM sampling,
 G1 clothoid fitting and constrained cubic profiles are implemented foundations.
-IDeriver::additional_inputs_for provides one pure discovery stage for distant
+IDeriver::additional_inputs_for provides pure discovery stages (`discovery_stages()`, default 1) for distant
 DEM inputs. See docs/g3_profile_foundation.md for limits and project defaults.
 ## Street fidelity P1 (cross-section), in progress (2026-10-05)
 
@@ -864,9 +864,13 @@ the deriver passes `served_road_completion_options()`. Validation of design 9.2 
 sort orders, ring simplicity and nesting within 2 mm, trims, flags, furniture lane spans, reserved bit 3 rejected, D33).
 D34: offset rings that do not nest or exceed 1024 vertices take the all-layer hull, else Degenerate. Config text gains
 `enc=7 junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/60 completion-ground=40/32
-strict-anchor=1 ring-nesting=2mm` (`road_geom_config_text()`). Tests: `test_road_geom_enc7.cpp` (T8: one rejection per
+strict-anchor=1 ring-nesting=2mm bridge-far-end=1` (`road_geom_config_text()`). Tests: `test_road_geom_enc7.cpp` (T8: one rejection per
 rule with its own malformed body, round trip, truncation; T7: ownership and cross-tile identity with the tile-graph
 negative control), `test_road_geom_xs.cpp` (encoding 6/7, pinned config text), `tests/support/road_junction_scene.h`
 (standalone scene also used by the fuzz seeds), fuzz seeds for encodings 6 and 7. Goldens: `g3xs` re-recorded (served
 tiles now carry completed entries), new `g3j` (`golden_g3j.cpp`, `testdata/golden/g3j_golden.txt`, Windows = Linux).
 Roadgeom test body SHA for encoding 7 `a453aed5...a618` (encoding 6 `17d9b7c7...` still reproduced).
+D35: `IDeriver::discovery_stages()` (default 1, max 4; the server re-calls `additional_inputs_for` with every input resolved
+so far until a stage adds nothing); roads.geom uses 2 - stage 2 adds every bridge incident to a node of the tile's ways
+(`road_bridge_dependencies`: DEM along it + 65 m, graph tiles of its nodes), closing the D32 far-end read; `derive()`
+rejects a stage-1-only input set. Test helper `g2m_test::road_geom_inputs(world, key, bridge_far_end)`.
