@@ -1,8 +1,8 @@
 // Street fidelity P2 slice 7 (design section 7): junction furniture computed from node tags and the P1 cross-sections:
 // crossings (7.1), stop and give-way lines (7.2) and signals (7.3), each as a record with its own decline reason. Pure
 // functions of a RoadGeomTile (entries with profile and cross-section), the context graph (node degrees, incident ways) and
-// the rules. Library functions only: RoadGeomTile does not carry the records yet and no served byte changes (encoding 7,
-// slice 8, stores them).
+// the rules. Slice 8 serves them: build_road_geom_tile stores the result in RoadGeomTile::furniture and roads.geom encoding 7
+// section 6 carries it (docs/formats/road_geom.md).
 //
 // Where a record lives (design 5.1). Furniture on an entry (crossings and the lines and signals of nodes inside a stretch
 // or at a degree-one or degree-two stretch end) belongs to ONE entry, chosen by a rule that needs only the context graph
@@ -14,44 +14,13 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace g2m {
-enum class FurnitureKind : std::uint8_t { Crossing = 0, StopLine = 1, GiveWayLine = 2, Signal = 3 };
-enum class FurnitureDecline : std::uint16_t {
-    None = 0,
-    StretchDeclined = 1,       // the node's stretch has no profile or no cross-section
-    Tunnel = 2,
-    JunctionNode = 3,          // a crossing on a degree >= 3 node: the crossing direction is unknown
-    DirectionUnresolved = 4,   // a stop or give-way sign without a direction and without a junction end within reach
-    NoLanes = 5,               // driving_lanes_at returns 0 for the travel direction
-    Ambiguous = 6,             // a stop/give_way on a junction node whose approaches all have the same rank
-    JunctionDeclined = 7,      // a junction-node signal or sign at a declined junction
-};
-inline constexpr std::size_t kFurnitureDeclineCount = 8;
-enum FurnitureFlag : std::uint8_t {
-    kFurnitureSignalised = 1,      // a crossing with crossing=traffic_signals
-    kFurnitureLoweredKerb = 2,     // kerb=lowered or flush
-    kFurnitureSpansJoin = 4,       // a crossing at a degree-two way join: the quad extends back over the join
-    kFurnitureInsideJunction = 8,  // reserved: never set by slice 7 (it needs the junction, which only its owner tile builds, D27)
-    kFurnitureLeftPost = 16,       // the second signal post, on the travel-left side
-    kFurnitureDefinedMask = 31,
-};
-// One item. A declined record keeps its identity (kind, node, entry, travel) and has no extent (t_from = t_to = length = 0).
-struct RoadFurniture {
-    FurnitureKind kind = FurnitureKind::Crossing;
-    FurnitureDecline decline = FurnitureDecline::None;
-    std::int64_t node_id = 0;          // the source OSM node; the junction's owner node for a line or signal derived from a junction
-    std::size_t entry_index = 0;       // the stretch it sits on (0 for a record of a declined junction)
-    double station_m = 0;              // centre along the entry's reference line
-    LaneDirection travel = LaneDirection::Forward;  // lines and signals: the direction controlled (Forward or Backward)
-    double t_from = 0, t_to = 0;       // lateral extent in the reference frame, mm-rounded (signal: both = t of the post)
-    double length_m = 0;               // along the road: crossing width, line width (a signal: 0), mm-rounded
-    CrossingPattern pattern = CrossingPattern::None;
-    std::uint8_t flags = 0;
-    std::uint32_t junction_index = 0;  // 1 + the junction's index in the list given to build_road_furniture, else 0
-    friend bool operator==(const RoadFurniture&, const RoadFurniture&) = default;
-};
+// The record types (RoadFurniture, FurnitureKind, FurnitureDecline, FurnitureFlag) are in road_geom_records.h:
+// RoadGeomTile carries the records (encoding 7, slice 8).
+
 // Counters of one build, for the measurement tables and the tests.
 struct FurnitureBuildStats {
     std::size_t crossing_nodes = 0;                       // nodes of the tile graph with highway=crossing
@@ -93,6 +62,11 @@ Result<std::vector<RoadFurniture>> build_road_furniture(const RoadGeomTile& tile
 // station -+ length/2, in the UTM frame (metres). A station outside the reference line [0, L] continues along the end
 // tangent (a crossing at a way join extends back over the join). For a Signal record all four points are the post.
 Result<std::array<LateralPoint, 4>> furniture_quad(const RoadGeomTile& tile, const RoadFurniture& f);
+// The contiguous driving-lane groups of `travel` at station s of a cross-section (s clamped to [0, length_m]), ascending
+// by t, unrounded; lanes closer than 0.5 mm form one group. A placed line record spans exactly one group, mm-rounded
+// (the acceptance rule of design 7.2, which the roads.geom validation checks, 9.2). Returns the lane count.
+std::size_t furniture_lane_groups(const RoadCrossSection& xs, double length_m, double station_m, LaneDirection travel,
+    std::vector<std::pair<double, double>>& groups);
 // The position of a signal post and the unit vector it faces (opposite to the travel direction, so towards the
 // approaching traffic). Not stored: derived from the record and the entry.
 struct SignalPost { double x = 0, y = 0, face_x = 0, face_y = 0; };

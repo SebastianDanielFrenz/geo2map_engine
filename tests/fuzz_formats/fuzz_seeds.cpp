@@ -16,6 +16,7 @@
 #include "g2m/layer/tile_container.h"
 #include "g2m/server/protocol.h"
 
+#include "road_junction_scene.h"
 #include "synthetic.h"
 
 #include <array>
@@ -209,10 +210,18 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         featured.features.push_back({0, 1, 0.0, g2m::ProfileFeatureKind::Table, true, 6000, 80, 0, g2m::Provenance::Tagged});
         featured.features.push_back({0, 2, featured.entries[0].profile->reference.length_m, g2m::ProfileFeatureKind::Chicane, false, 0, 0, 0, g2m::Provenance::Tagged});
         auto with_features = body(must(g2m::encode_road_geom(featured), "road geom features encode"));
+        // Encoding 6 (still written on request, decoded since P1) and an encoding-7 tile with a completed profile.
+        auto previous = featured; previous.encoding = g2m::kRoadGeomEncodingPrevious;
+        auto six = body(must(g2m::encode_road_geom(previous), "road geom encoding 6 encode"));
+        auto completed = featured; completed.origins[0] = {g2m::ProfileProvenance::GroundCompleted, 4};
+        auto with_origin = body(must(g2m::encode_road_geom(completed), "road geom provenance encode"));
+        // Junctions (a signalised one, a raised table, one on a crossing node) and furniture of every kind.
+        auto junctions = body(must(g2m::encode_road_geom(must(g2m_test::junction_scene_tile(), "junction scene")), "road geom junction encode"));
         tile.entries[0].cross_section.reset(); tile.entries[0].cross_section_decline = g2m::CrossSectionDecline{g2m::CrossSectionDeclineCode::NoCountedLane, 0};
         auto cross_decline = body(must(g2m::encode_road_geom(tile), "road geom cross-section decline encode"));
         tile.entries[0].cross_section_decline.reset(); tile.entries[0].profile.reset(); tile.entries[0].decline = g2m::make_error(g2m::ErrorCode::Unsupported, "fixture decline");
-        return {std::move(first), body(legacy), std::move(with_features), std::move(cross_decline), body(must(g2m::encode_road_geom(tile), "road geom decline encode"))};
+        return {std::move(first), body(legacy), std::move(with_features), std::move(cross_decline), body(must(g2m::encode_road_geom(tile), "road geom decline encode")),
+                std::move(six), std::move(with_origin), std::move(junctions)};
     }
     case Target::Roadgraph: {
         g2m::RoadGraphTile tile;

@@ -53,7 +53,7 @@ std::vector<Pt> row() {
 TEST_CASE("Features come from interior node tags with rules defaults, tagged lengths and end clipping", "[layer][road_features]") {
     const auto tile = tile_of(row());
     REQUIRE(tile.entries.size() == 1); REQUIRE(tile.entries[0].cross_section);
-    CHECK(tile.encoding == 6);
+    CHECK(tile.encoding == 7);
     // 2 (bump) 3 (table) 4 (hump) 5 (chicane) 6 (dip) 7 (cushion) 9 (island) 10 (table, shortened); 1, 8, 11, 12 absent.
     REQUIRE(tile.features.size() == 8);
     const auto& f = tile.features;

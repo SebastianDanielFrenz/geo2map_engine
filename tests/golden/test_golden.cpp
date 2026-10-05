@@ -82,10 +82,15 @@ TEST_CASE("G2paint golden hashes match testdata/golden/g2paint_golden.txt", "[go
     check_against("g2paint_golden.txt", g2m_golden::compute_g2paint());
 }
 
-// Street fidelity P1 slice 5: roads.geom encoding 6 (cross-sections) over the committed OSM fixtures
-// (golden_g3xs.cpp); the same file is compared Windows vs Linux by tools/ci.ps1.
+// Street fidelity P1 slice 5 (re-recorded by P2 slice 8 for the served encoding 7): roads.geom over the committed OSM
+// fixtures (golden_g3xs.cpp); the same file is compared Windows vs Linux by tools/ci.ps1.
 TEST_CASE("G3xs golden hashes match testdata/golden/g3xs_golden.txt", "[golden][road_cross_section]") {
     check_against("g3xs_golden.txt", g2m_golden::compute_g3xs());
+}
+
+// Street fidelity P2 slice 8: the junction, furniture and provenance sections of encoding 7 (golden_g3j.cpp).
+TEST_CASE("G3j golden hashes match testdata/golden/g3j_golden.txt", "[golden][road_junction]") {
+    check_against("g3j_golden.txt", g2m_golden::compute_g3j());
 }
 
 // dem.h/osm.h/landcover.h all document their sink output as independent of

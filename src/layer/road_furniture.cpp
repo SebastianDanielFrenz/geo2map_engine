@@ -178,16 +178,9 @@ private:
     LaneInfo lanes_at(std::size_t e, double station, LaneDirection travel) const {
         LaneInfo info;
         const auto& entry = tile_.entries[e];
-        const double s = std::clamp(station, 0.0, entry.profile->reference.length_m);
-        std::array<LaneQuery, kMaxLanes> buf{};
-        info.count = driving_lanes_at(*entry.cross_section, s, travel, buf);
-        std::vector<Group> spans;
-        for (std::size_t i = 0; i < info.count; ++i) spans.push_back({buf[i].centre_t - buf[i].width_m / 2, buf[i].centre_t + buf[i].width_m / 2});
-        std::sort(spans.begin(), spans.end(), [](const Group& a, const Group& b) { return a.lo < b.lo; });
-        for (const auto& span : spans) {
-            if (!info.groups.empty() && span.lo - info.groups.back().hi <= kLaneGapM) info.groups.back().hi = std::max(info.groups.back().hi, span.hi);
-            else info.groups.push_back(span);
-        }
+        std::vector<std::pair<double, double>> groups;
+        info.count = furniture_lane_groups(*entry.cross_section, entry.profile->reference.length_m, station, travel, groups);
+        for (const auto& [lo, hi] : groups) info.groups.push_back({lo, hi});
         return info;
     }
 
@@ -515,6 +508,22 @@ Result<LateralPoint> extended_point(const RoadReferenceLine& ref, double s, doub
     return LateralPoint{pose->x - t * sn + extra * cs, pose->y + t * cs + extra * sn};
 }
 } // namespace
+
+std::size_t furniture_lane_groups(const RoadCrossSection& xs, double length_m, double station_m, LaneDirection travel,
+    std::vector<std::pair<double, double>>& groups) {
+    groups.clear();
+    const double s = std::clamp(station_m, 0.0, length_m);
+    std::array<LaneQuery, kMaxLanes> buf{};
+    const std::size_t count = driving_lanes_at(xs, s, travel, buf);
+    std::vector<Group> spans;
+    for (std::size_t i = 0; i < count; ++i) spans.push_back({buf[i].centre_t - buf[i].width_m / 2, buf[i].centre_t + buf[i].width_m / 2});
+    std::sort(spans.begin(), spans.end(), [](const Group& a, const Group& b) { return a.lo < b.lo; });
+    for (const auto& span : spans) {
+        if (!groups.empty() && span.lo - groups.back().second <= kLaneGapM) groups.back().second = std::max(groups.back().second, span.hi);
+        else groups.emplace_back(span.lo, span.hi);
+    }
+    return count;
+}
 
 Result<std::vector<RoadFurniture>> build_road_furniture(const RoadGeomTile& tile, const RoadReferenceBuilder& context,
     std::span<const RoadJunction> junctions, const RoadRules& rules, FurnitureBuildStats* stats) {

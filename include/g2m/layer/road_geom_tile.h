@@ -2,10 +2,17 @@
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_cross_section.h"
 #include "g2m/layer/road_profile.h"
+#include "g2m/layer/road_geom_records.h"
 #include <optional>
 namespace g2m {
 inline constexpr std::string_view kRoadGeomLayer = "g2m.roads.geom";
-inline constexpr std::uint16_t kRoadGeomEncoding = 6;
+// Encoding 7 (street fidelity P2 slice 8): encoding 6 plus junctions (section 5), furniture (section 6) and the
+// profile provenance (section 7). The deriver writes 7.
+inline constexpr std::uint16_t kRoadGeomEncoding = 7;
+// The P1 body format (cross-sections and features, no junctions, furniture or provenance). Still decoded, and written
+// when RoadGeomTile::encoding asks for it (a tile without junctions, furniture and completed profiles): the
+// compatibility tests reproduce the encoding-6 bodies with it. The deriver never writes it.
+inline constexpr std::uint16_t kRoadGeomEncodingPrevious = 6;
 // The previous body format (profiles only, no cross-sections); still decoded, never written.
 inline constexpr std::uint16_t kRoadGeomEncodingLegacy = 5;
 struct RoadGeomEntry {
@@ -46,9 +53,9 @@ struct RoadProfileOrigin {
     std::uint16_t strict_decline_code = 0;  // the ErrorCode of the strict decline that was replaced (0 for Strict)
     friend bool operator==(const RoadProfileOrigin&, const RoadProfileOrigin&) = default;
 };
-// The completion tier of design 6.6 (road_completion.h). Off by default: a tile built without it is byte-for-byte
-// what encoding 6 stores, and encode_road_geom refuses a tile that holds a completed profile (encoding 6 cannot
-// say so; encoding 7 will, slice 8).
+// The completion tier of design 6.6 (road_completion.h). Off by default in the library; the deriver turns it on with
+// served_road_completion_options() (slice 8). Encoding 6 cannot carry a completed profile (encode_road_geom refuses
+// one); encoding 7 stores the provenance of every entry (section 7).
 struct RoadCompletionOptions {
     bool enabled = false;
     double retry_spacing_m = 20;          // step 1: the game's retry
@@ -58,6 +65,10 @@ struct RoadCompletionOptions {
     double ground_spacing_m = 40;         // step 3 samples
     double ground_ramp_m = 32;            // step 3 anchor ramps
 };
+// The completion options of the served roads.geom tiles: the tier on, every value at its default. RoadGeomDeriver
+// builds with them and writes each value into its config hash text; the goldens and the tests that mean "what the
+// deriver serves" use this function too.
+inline RoadCompletionOptions served_road_completion_options() { RoadCompletionOptions o; o.enabled = true; return o; }
 // What the completion tier did, per kind (design 6.6; diagnostics only, never stored).
 struct RoadCompletionStats {
     std::size_t retry_candidates = 0, retry_accepted = 0;
@@ -72,13 +83,24 @@ struct RoadCompletionStats {
 struct RoadGeomTile {
     RoadGraphTile source;
     std::vector<RoadGeomEntry> entries;
-    std::vector<ProfileFeature> features; // sorted by (entry_index, station bits, node_id)
-    // 6 for everything built or encoded; 5 for a decoded legacy body, which has no cross-sections or
-    // features (consumers fall back to the symmetric RoadAttributes::width_mm path).
+    // The P1 traffic-calming features as resolved per entry. Junction suppression and the raised-junction ramps
+    // (decisions D22/D23) are NOT applied here: they are a pure function of the junction records
+    // (adjust_features_for_junctions), which only the owner tile holds, so a consumer applies them with the junctions
+    // it has loaded. Sorted by (entry_index, station bits, node_id).
+    std::vector<ProfileFeature> features;
+    // 7 for everything built; 6 or 5 for a decoded older body. 6 has no junctions, furniture or origins; 5 also no
+    // cross-sections or features (consumers fall back to the symmetric RoadAttributes::width_mm path).
     std::uint16_t encoding = kRoadGeomEncoding;
-    // One per entry when the tile was built with the completion tier enabled, else empty (design 6.6, section 7 of
-    // encoding 7). Not stored by encoding 6.
+    // One per entry (design 6.6, section 7 of encoding 7): every built tile has them (all Strict without the
+    // completion tier). Empty for a decoded encoding-6/5 body.
     std::vector<RoadProfileOrigin> origins;
+    // Encoding 7, design 5.1: the junctions whose owner node (nodes.front(), the smallest id) lies in this tile's
+    // level-2 square (half-open floor membership on integer mm, as for edge midpoints), ascending by owner, a
+    // single-node record before the owner's ClusterTooLarge record. Entry indices refer to this tile's entries.
+    std::vector<RoadJunction> junctions;
+    // Encoding 7: build_road_furniture over this tile with `junctions` (entry furniture of every entry the record's
+    // owning entry rule picks in this tile, plus the furniture of the junctions above; junction_index refers to them).
+    std::vector<RoadFurniture> furniture;
 };
 // Feature shape (owner decision Q2: representable on the 1 m grid). Every carved feature is a plateau with two C1
 // smooth-step ramps (road_smooth_step), at least kFeatureMinRampMm per side, so the narrowest carved feature is 2 m
@@ -98,6 +120,9 @@ double feature_height_contribution_m(const ProfileFeature& f, double station_m) 
 // road_context_dependencies). Stretch extents, join headings and profiles then
 // depend on the world, not on the tile. Without it the tile graph itself is the
 // context, which is only exact for a graph that is complete at its own nodes.
+// Order: strict profiles, the completion tier (when enabled), cross-sections and features, the junctions
+// (build_road_junctions, then the owner filter of 5.1), the furniture (build_road_furniture with the owned
+// junctions), the origins (all Strict without the tier), then validate_road_geom_tile.
 Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph,
     const RoadDemSampler& dem, const RoadProfileLimits& limits = {}, const RoadGraph* context = nullptr,
     const RoadRules& rules = builtin_road_rules_de(), const RoadCompletionOptions& completion = {},
@@ -116,10 +141,15 @@ double feature_height_m(const RoadGeomTile& tile, std::size_t entry, double s) n
 // `entry` needs its profile; an entry without a cross-section has no features.
 Result<std::vector<ProfileFeature>> resolve_profile_features(const RoadGraph& graph, const RoadGeomEntry& entry,
     std::size_t entry_index, const RoadRules& rules);
+// Design 5.1: true iff the point lies in the key's square (half-open floor membership on integer mm): the junction
+// owner rule of encoding 7.
+bool road_tile_contains(const TileKey& key, const geom::PointMm& p) noexcept;
 Result<void> validate_road_geom_tile(const RoadGeomTile& tile);
 Result<TileBody> encode_road_geom(const RoadGeomTile& tile);
 Result<RoadGeomTile> decode_road_geom(const TileBody& body);
 LayerDesc road_geom_desc();
+// The text RoadGeomDeriver hashes into its config hash (design 9.3).
+std::string road_geom_config_text();
 class RoadGeomDeriver final : public IDeriver {
 public:
     RoadGeomDeriver() : desc_(road_geom_desc()) {}

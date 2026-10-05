@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -50,9 +51,9 @@ void rejects(const char* name, const std::function<void(RoadGeomTile&)>& mutate)
 std::string hex_of(const TileBody& body) { return to_hex(content_hash(*encode_body(body))); }
 }
 
-TEST_CASE("roads.geom encoding 6 round trips cross-sections, declines and features", "[layer][road_geom_xs]") {
+TEST_CASE("roads.geom encoding 6 and 7 round trip cross-sections, declines and features", "[layer][road_geom_xs]") {
     auto tile = base_tile();
-    CHECK(tile.encoding == 6);
+    CHECK(tile.encoding == 7); tile.encoding = kRoadGeomEncodingPrevious;
     // A non-trivial section: ramps, an offset with ramps, a join record, turn bits, a feature at each end.
     auto& xs = *tile.entries[0].cross_section;
     xs.bands.front().turn = kTurnLeft | kTurnThrough; xs.bands.front().marked_right = true;
@@ -74,6 +75,15 @@ TEST_CASE("roads.geom encoding 6 round trips cross-sections, declines and featur
     CHECK_FALSE(back->entries[0].cross_section_decline); CHECK_FALSE(back->entries[1].cross_section); CHECK_FALSE(back->entries[1].cross_section_decline);
     CHECK(encoded(*back)->sections[2].data == body->sections[2].data);
     CHECK(*encode_body(*encoded(*back)) == *encode_body(*body));
+    // Encoding 7 of the same tile: the four P1 sections byte for byte, then junctions, furniture, provenance.
+    auto seven = tile; seven.encoding = kRoadGeomEncoding;
+    const auto body7 = encoded(seven); REQUIRE(body7);
+    CHECK(body7->encoding == 7); REQUIRE(body7->sections.size() == 7);
+    for (std::size_t i = 0; i < 7; ++i) CHECK(body7->sections[i].type == i + 1);
+    for (std::size_t i = 0; i < 4; ++i) CHECK(body7->sections[i].data == body->sections[i].data);
+    const auto back7 = decode_road_geom(*body7); REQUIRE(back7);
+    CHECK(back7->encoding == 7); CHECK(back7->features == tile.features); CHECK(back7->origins == seven.origins);
+    CHECK(*encode_body(*encoded(*back7)) == *encode_body(*body7));
     // A whole-section decline is a record of its own.
     tile.features.clear(); tile.entries[0].cross_section.reset();
     tile.entries[0].cross_section_decline = CrossSectionDecline{CrossSectionDeclineCode::TotalWidthLimit, -7};
@@ -84,7 +94,8 @@ TEST_CASE("roads.geom encoding 6 round trips cross-sections, declines and featur
 }
 
 TEST_CASE("roads.geom encoding 6 keeps sections 1 to 2 as before and decodes encoding-5 bodies", "[layer][road_geom_xs]") {
-    const auto tile = base_tile(); const auto body = encoded(tile); REQUIRE(body);
+    auto tile = base_tile(); tile.encoding = kRoadGeomEncodingPrevious; const auto body = encoded(tile); REQUIRE(body);
+    REQUIRE(body->sections.size() == 4);
     // The embedded graph is the encoding-5 payload, byte for byte.
     CHECK(body->sections[0].data == encode_road_graph(tile.source, kRoadGraphEncoding)->sections[0].data);
     // Section 2 is unchanged: with the legacy graph it reproduces the encoding-5 golden body of the synthetic fixture.
@@ -103,10 +114,14 @@ TEST_CASE("roads.geom encoding 6 keeps sections 1 to 2 as before and decodes enc
     CHECK(refused.error().code == ErrorCode::InvalidArgument);
     // The section count must match the encoding.
     auto five_with_four = *body; five_with_four.encoding = kRoadGeomEncodingLegacy; CHECK_FALSE(decode_road_geom(five_with_four));
-    auto six_with_two = legacy; six_with_two.encoding = kRoadGeomEncoding; CHECK_FALSE(decode_road_geom(six_with_two));
+    auto six_with_two = legacy; six_with_two.encoding = kRoadGeomEncodingPrevious; CHECK_FALSE(decode_road_geom(six_with_two));
     auto swapped = *body; std::swap(swapped.sections[2], swapped.sections[3]); CHECK_FALSE(decode_road_geom(swapped));
     auto wrong_version = *body; wrong_version.encoding_version = 2; CHECK_FALSE(decode_road_geom(wrong_version));
-    auto seven = *body; seven.encoding = 7; CHECK_FALSE(decode_road_geom(seven));
+    auto seven_with_four = *body; seven_with_four.encoding = kRoadGeomEncoding; CHECK_FALSE(decode_road_geom(seven_with_four));
+    auto eight = *body; eight.encoding = 8; CHECK_FALSE(decode_road_geom(eight));
+    const auto body7 = encoded(base_tile()); REQUIRE(body7); REQUIRE(body7->sections.size() == 7);
+    auto six_with_seven = *body7; six_with_seven.encoding = kRoadGeomEncodingPrevious; CHECK_FALSE(decode_road_geom(six_with_seven));
+    auto swapped7 = *body7; std::swap(swapped7.sections[4], swapped7.sections[5]); CHECK_FALSE(decode_road_geom(swapped7));
 }
 
 TEST_CASE("roads.geom validation rejects every rule of design 7.2", "[layer][road_geom_xs]") {
@@ -116,7 +131,7 @@ TEST_CASE("roads.geom validation rejects every rule of design 7.2", "[layer][roa
     rejects("declined entry with a cross-section", [](auto& t) { t.entries[1].cross_section = t.entries[0].cross_section; });
     rejects("declined entry with a cross-section decline", [](auto& t) { t.entries[1].cross_section_decline = CrossSectionDecline{}; });
     rejects("cross-section length differs from the reference", [](auto& t) { t.entries[0].cross_section->length_m += 1; });
-    rejects("unknown tile encoding", [](auto& t) { t.encoding = 7; });
+    rejects("unknown tile encoding", [](auto& t) { t.encoding = 8; });
     rejects("legacy tile with a cross-section", [](auto& t) { t.encoding = 5; });
     rejects("legacy tile with features", [](auto& t) { t.encoding = 5; t.entries[0].cross_section.reset(); t.features = {feature(1, 0)}; });
     // Enums, flags and counts.
@@ -274,11 +289,26 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
         "sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph join-bisector=1 context=nodes";
     CHECK(deriver.config_hash() != Sha256::of(before));
     const auto& rules = builtin_road_rules_de().content_sha256;
-    const std::string after = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
+    const std::string rules_hex = to_hex(std::span<const std::uint8_t>(rules.data(), rules.size()));
+    const std::string p1 = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
         "sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=6 rules=de:" +
-        to_hex(std::span<const std::uint8_t>(rules.data(), rules.size())) + " join-bisector=1 context=nodes";
+        rules_hex + " join-bisector=1 context=nodes";
+    CHECK(deriver.config_hash() != Sha256::of(p1));
+    // Slice 8: enc=7 and every served completion option (D29's 60 m walk among them) and the D30/D34 switches.
+    const std::string after = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
+        "sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=7 rules=de:" +
+        rules_hex + " join-bisector=1 context=nodes junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/60 "
+        "completion-ground=40/32 strict-anchor=1 ring-nesting=2mm";
+    CHECK(road_geom_config_text() == after);
     CHECK(deriver.config_hash() == Sha256::of(after));
-    CHECK(road_geom_desc().encoding == 6);
+    CHECK(road_geom_desc().encoding == 7);
+    // The text is built from served_road_completion_options(): pin those values, so a changed default fails here and
+    // in the literal text above together.
+    {
+        const auto served = served_road_completion_options();
+        CHECK(served.enabled); CHECK(served.retry_spacing_m == 20); CHECK(served.retry_iterations == 16384);
+        CHECK(served.abutment_ground_m == 32); CHECK(served.abutment_path_m == 60); CHECK(served.ground_spacing_m == 40); CHECK(served.ground_ramp_m == 32);
+    }
 
     struct Temp {
         std::filesystem::path path = std::filesystem::temp_directory_path() /
@@ -293,6 +323,8 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
     };
     const auto terrain = rid(false, false), graph = rid(true, false), geometry = rid(true, true);
     CHECK(terrain != graph); CHECK(graph != geometry); CHECK(terrain != geometry);
+    std::printf("release ids (empty source store): terrain %s, roads.graph %s, roads.geom %s\n", to_hex(terrain).c_str(),
+        to_hex(graph).c_str(), to_hex(geometry).c_str());
     // A terrain-only release is a function of the terrain layers alone: it ignores the road derivers.
     BuiltinTerrainDerivers fresh;
     const auto again = make_local_release(**sources, builtin_local_release_params("geom_rid", fresh, {}, false, false));

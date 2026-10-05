@@ -853,3 +853,20 @@ crossing at a way join extends back over it, flag spans-join). Flag bit 3 (insid
 invariance with a negative control; sabotages lanes -> `carriageway_edges`, no crossing rule, post offset 0, tile graph as context).
 Fixture A / B: crossing nodes 123 / 52, placed 122 / 50, declined 1 StretchDeclined / 2 JunctionNode; stop lines 61 / 73, give-way 1 / 1,
 signal posts 61 / 71.
+
+Slice 8: `roads.geom` encoding 7 (`kRoadGeomEncoding` 7, `LayerEncoding::RoadGeomJunctions`; 6 is still written when
+`RoadGeomTile::encoding` is 6, 6 and 5 decode). The P2 records moved to `include/g2m/layer/road_geom_records.h` and
+`RoadGeomTile` carries `junctions`, `furniture` and `origins` (always one per entry). Section 5 junctions (only those whose
+owner node `nodes.front()` lies in the tile by `road_tile_contains`, half-open floor on integer mm), section 6 furniture
+(entry items in every tile holding the entry, junction items once with their junction), section 7 provenance; byte layout
+in `docs/formats/road_geom.md`. `build_road_geom_tile` builds junctions with the world context, furniture and completion;
+the deriver passes `served_road_completion_options()`. Validation of design 9.2 in `validate_road_geom_tile` (indices,
+sort orders, ring simplicity and nesting within 2 mm, trims, flags, furniture lane spans, reserved bit 3 rejected, D33).
+D34: offset rings that do not nest or exceed 1024 vertices take the all-layer hull, else Degenerate. Config text gains
+`enc=7 junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/60 completion-ground=40/32
+strict-anchor=1 ring-nesting=2mm` (`road_geom_config_text()`). Tests: `test_road_geom_enc7.cpp` (T8: one rejection per
+rule with its own malformed body, round trip, truncation; T7: ownership and cross-tile identity with the tile-graph
+negative control), `test_road_geom_xs.cpp` (encoding 6/7, pinned config text), `tests/support/road_junction_scene.h`
+(standalone scene also used by the fuzz seeds), fuzz seeds for encodings 6 and 7. Goldens: `g3xs` re-recorded (served
+tiles now carry completed entries), new `g3j` (`golden_g3j.cpp`, `testdata/golden/g3j_golden.txt`, Windows = Linux).
+Roadgeom test body SHA for encoding 7 `a453aed5...a618` (encoding 6 `17d9b7c7...` still reproduced).

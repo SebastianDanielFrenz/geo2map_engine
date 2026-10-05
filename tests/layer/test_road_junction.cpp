@@ -553,13 +553,14 @@ void print_census(const char* name, const Census& c) {
 }
 }
 
-TEST_CASE("Fixtures: every junction ring is valid, the same node builds identically in every tile (nesting is measured, not asserted)", "[layer][junction][roads]") {
+TEST_CASE("Fixtures: every junction ring is valid and nested, the same node builds identically in every tile", "[layer][junction][roads]") {
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         INFO(pbf);
         const auto c = census_of(pbf);
         print_census(pbf, c);
         CHECK(c.owned_nodes > 50);
         CHECK(c.invalid_rings == 0);
+        CHECK(c.nested_bad == 0);
         CHECK(c.multi_tile_mismatch == 0);
     }
 }
@@ -641,12 +642,19 @@ TEST_CASE("D17: corner caps close an obtuse pair whose edges meet behind the nod
         CHECK_FALSE(has(*capped, JunctionFlags::HullFallback));
         for (const auto& ring : capped->rings) CHECK(junction_ring_valid(ring));
         CHECK(nested_violations(*capped) == 0);
-        // Sabotage in the test: without the caps the same junction does not nest.
-        JunctionBuildOptions no_caps; no_caps.corner_caps = false;
+        // Sabotage in the test: without the caps the same junction does not nest (D34's hull rescue off, it would
+        // otherwise send the junction to the hull, which nests).
+        JunctionBuildOptions no_caps; no_caps.corner_caps = false; no_caps.hull_when_not_nested = false;
         const auto open = build_node_junction(*g, *builder, 507567, builtin_road_rules_de(), nullptr, no_caps); REQUIRE(open);
         double worst = 0;
         CHECK(nested_violations(*open, &worst) > 0);
         CHECK(worst > 100.0);
+        JunctionBuildOptions rescued_options; rescued_options.corner_caps = false;
+        const auto rescued = build_node_junction(*g, *builder, 507567, builtin_road_rules_de(), nullptr, rescued_options); REQUIRE(rescued);
+        CHECK(has(*rescued, JunctionFlags::HullFallback));
+        CHECK(nested_violations(*rescued) == 0);
+        CHECK(junction_rings_nested(*rescued));
+        CHECK_FALSE(junction_rings_nested(*open));
     }
     // One non-simple layer sends all three to the hull (D17): node 562041 falls back on one layer; the hulls of the
     // three layers' trim points nest, an offset ring next to a hull does not (the sabotage).
@@ -801,6 +809,8 @@ struct ClusterCensus {
     std::map<std::size_t, std::size_t> sizes;                          // nodes per built record (ClusterTooLarge excluded)
     std::array<std::size_t, kJunctionDeclineCount> declines{};
     std::size_t hulls = 0, hull_shallow = 0, hull_short = 0, hull_other = 0, ring_records = 0, absorbed = 0;
+    std::size_t nesting_hulls = 0, nesting_declined = 0;              // D34, summed over every tile's build
+    std::size_t max_outer = 0;
     double max_extent_m = 0;                                          // largest bounding-box side of a cluster's nodes
 };
 // Every L2 tile of the fixture, its junctions built WITH clustering. A record is counted in the tile of its owner node.
@@ -863,6 +873,7 @@ ClusterCensus cluster_census_of(const std::string& pbf, const JunctionBuildOptio
             }
             if (j.decline != JunctionDecline::None) continue;
             ++c.ring_records;
+            c.max_outer = std::max(c.max_outer, j.rings[2].vertices.size());
             for (const auto& ring : j.rings) if (!junction_ring_valid(ring)) ++c.invalid_rings;
             double worst = 0; const auto bad = nested_violations(j, &worst);
             c.nested_bad += bad; if (bad) ++c.nested_junctions; c.nested_worst_mm = std::max(c.nested_worst_mm, worst);
@@ -874,6 +885,7 @@ ClusterCensus cluster_census_of(const std::string& pbf, const JunctionBuildOptio
             }
         }
         c.face_fallbacks += stats.face_fallbacks;
+        c.nesting_hulls += stats.nesting_hulls; c.nesting_declined += stats.nesting_declined;
     }
     for (const auto n : built_junction_nodes) if (!covered.count(n)) ++c.uncovered;
     for (const auto& [k, list] : by_record) {
@@ -892,6 +904,7 @@ void print_cluster_census(const char* name, const ClusterCensus& c) {
         c.ring_records, c.hull_shallow, c.hull_short, c.hull_other, c.face_fallbacks);
     std::printf("  invalid rings %zu, nesting violations %zu in %zu records (worst %.0f mm), unresolved skips over all tiles %zu, junction nodes not covered by their tile %zu, records built in >= 2 tiles %zu (mismatching %zu)\n",
         c.invalid_rings, c.nested_bad, c.nested_junctions, c.nested_worst_mm, c.skipped_unresolved, c.uncovered, c.multi_tile_records, c.multi_tile_mismatch);
+    std::printf("  largest outer ring %zu vertices; D34 nesting hulls over all tiles' builds %zu, nesting declines %zu\n", c.max_outer, c.nesting_hulls, c.nesting_declined);
 }
 }
 
@@ -903,11 +916,28 @@ TEST_CASE("Fixtures with clustering: valid rings, every junction node covered in
         CHECK(c.owned_records > 50);
         CHECK(c.sizes.size() > 1);            // some clusters exist
         CHECK(c.invalid_rings == 0);
+        CHECK(c.nested_bad == 0);             // D34 (slice 8): asserted, encoding 7 rejects a record that does not nest
+        CHECK(c.nesting_declined == 0);
         CHECK(c.face_fallbacks == 0);
         CHECK(c.uncovered == 0);
         CHECK(c.multi_tile_records > 50);
         CHECK(c.multi_tile_mismatch == 0);
     }
+}
+
+TEST_CASE("D34: simple offset rings that do not nest take the all-layer hull, which nests", "[layer][junction][roads]") {
+    // D21 handed slice 8 two junctions of frankfurt_hoechst (5 vertices, worst 352 mm outside) whose offset rings are
+    // simple but not nested. The builder now sends them to the all-layer hull; with the rule off (the sabotage) the
+    // census finds the violations again.
+    const auto with = cluster_census_of("frankfurt_hoechst.osm.pbf");
+    JunctionBuildOptions off; off.hull_when_not_nested = false;
+    const auto without = cluster_census_of("frankfurt_hoechst.osm.pbf", off);
+    std::printf("[D34] frankfurt_hoechst: nesting hulls %zu (all tiles' builds), hulls among owned records %zu (rule off: %zu), nesting violations %zu in %zu records (rule off: %zu in %zu, worst %.0f mm)\n",
+        with.nesting_hulls, with.hulls, without.hulls, with.nested_bad, with.nested_junctions, without.nested_bad, without.nested_junctions, without.nested_worst_mm);
+    CHECK(with.nesting_hulls > 0);
+    CHECK(with.nested_bad == 0);
+    CHECK(with.hulls == without.hulls + without.nested_junctions);
+    CHECK(without.nested_bad > 0);
 }
 
 TEST_CASE("Negative control: a possible link to an incomplete node treated as absent breaks tile invariance", "[layer][junction][roads]") {

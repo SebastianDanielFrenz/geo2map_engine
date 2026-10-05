@@ -157,11 +157,27 @@ void run(Target target, std::span<const std::uint8_t> data) {
             // A legacy body decodes, carries no cross-sections, and is never written back.
             check(!g2m::encode_road_geom(*tile).ok(), "roads.geom: legacy encode refused");
             for (const auto& entry : tile->entries) check(!entry.cross_section && !entry.cross_section_decline, "roads.geom: legacy cross-section");
-            check(tile->features.empty(), "roads.geom: legacy features");
+            check(tile->features.empty() && tile->junctions.empty() && tile->furniture.empty() && tile->origins.empty(), "roads.geom: legacy features");
             return;
         }
+        if (tile->encoding == g2m::kRoadGeomEncodingPrevious) {
+            // Encoding 6: no junctions, furniture or origins; written back as encoding 6 below.
+            check(tile->junctions.empty() && tile->furniture.empty() && tile->origins.empty(), "roads.geom: encoding 6 carries P2 records");
+        } else {
+            // Encoding 7: one provenance record per entry, every index in range, the reserved furniture bit clear.
+            check(tile->origins.size() == tile->entries.size(), "roads.geom: provenance count");
+            for (const auto& j : tile->junctions) {
+                check(!j.nodes.empty(), "roads.geom: junction nodes");
+                for (const auto& a : j.approaches) check(a.entry_index < tile->entries.size(), "roads.geom: approach index");
+            }
+            for (const auto& f : tile->furniture)
+                check(f.entry_index < tile->entries.size() && f.junction_index <= tile->junctions.size() && (f.flags & g2m::kFurnitureInsideJunction) == 0,
+                    "roads.geom: furniture index or reserved flag");
+        }
         const auto encoded = g2m::encode_road_geom(*tile); check(encoded.ok(), "roads.geom: encode");
+        check(encoded->encoding == tile->encoding, "roads.geom: encoding kept");
         const auto back = g2m::decode_road_geom(*encoded); check(back.ok(), "roads.geom: decode");
+        check(back->junctions == tile->junctions && back->furniture == tile->furniture && back->origins == tile->origins, "roads.geom: P2 records round trip");
         const auto again = g2m::encode_road_geom(*back); check(again.ok() && *again == *encoded, "roads.geom: stable round trip");
         return;
     }

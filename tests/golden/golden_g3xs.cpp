@@ -1,7 +1,7 @@
-// tests/golden/golden_g3xs.cpp - G3xs golden hashes (street fidelity P1, design 7.5): roads.geom
-// encoding 6 over the committed OSM fixtures (frankfurt_hoechst and hoechst_a66), derived exactly the
+// tests/golden/golden_g3xs.cpp - G3xs golden hashes (street fidelity P1, design 7.5; re-recorded by P2 slice 8): roads.geom
+// as served (encoding 7 since P2 slice 8) over the committed OSM fixtures (frankfurt_hoechst and hoechst_a66), derived exactly the
 // way RoadGeomDeriver does it (tile graph plus the stretch context of the tiles that hold every
-// incident way) with a synthetic flat DEM - profiles need a DEM, cross-sections do not.
+// incident way, the served completion options) with a synthetic flat DEM - profiles need a DEM, cross-sections do not.
 //
 // Per fixture: the level-2 tile list, the FNV-1a 64 of every tile's encoded container body (the design
 // asks for SHA-256; the golden file's own entry format is an FNV count/hash pair, and the dump is
@@ -50,7 +50,7 @@ void fixture(std::vector<Entry>& out, const std::string& name, const std::string
     for (const auto& key : keys) {
         const auto probe = g2m::select_road_graph_tile(*world, key);
         if (!probe || probe->owned_edges.empty()) continue;
-        const auto geometry = g2m_test::geometry_in_tile(*world, key);
+        const auto geometry = g2m_test::served_geometry_in_tile(*world, key);
         if (!geometry) fail(name + ": geometry: " + geometry.error().message);
         const auto body = g2m::encode_road_geom(*geometry);
         if (!body) fail(name + ": encode: " + body.error().message);

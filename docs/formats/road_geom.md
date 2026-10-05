@@ -1,22 +1,34 @@
-# g2m.roads.geom encoding 6 / version 1
+# g2m.roads.geom encoding 7 / version 1
 
 Level-2 baked geometry, explicitly selected. Complete original topology and
 midpoint ownership are retained. Every canonical graph stretch has exactly
 one accepted parametric profile or explicit declined outcome. A geometry tile
 does not promise every road is driveable; consumers must inspect declines.
 
-Encoding 6 (street fidelity P1 slice 5) adds lane-aware cross-sections and
-profile features; encoding 5 bodies (sections 1 and 2 only) still decode, with
-no cross-sections (`RoadGeomTile::encoding == 5`), and are never written.
-The decoder requires exactly sections 1 to 4, in that order, for encoding 6
-(1 and 2 for encoding 5).
+Encoding 7 (street fidelity P2 slice 8, the deriver writes it) adds junction
+polygons, junction furniture and the profile provenance of the completion tier
+(sections 5-7) to encoding 6. Encoding 6 (P1 slice 5: lane-aware cross-sections
+and profile features) still decodes, with no junctions, furniture or origins
+(`RoadGeomTile::encoding == 6`), and is written only when a tile asks for it
+(`RoadGeomTile::encoding = 6`, no junctions or furniture, every origin Strict);
+the compatibility tests reproduce the P1 bodies that way. Encoding 5 bodies
+(sections 1 and 2 only) still decode, with no cross-sections, and are never
+written. The decoder requires exactly sections 1 to 7 in that order for encoding
+7, 1 to 4 for encoding 6 and 1 and 2 for encoding 5.
 
 | Section | Codec | Content |
 |---|---|---|
-| 1 | as roads.graph | the roads.graph payload: encoding 5 (nodes with whitelisted tags) in a 6 body, encoding 4 (no tags) in a 5 body, byte-identical to the standalone tile's section |
+| 1 | as roads.graph | the roads.graph payload: encoding 5 (nodes with whitelisted tags) in a 6/7 body, encoding 4 (no tags) in a 5 body, byte-identical to the standalone tile's section |
 | 2 | Zstd | entries: way id, stretch, outcome, profile (unchanged since encoding 5, byte for byte) |
 | 3 | Zstd | one cross-section record per section-2 entry, same order |
 | 4 | Zstd | profile features |
+| 5 | Zstd | junctions owned by this tile (encoding 7) |
+| 6 | Zstd | junction furniture: crossings, stop and give-way lines, signals (encoding 7) |
+| 7 | Zstd | profile provenance, one record per entry (encoding 7) |
+
+Sections 1-4 of an encoding-7 body have the encoding-6 format byte for byte;
+their content differs where the completion tier (design 6.6) gives a declined
+stretch a profile (section 2) and therefore a cross-section (section 3).
 
 Section 2 stores a canonical varint entry count, then entries in ascending
 way id / stretch order. Integers use little endian, ids use signed LEB128,
@@ -94,6 +106,103 @@ Dip is a depression (negative height). `width_mm` 0 means the whole carriageway;
 cushions are carved across the lane group they sit in like any other feature
 (owner decision 2026-10-05). Several features add.
 
+Section 4 stores the features as built from the tags. It is **not** adjusted for
+junctions: a consumer that carves runs `adjust_features_for_junctions` (it drops
+features whose footprint reaches into a junction ring and adds the approach ramps
+of a raised junction, design 4.4, D22/D23) on the decoded tile itself.
+
+## Section 5: junctions (encoding 7)
+
+```
+varint junction_count                         <= 65536
+per junction (ascending by owner node id; for one owner a single-node record precedes its ClusterTooLarge record):
+  svarint owner_node_id                       == nodes[0]
+  u16 flags                                   1 Cluster, 2 OnStructure, 4 HullFallback, 8 Partial, 16 RaisedTable; other bits 0
+  u16 decline                                 0 None, 1 ClusterTooLarge, 2 ReachExceeded, 3 SingleApproach, 4 Degenerate, 5 Underground
+  varint node_count                           1..4096; svarint node_id each, strictly ascending
+  varint approach_count                       1..4096
+  per approach: varint entry_index, u8 at_end (0/1), u8 status (0 Used, 1 NoProfile, 2 NoCrossSection, 3 Tunnel), binary64 trim_m
+  varint absorbed_count; varint entry_index each, strictly ascending
+  3 rings (road bed, paved, outer):
+    varint vertex_count                       0 iff declined, else 3..1024
+    svarint x_mm, y_mm of the first vertex (absolute UTM mm), then svarint dx_mm, dy_mm per further vertex
+  binary64 raised_height_m                    RaisedTable: (0, 0.3]; else +0
+  svarint raised_node                         RaisedTable: the node whose table/hump tag sets the height; else 0
+```
+
+Ownership (design 5.1): a tile stores exactly the junctions whose owner node
+(`nodes[0]`, the smallest id) lies in the tile, by half-open floor membership on
+integer millimetres (`road_tile_contains`). A junction is therefore stored once
+in the world; its entry indices refer to this tile's entries, which hold every
+approach and absorbed stretch (the halo). Approaches are the used ones in ring
+order, then the excluded ones; `trim_m` is the distance from the junction-side
+stretch end to the trim line. A ClusterTooLarge record carries the component's
+nodes, untrimmed approaches and linking entries and no rings.
+
+## Section 6: furniture (encoding 7)
+
+```
+varint count                                  <= 65536
+per item:
+  u8 kind (0 Crossing, 1 StopLine, 2 GiveWayLine, 3 Signal), u16 decline (0..7, FurnitureDecline)
+  svarint node_id, varint entry_index, varint junction_index (0 = an entry item, else 1 + index into section 5)
+  binary64 station_m, u8 travel (0 Forward, 1 Backward)
+  svarint t_from_mm, svarint t_to_mm (|t| <= 200 m), varint length_mm (<= 100 m)
+  u8 pattern (0..5, CrossingPattern), u8 flags (1 signalised, 2 lowered kerb, 4 spans join, 16 left post; bit 3 reserved, rejected)
+```
+
+Sorted strictly by (junction_index, entry_index, kind, station, node_id,
+travel, t_from, flags). Entry items (crossings, lines and signals on a node
+inside a stretch) are stored with their entry in every tile that holds the entry,
+like the features; junction items (lines and signals derived from a junction
+node) are stored once, with their junction. A declined item keeps its identity
+(kind, node, entry, travel) and has no extent; the entry index of a
+`JunctionDeclined` item is 0. Bit 3 (`kFurnitureInsideJunction`) stays reserved
+(decision D28/D33): a consumer derives "inside a junction ring" from the owner
+junction's approach trims.
+
+## Section 7: provenance (encoding 7)
+
+`varint count` (equals the entry count), then per entry `u8 provenance`
+(0 Strict, 1 Retry, 2 BridgeCompleted, 3 GroundCompleted) and `u16
+strict_decline_code` (0 for Strict; for a completed profile the ErrorCode of the
+strict pass's decline, 1..ReadOnly).
+
+## Junction, furniture and provenance validation (encoding 7)
+
+Hard errors (design 9.2), each with its own rejection test
+(`tests/layer/test_road_geom_enc7.cpp`):
+
+- **Ownership and nodes.** Nodes 1..4096, strictly ascending, all in the graph;
+  the owner lies in the tile; records ascending by owner (the ClusterTooLarge pair
+  excepted); Cluster flag iff more than one node; a ClusterTooLarge record has at
+  least two nodes; flags and decline in range.
+- **Approaches.** 1..4096; entry index < entries; status consistent with the entry
+  (Used: profile and cross-section; NoProfile/Tunnel: no profile; NoCrossSection:
+  profile without cross-section); the junction-side end node is one of the
+  junction's nodes; no (entry, end) twice; trim finite in [0, max(0, L - 0.5)] (0
+  without a profile); absorbed entries ascending, both ends held, not an approach.
+- **Rings.** Empty iff declined; otherwise 3..1024 vertices, within 1 km of the
+  owner, counter-clockwise and simple (exact predicates), and nested: every road
+  bed vertex inside, on, or within 2 mm of the paved ring, every paved vertex
+  likewise for the outer ring (decision D34; each layer is mm-rounded on its own).
+  At most 262144 ring vertices per tile.
+- **Raised table.** With the flag the height is in (0, 0.3] and `raised_node` one of
+  the junction's nodes; without it both are zero.
+- **Furniture.** Enums and flags in range, bit 3 clear; indices in range; t and
+  length mm-exact and bounded; strict order; the node on the junction (junction
+  item) or in the graph; a declined item has no extent, a JunctionDeclined or
+  Ambiguous item belongs to a junction and is no crossing, a JunctionDeclined
+  item's junction is declined. A placed item sits on an entry with a profile and
+  a cross-section at a station in [-length, L + length]; a junction item's junction
+  is built, its node is the owner and its entry a Used approach. A crossing runs
+  Forward with t_from < t_to and length > 0; a line has t_from < t_to, length > 0
+  and **spans exactly one lane group of its travel** at its station, recomputed
+  from the cross-section (`furniture_lane_groups`, mm-rounded: the acceptance rule
+  of design 7.2, enforced at decode); a signal has t_from == t_to and length 0.
+- **Provenance.** One record per entry; a Strict record names no decline, a
+  completed one a decline code and its entry has a profile.
+
 ## Cross-section validation
 
 Hard errors (design section 7.2): record count differs from the entry count;
@@ -133,10 +242,20 @@ coverage; DEM provides supporting context.
 terrain-only releases and graph-only opt-in releases retain their identities.
 
 The canonical flat-profile + tunnel-decline fixture has SHA-256
+`a453aed52159ea3e3bac6ce41c3e98eaaebaeb57f0cc68004cf66e4d6791a618` as an encoding-7 body
+(sections 1-4 as below, empty sections 5 and 6, two Strict provenance records),
 `17d9b7c708b1bda9513ae80f8be1255d1f7c7cc1d6977af8e98a24dfd05ee2f9` as an encoding-6 body
-(`4dcfcbca39838a8922c2749a9513eae7eecdbb398dec9a81b724d2970ff445f8` as the former
-encoding-5 body, which `test_road_geom_xs.cpp` still reproduces from sections 1 and 2).
+(`test_road_geom.cpp` writes both) and
+`4dcfcbca39838a8922c2749a9513eae7eecdbb398dec9a81b724d2970ff445f8` as the former
+encoding-5 body, which `test_road_geom_xs.cpp` still reproduces from sections 1 and 2.
 
-The release id changes with the encoding: the deriver config hash carries
-`xs=1 enc=6 rules=de:<sha256 of de.json>`; terrain-only release ids are
-unchanged. Goldens: `testdata/golden/g3xs_golden.txt`.
+The release id changes with the encoding: the deriver config hash
+(`road_geom_config_text()`) carries `xs=1 enc=7 rules=de:<sha256 of de.json>`
+and, since slice 8, `junction=1 furniture=1 completion=1
+completion-retry=20/16384 completion-abutment=32/60 completion-ground=40/32
+strict-anchor=1 ring-nesting=2mm` - every value of
+`served_road_completion_options()` the deriver builds with (retry spacing and
+iterations, abutment ground path and walk budget, ground spacing and ramp), the
+strict-anchor rule (D30) and the nesting allowance (D34). Terrain-only release
+ids are unchanged. Goldens: `testdata/golden/g3xs_golden.txt` (the served
+bodies), `testdata/golden/g3j_golden.txt` (sections 5-7).

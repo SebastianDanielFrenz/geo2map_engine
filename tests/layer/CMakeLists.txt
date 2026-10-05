@@ -24,6 +24,7 @@ add_executable(g2m_layer_tests
   test_osm_roads.cpp
   test_road_geom.cpp
   test_road_geom_xs.cpp
+  test_road_geom_enc7.cpp
   test_road_context.cpp
   test_road_rules.cpp
   test_carve_params.cpp

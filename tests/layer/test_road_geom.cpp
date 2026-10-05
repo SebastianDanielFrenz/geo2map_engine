@@ -35,15 +35,24 @@ TEST_CASE("roads.geom round trips complete profiles and explicit declines", "[la
     auto geometry = build_road_geom_tile(graph, *dem); REQUIRE(geometry);
     REQUIRE(geometry->entries.size() == 2); REQUIRE(geometry->entries[0].profile); REQUIRE(geometry->entries[1].decline);
     CHECK(geometry->entries[1].decline->code == ErrorCode::Unsupported);
+    // The encoding-6 body of this tile is unchanged since P1 (written on request, slice 8).
+    auto previous = *geometry; previous.encoding = kRoadGeomEncodingPrevious;
+    const auto body6 = encode_road_geom(previous); REQUIRE(body6); CHECK(body6->sections.size() == 4);
+    CHECK(to_hex(content_hash(*encode_body(*body6))) == "17d9b7c708b1bda9513ae80f8be1255d1f7c7cc1d6977af8e98a24dfd05ee2f9");
     const auto body = encode_road_geom(*geometry); REQUIRE(body);
-    CHECK(to_hex(content_hash(*encode_body(*body))) == "17d9b7c708b1bda9513ae80f8be1255d1f7c7cc1d6977af8e98a24dfd05ee2f9");
+    // Encoding 7: sections 1-4 byte for byte the encoding-6 ones, then empty junction and furniture sections and the
+    // provenance of the two entries (count 2, two Strict records).
+    CHECK(to_hex(content_hash(*encode_body(*body))) == "a453aed52159ea3e3bac6ce41c3e98eaaebaeb57f0cc68004cf66e4d6791a618");
     const auto decoded = decode_road_geom(*body); REQUIRE(decoded);
     CHECK(decoded->source == graph);
     CHECK(decoded->entries[0].profile->at(50)->height_m == 100);
     CHECK(decoded->entries[1].decline->message == geometry->entries[1].decline->message);
     CHECK(*encode_body(*encode_road_geom(*decoded)) == *encode_body(*body));
-    CHECK(body->encoding == 6); REQUIRE(body->sections.size() == 4);
-    for (std::size_t section = 1; section < 4; ++section) {
+    CHECK(body->encoding == 7); REQUIRE(body->sections.size() == 7);
+    for (std::size_t section = 0; section < 4; ++section) CHECK(body->sections[section].data == body6->sections[section].data);
+    CHECK(body->sections[4].data.size() == 1); CHECK(body->sections[5].data.size() == 1);
+    CHECK(body->sections[6].data == std::vector<std::uint8_t>{2, 0, 0, 0, 0, 0, 0});
+    for (std::size_t section = 1; section < 7; ++section) {
         for (std::size_t i = 0; i < body->sections[section].data.size(); ++i) {
             auto truncated = *body; truncated.sections[section].data.resize(i); CHECK_FALSE(decode_road_geom(truncated));
         }

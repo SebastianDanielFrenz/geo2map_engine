@@ -5,9 +5,11 @@
 // Slice 3 builds junctions of ONE node; slice 4 adds clusters of trim-overlapping nodes (3.2) with one ring around
 // the whole cluster (the boundary walk of decision D16). Slice 5 adds the junction surface (4.2: junction_height_m),
 // raised junction tables (4.4: the RaisedTable flag, raised_height_m, the approach ramp records) and the suppression
-// of approach features inside a ring. The ownership
-// filter (5.1) and the roads.geom encoding of the records (section 9) come in later slices; RoadGeomTile therefore
-// does not carry the records yet and no served byte changes.
+// of approach features inside a ring. Slice 8 serves the records: build_road_geom_tile builds them with the world
+// context and stores in RoadGeomTile::junctions only the junctions whose owner node (nodes.front()) lies in the tile
+// (road_tile_contains, 5.1); roads.geom encoding 7 section 5 carries them (docs/formats/road_geom.md). D34: rings that
+// do not nest within 2 mm, or have more than 1024 vertices, take the all-layer hull; if that fails the junction is
+// declined Degenerate. The junction heights stay a library function for the carver.
 #pragma once
 #include "g2m/core/geom/exact.h"
 #include "g2m/core/result.h"
@@ -22,52 +24,8 @@
 #include <vector>
 
 namespace g2m {
-enum class JunctionApproachStatus : std::uint8_t {
-    Used = 0,
-    NoProfile = 1,        // entry declined: excluded from the ring and the heights
-    NoCrossSection = 2,   // profile present, cross-section declined
-    Tunnel = 3,
-};
-struct JunctionApproach {
-    std::size_t entry_index = 0;      // into RoadGeomTile::entries of the tile holding the junction
-    bool at_end = false;              // the junction is at the stretch's end_ref (else start_ref)
-    JunctionApproachStatus status = JunctionApproachStatus::Used;
-    double trim_m = 0;                // distance from the junction-side stretch end to the trim line
-    friend bool operator==(const JunctionApproach&, const JunctionApproach&) = default;
-};
-enum class JunctionRingLayer : std::uint8_t { RoadBed = 0, Paved = 1, Outer = 2 };
-struct JunctionRing {
-    std::vector<geom::PointMm> vertices;  // counter-clockwise, simple, no repeated vertex
-    friend bool operator==(const JunctionRing&, const JunctionRing&) = default;
-};
-enum class JunctionFlags : std::uint16_t {
-    Cluster = 1,          // more than one node (slice 4)
-    OnStructure = 2,      // every used approach is a bridge: polygon served, never carved
-    HullFallback = 4,     // an offset ring was not simple; the convex hull of the trim segments is used
-    Partial = 8,          // at least one approach is excluded, or a corner lies beyond the trim clamp
-    RaisedTable = 16,     // a vertical traffic_calming feature on a junction node (slice 5)
-};
-enum class JunctionDecline : std::uint16_t {
-    None = 0,
-    ClusterTooLarge = 1,  // the linked set exceeds cluster_max_nodes or cluster_max_extent (decision D19)
-    ReachExceeded = 2,    // a ring vertex > reach_max from the nearest cluster node
-    SingleApproach = 3,   // fewer than two used approaches
-    Degenerate = 4,       // even the hull fallback has < 3 non-collinear vertices (or an edge cannot be placed)
-    Underground = 5,      // every approach is a tunnel
-};
-inline constexpr std::size_t kJunctionDeclineCount = 6;
-struct RoadJunction {
-    std::vector<std::int64_t> nodes;            // ascending OSM ids; nodes.front() is the owner node
-    std::vector<JunctionApproach> approaches;   // used approaches (stubs) in ring order starting at the smallest
-                                                // (way id, stretch start_ref, at_end), then the excluded ones in that key order
-    std::vector<std::size_t> absorbed;          // entry indices of the stretches inside a cluster, ascending
-    std::array<JunctionRing, 3> rings;          // RoadBed, Paved, Outer; empty when declined
-    std::uint16_t flags = 0;
-    JunctionDecline decline = JunctionDecline::None;
-    double raised_height_m = 0;                 // RaisedTable only: the table or hump height; it enters the surface through the approach ramps (D24)
-    std::int64_t raised_node = 0;               // RaisedTable only: the node whose table/hump tag sets the height
-    friend bool operator==(const RoadJunction&, const RoadJunction&) = default;
-};
+// The record types (RoadJunction, JunctionApproach, JunctionRing, flags, declines) are in road_geom_records.h:
+// RoadGeomTile carries the junctions its tile owns (encoding 7, slice 8).
 
 // Counters of one build, for the measurement tables and the tests.
 struct JunctionBuildStats {
@@ -89,6 +47,9 @@ struct JunctionBuildStats {
     std::size_t max_cluster_nodes = 0;
     std::size_t raised_tables = 0;       // built records with the RaisedTable flag (slice 5)
     std::size_t calming_ignored = 0;     // junction nodes with another vertical kind (bump, cushion, ...): raises nothing (4.4)
+    std::size_t nesting_hulls = 0;       // simple offset rings that did not nest within 2 mm: all-layer hull (D34, slice 8)
+    std::size_t nesting_declined = 0;    // ... whose hull rings did not nest either: Degenerate (D34)
+    std::size_t ring_cap_hulls = 0;      // an offset ring above kJunctionMaxRingVertices: all-layer hull (D34)
 };
 
 // Switches for the tests' sabotages and negative controls. Production uses the defaults.
@@ -99,12 +60,17 @@ struct JunctionBuildOptions {
     bool cluster_caps = true;              // 3.2 rule 4 (node count and extent)
     bool unknown_links_are_absent = false; // a possible link to an incomplete node ends discovery (D20)
     bool raised_tables = true;             // slice 5: a table or hump tag on a junction node raises the junction (4.4)
+    bool hull_when_not_nested = true;      // D34 (slice 8): simple offset rings that do not nest take the all-layer hull
 };
 
 // True iff `ring` has at least 3 vertices, no repeated vertex, positive (counter-clockwise) area and no two
 // non-adjacent edges touching, and no adjacent pair folding back on itself. Exact. This is the ring validity of
 // design 3.5 / 9.2.
 bool junction_ring_valid(const JunctionRing& ring);
+// True iff every vertex of the road bed ring lies inside, on, or within kJunctionNestingAllowanceMm of the paved ring,
+// and likewise paved in outer (design 9.2, D21/D34). Point-in-polygon exact, the allowance by + - * / on coordinate
+// differences. The caller bounds the coordinates (the roads.geom validation keeps them within 1 km of the owner node).
+bool junction_rings_nested(const RoadJunction& junction);
 
 // The single-node junction of `node_id`, which needs degree >= 3 in `context` and one entry of `tile` per stretch
 // end at the node (else an error). A declined junction is still returned with its approaches and `decline` set.

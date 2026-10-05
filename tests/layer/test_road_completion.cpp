@@ -120,11 +120,12 @@ RoadGraph bridge_world() {
 }
 }
 
-TEST_CASE("completion: off by default leaves a tile byte for byte what encoding 6 stores; on without work changes nothing", "[layer][roads][completion]") {
+TEST_CASE("completion: off by default leaves a tile byte for byte what the strict pass stores; on without work changes nothing", "[layer][roads][completion]") {
     const auto world = bridge_world();
     const auto env = make_env(world, kTile, rolling);
     const auto plain = build(*env, false);
-    CHECK(plain.origins.empty());
+    REQUIRE(plain.origins.size() == plain.entries.size());   // slice 8: always filled, all Strict without the tier
+    for (const auto& o : plain.origins) CHECK(o == RoadProfileOrigin{});
     // A tile that holds nothing to complete: enabled and disabled encode to the same bytes.
     const auto calm = world_of({{1, -200, 0}, {2, 0, 0}, {3, 200, 0}}, {{10, {1, 2, 3}}});
     const auto calm_env = make_env(calm, kTile, rolling);
@@ -171,9 +172,13 @@ TEST_CASE("completion: the three paths on a bridge with junctions next to its en
     // T6 completion variant: every stretch that ends at a bridge node reads the same height there (1/256 m).
     CHECK(std::fabs(end_height(lib, west, true) - end_height(lib, span, false)) <= 1.0 / 256.0);
     CHECK(std::fabs(end_height(lib, span, true) - end_height(lib, east, false)) <= 1.0 / 256.0);
+    // Encoding 7 stores the provenance (section 7) and the decode returns it.
+    const auto bytes = encode_road_geom(lib); REQUIRE(bytes); CHECK(bytes->encoding == 7);
+    const auto back = decode_road_geom(*bytes); REQUIRE(back); CHECK(back->origins == lib.origins);
     // Encoding 6 cannot say "completed": it refuses the tile rather than store it as strict.
-    const auto bytes = encode_road_geom(lib); REQUIRE_FALSE(bytes);
-    CHECK(bytes.error().message.find("cannot carry a completed profile") != std::string::npos);
+    auto six = lib; six.encoding = kRoadGeomEncodingPrevious; six.junctions.clear(); six.furniture.clear();
+    const auto refused = encode_road_geom(six); REQUIRE_FALSE(refused);
+    CHECK(refused.error().message.find("cannot carry a completed profile") != std::string::npos);
 }
 
 TEST_CASE("completion: T6 check detects one stretch left at another height; the validator knows the origins", "[layer][roads][completion][T6]") {

@@ -47,7 +47,8 @@ enum class LayerEncoding : std::uint16_t {
     RoadGraph = 4,     // g2m.roads.graph, nodes without tags (read-only legacy); docs/formats/road_graph.md
     RoadGraphNodeTags = 5, // g2m.roads.graph, nodes carry whitelisted tags (written since street fidelity P1 slice 2)
     RoadGeom = 5,      // g2m.roads.geom, sections 1-2 only (read-only once encoding 6 lands); docs/formats/road_geom.md
-    RoadGeomCrossSection = 6, // g2m.roads.geom with cross-section and feature sections (street fidelity P1 slice 5)
+    RoadGeomCrossSection = 6, // g2m.roads.geom with cross-section and feature sections (street fidelity P1 slice 5; still written when RoadGeomTile::encoding is 6)
+    RoadGeomJunctions = 7, // g2m.roads.geom plus junction, furniture and provenance sections (street fidelity P2 slice 8)
 };
 
 // Levels a layer has tiles at, as a bit mask over TileKey levels 0..20.

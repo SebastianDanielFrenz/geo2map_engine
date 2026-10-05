@@ -1811,6 +1811,55 @@ defects fixed in the junction pass and the crossing rule.**
   information is not lost, only not denormalised. Alternative rejected: let the owner tile set the bit on its own copies - the
   copies of one record would then differ between tiles.
 
+### Decisions made while implementing (slice 8)
+
+**D34. Encoding 7 as implemented: where it deviates from 9.1-9.3, and why.**
+- **Ring nesting (settles D21).** The validator allows 2 mm (`ring-nesting=2mm` in the config text): each layer's vertices are
+  rounded to mm on their own, so a shared edge can stand up to ~1.5 mm outside the next ring. The builder checks the same rule
+  (`junction_rings_nested`) before a record leaves it: simple offset rings that do not nest take the all-layer hull
+  (`JunctionStats::nesting_hulls`, `hull_when_not_nested`); a ring above 1024 vertices (`kJunctionMaxRingVertices`, the
+  quadratic ring checks' budget) takes the hull too; a hull that still does not nest declines the junction `Degenerate`.
+  Fixture A: hull fallbacks 23 of 504 junctions (21 before), 3 of them by nesting, 0 violations; fixture B 22 of 283; largest
+  outer ring 246 vertices. Alternative rejected: build the inner rings by containment - a second ring algorithm for a 1.5 mm
+  effect. Alternative rejected: exact nesting - rejects valid records.
+- **Counts.** `approach_count` is 1..4096 and `node_count` 1..4096 (9.1: 2..64 and 1..12). A declined single (`SingleApproach`)
+  has one approach, and a `ClusterTooLarge` record carries its whole component; the builder's caps decide the real sizes, the
+  decoder only bounds memory. Budgets per tile: 65536 junctions, 262144 ring vertices, 65536 furniture records; every ring
+  vertex within 1 km of the owner node per axis.
+- **raised_node** is encoded after `raised_height_m` (svarint, 0 unless RaisedTable): slice 5 made it part of the record, and the
+  carver needs it to place the table plateau without rebuilding the junction.
+- **Trim bound** is [0, max(0, L - 0.5)] (9.2 reads [0, L - 0.5], undefined under 0.5 m); a NoProfile/Tunnel approach has trim 0.
+- **Furniture sort key** is (junction_index, entry_index, kind, station, node_id, travel, t_from, flags), the builder's order of
+  slice 7 (9.1 named fewer keys, which left equal-station lane groups unordered).
+- **Bit 3** of the furniture flags is rejected (D33).
+- **Config text.** `enc=6` is replaced by `enc=7`, not appended to; the completion options join the text with their values
+  (`completion=1 completion-retry=20/16384 completion-abutment=32/60 completion-ground=40/32 strict-anchor=1`), so a change of
+  any served option moves the config hash. `road_geom_config_text()` is the one source; the test pins the literal text.
+- **Encoding 6 stays writable** when `RoadGeomTile::encoding` is 6 (no junctions, furniture or non-Strict origin; the encoder
+  refuses otherwise): the P1 body hash `17d9b7c7...` stays reproducible and the fuzz target re-encodes a seed of each encoding.
+- **Features (section 4) are not junction-adjusted.** The tile stores the features as P1 builds them; a carver calls
+  `adjust_features_for_junctions` with the owner tile's junctions (D23's suppression needs the trims, which only the owner holds,
+  and a junction-adjusted section 4 would make the copies of an entry differ between tiles).
+- **Ownership.** `road_tile_contains` (half-open floor on integer mm) decides both the build filter and the validator, so a node on
+  a tile edge belongs to exactly one tile.
+
+**Slice 8 as implemented.**
+- T7 (`test_road_geom_enc7.cpp`, "T7"): every junction is stored by exactly one tile and equals the record every other tile's build
+  of it produces; entry furniture is identical in every tile that holds its entry. Fixture A: 10 tiles, 505 stored, 0 stored twice,
+  0 lost, 0 differing, entry furniture repeated 118 times with 0 differing (A has no junction furniture). Fixture B: 12 tiles, 288
+  stored, all 0, junction furniture 10, entry furniture repeated 96 with 0 differing. Negative control (tile graph as context):
+  A lost 1 / differing 42 / entry furniture differing 24; B differing 37 / entry furniture differing 12. Sabotage: no ownership
+  filter - the build's own validation rejects the tile, T7 fails.
+- T8 ("T8"): one rejection per rule (37), each also as a malformed body the decoder rejects (except "t not mm-exact", which a body
+  cannot carry), round trip and truncation of sections 5-7 on a synthetic scene (3 junctions, 12 furniture, 9 entries); encoding-6
+  and encoding-5 bodies decode. Sabotage: lane-span and nesting checks disabled - 6 assertions fail.
+- Goldens: `g3xs` `all 1290583 6681f11d1fbdbcdf` -> `all 1521342 0596d2bf1d42c58e` (served tiles now carry completed entries
+  and the sections 5-7; the per-fixture `stretches` hashes move because completed entries get cross-sections, the `tiles`
+  hashes do not); new `g3j` `all 7108 869f7df74a9dc10f` (A: 505 junctions, 499 furniture, 21 of 1980 entries completed; B: 288,
+  496, 12 of 1519).
+- Far-end dependence of the strict pass (D32) re-measured on the served build: unchanged - A 1980 entries over 10 tiles (21 / 85
+  completed flat / tilted), B 1519 over 12 (12 / 223), 0 strict and 0 completion differences against the world reference.
+
 ---
 
 

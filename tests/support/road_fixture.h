@@ -128,5 +128,11 @@ inline g2m::Result<g2m::RoadGeomTile> geometry_in_tile_with(const g2m::RoadGraph
     const auto context = merge_road_graphs(graphs); if (!context) return context.error();
     return build_road_geom_tile(*tile, *dem, limits, &*context, builtin_road_rules_de(), o.completion, o.stats);
 }
+// The tile RoadGeomDeriver serves (slice 8): context graph, the served completion options.
+inline g2m::Result<g2m::RoadGeomTile> served_geometry_in_tile(const g2m::RoadGraph& world, const g2m::TileKey& key,
+        const std::function<double(double, double)>& height_m = {}) {
+    GeomOptions o; o.height_m = height_m; o.completion = g2m::served_road_completion_options();
+    return geometry_in_tile_with(world, key, o);
+}
 
 } // namespace g2m_test

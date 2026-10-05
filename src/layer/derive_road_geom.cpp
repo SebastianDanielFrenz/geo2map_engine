@@ -3,7 +3,10 @@
 #include "g2m/layer/terrain_layers.h"
 #include "g2m/core/hash.h"
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <limits>
+#include <string>
 #include <set>
 namespace g2m {
 namespace {
@@ -38,13 +41,26 @@ LayerDesc road_geom_desc() {
     return {{std::string(kRoadGeomLayer), 1}, LayerKind::Baked, kRoadGeomEncoding, 1, level_bit(2),
         {std::string(kRoadGraphLayer), std::string(kElevBaseLayer)}, "complete parametric road profiles and explicit declined stretches"};
 }
-ContentHash RoadGeomDeriver::config_hash() const {
-    // xs=1 enc=6: encoding-6 cross-section and feature sections; the rules hash ties a release to the exact de.json bytes.
-    const auto& rules_hash = builtin_road_rules_de().content_sha256;
-    const std::string text = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph"
-        " xs=1 enc=6 rules=de:" + to_hex(std::span<const std::uint8_t>(rules_hash.data(), rules_hash.size())) + " join-bisector=1 context=nodes";
-    return Sha256::of(text);
+namespace {
+// An option value in the config text: integral values as integers, anything else with 17 significant digits.
+std::string option_value(double v) {
+    if (v > -1e15 && v < 1e15 && static_cast<double>(static_cast<long long>(v)) == v) return std::to_string(static_cast<long long>(v));
+    char buf[64]; std::snprintf(buf, sizeof buf, "%.17g", v); return buf;
 }
+}
+std::string road_geom_config_text() {
+    // xs=1: the cross-section and feature sections (P1); enc=7: junctions, furniture and provenance (P2 slice 8). The
+    // rules hash ties a release to the exact de.json bytes (junction and furniture blocks included); every value of the
+    // served completion options is part of the text (the relaxed completion limits are code constants, completion=1).
+    const auto& rules_hash = builtin_road_rules_de().content_sha256;
+    const auto c = served_road_completion_options();
+    return "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph"
+        " xs=1 enc=7 rules=de:" + to_hex(std::span<const std::uint8_t>(rules_hash.data(), rules_hash.size())) + " join-bisector=1 context=nodes"
+        " junction=1 furniture=1 completion=1 completion-retry=" + option_value(c.retry_spacing_m) + "/" + std::to_string(c.retry_iterations) +
+        " completion-abutment=" + option_value(c.abutment_ground_m) + "/" + option_value(c.abutment_path_m) +
+        " completion-ground=" + option_value(c.ground_spacing_m) + "/" + option_value(c.ground_ramp_m) + " strict-anchor=1 ring-nesting=2mm";
+}
+ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {
     if (!target.valid() || target.level != 2) return {}; return {{std::string(kRoadGraphLayer), target}};
 }
@@ -91,7 +107,8 @@ Result<DeriveResult> RoadGeomDeriver::derive(const DeriveRequest& request) const
     std::vector<const HeightTile*> views; for (const auto& height : heights) views.push_back(&height);
     const auto dem = RoadDemSampler::make(views); if (!dem) return dem.error();
     RoadProfileLimits limits; limits.reference.allow_curvature_exceptions = true;
-    const auto geometry = build_road_geom_tile(*graph, *dem, limits, &*context); if (!geometry) return geometry.error();
+    const auto geometry = build_road_geom_tile(*graph, *dem, limits, &*context, builtin_road_rules_de(), served_road_completion_options());
+    if (!geometry) return geometry.error();
     const auto body = encode_road_geom(*geometry); if (!body) return body.error();
     auto encoded = encode_body(*body); if (!encoded) return encoded.error();
     return DeriveResult{std::move(*encoded), datum.value_or(VerticalDatum::None), 0};

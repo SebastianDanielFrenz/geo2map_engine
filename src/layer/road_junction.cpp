@@ -219,6 +219,50 @@ bool ring_simple(const std::vector<Tagged>& v, std::vector<std::pair<std::size_t
     return ok;
 }
 
+// Exact: p inside or on the boundary of the ring (crossing number, exact orientations).
+bool inside_or_on(const std::vector<PointMm>& v, PointMm p) {
+    bool in = false;
+    for (std::size_t i = 0, j = v.size() - 1; i < v.size(); j = i++) {
+        const PointMm a = v[j], b = v[i];
+        const int o = geom::orient(a, b, p);
+        if (o == 0 && std::min(a.x, b.x) <= p.x && p.x <= std::max(a.x, b.x) && std::min(a.y, b.y) <= p.y && p.y <= std::max(a.y, b.y)) return true;
+        if ((a.y > p.y) != (b.y > p.y) && (b.y > a.y ? o > 0 : o < 0)) in = !in;
+    }
+    return in;
+}
+// p within `allowance_mm` of the ring's boundary (+ - * / on coordinate differences, which are exact doubles here).
+bool near_boundary(const std::vector<PointMm>& v, PointMm p, double allowance_mm) {
+    const double limit = allowance_mm * allowance_mm;
+    for (std::size_t i = 0, j = v.size() - 1; i < v.size(); j = i++) {
+        const double dx = static_cast<double>(v[i].x - v[j].x), dy = static_cast<double>(v[i].y - v[j].y);
+        const double wx = static_cast<double>(p.x - v[j].x), wy = static_cast<double>(p.y - v[j].y);
+        const double len2 = dx * dx + dy * dy;
+        const double t = len2 > 0 ? std::clamp((wx * dx + wy * dy) / len2, 0.0, 1.0) : 0.0;
+        const double ex = wx - t * dx, ey = wy - t * dy;
+        if (ex * ex + ey * ey <= limit) return true;
+    }
+    return false;
+}
+// Road bed in paved in outer: every vertex inside, on, or within the allowance (design 9.2, D21). Outer rings of >= 3 vertices.
+bool rings_nested(const std::array<const std::vector<PointMm>*, kLayers>& rings) {
+    for (std::size_t inner = 0; inner + 1 < static_cast<std::size_t>(kLayers); ++inner) {
+        const auto& outer = *rings[inner + 1];
+        if (outer.size() < 3) return false;
+        for (const auto& p : *rings[inner])
+            if (!inside_or_on(outer, p) && !near_boundary(outer, p, kJunctionNestingAllowanceMm)) return false;
+    }
+    return true;
+}
+bool tagged_rings_nested(const std::array<std::vector<Tagged>, kLayers>& rings) {
+    std::array<std::vector<PointMm>, kLayers> plain;
+    std::array<const std::vector<PointMm>*, kLayers> views{};
+    for (std::size_t layer = 0; layer < plain.size(); ++layer) {
+        for (const auto& t : rings[layer]) plain[layer].push_back(t.p);
+        views[layer] = &plain[layer];
+    }
+    return rings_nested(views);
+}
+
 // Convex hull (Andrew's monotone chain, exact), counter-clockwise, strictly convex. May return < 3 points.
 std::vector<Tagged> convex_hull(std::vector<PointMm> pts) {
     std::sort(pts.begin(), pts.end(), [](PointMm a, PointMm b) { return a.x != b.x ? a.x < b.x : a.y < b.y; });
@@ -329,6 +373,7 @@ void add_stats(JunctionBuildStats& to, const JunctionBuildStats& from) {
     to.clusters += from.clusters; to.cluster_nodes += from.cluster_nodes; to.absorbed += from.absorbed;
     to.face_fallbacks += from.face_fallbacks;
     to.raised_tables += from.raised_tables; to.calming_ignored += from.calming_ignored;
+    to.nesting_hulls += from.nesting_hulls; to.nesting_declined += from.nesting_declined; to.ring_cap_hulls += from.ring_cap_hulls;
 }
 }
 
@@ -546,6 +591,11 @@ RoadJunction build_from(const RoadGeomTile& tile, const std::vector<NodeInput>& 
     // on the same trim lines are. ----
     bool any_hull = !face_ok;
     for (int layer = 0; layer < kLayers && !any_hull; ++layer) any_hull = !ring_simple(rings[layer], nullptr);
+    // Simple offset rings that still do not nest (D21's residual on short, strongly curved approaches) take the
+    // all-layer hull as well (D34): encoding 7's validation requires road bed in paved in outer.
+    if (!any_hull && options.hull_when_not_nested && !tagged_rings_nested(rings)) { any_hull = true; ++stats.nesting_hulls; }
+    // A ring above the encoding's vertex budget takes the hull too (never on the fixtures).
+    for (int layer = 0; layer < kLayers && !any_hull; ++layer) if (rings[layer].size() > kJunctionMaxRingVertices) { any_hull = true; ++stats.ring_cap_hulls; }
     for (int layer = 0; layer < kLayers; ++layer) {
         if (!any_hull || (!options.hull_all_layers && face_ok && ring_simple(rings[layer], nullptr))) continue;
         std::vector<PointMm> pts;
@@ -562,6 +612,11 @@ RoadJunction build_from(const RoadGeomTile& tile, const std::vector<NodeInput>& 
         hull[layer] = true;
         if (rings[layer].size() < 3 || twice_area(rings[layer]) <= 0) return finish(JunctionDecline::Degenerate);
         j.flags |= static_cast<std::uint16_t>(JunctionFlags::HullFallback);
+    }
+    // Hulls of points on the same trim lines nest up to the mm rounding; a record that still does not is declined
+    // rather than stored with rings the validation rejects (D34).
+    if (any_hull && options.hull_when_not_nested && options.hull_all_layers && !tagged_rings_nested(rings)) {
+        ++stats.nesting_declined; return finish(JunctionDecline::Degenerate);
     }
 
     // ---- reach (3.5 step 6): every vertex within reach of the nearest cluster node ----
@@ -620,6 +675,10 @@ bool junction_ring_valid(const JunctionRing& ring) {
     for (std::size_t i = 0; i < v.size(); ++i)
         for (std::size_t j = i + 1; j < v.size(); ++j) if (v[i].p == v[j].p) return false;   // repeated vertex
     return ring_simple(v, nullptr);
+}
+
+bool junction_rings_nested(const RoadJunction& junction) {
+    return rings_nested({&junction.rings[0].vertices, &junction.rings[1].vertices, &junction.rings[2].vertices});
 }
 
 Result<RoadJunction> build_node_junction(const RoadGeomTile& tile, const RoadReferenceBuilder& context,
