@@ -796,3 +796,13 @@ reach cap (`ReachExceeded`), declines `ClusterTooLarge/ReachExceeded/SingleAppro
 `junction_ring_valid` is the simple-and-counter-clockwise check. Test: `test_road_junction.cpp` (X/T/Y/fork/star scenes, Hoechst
 and Frankfurt fixture census, multi-tile identity). Sabotages: swapping left/right in `edge_t` fails the corner/trim checks;
 disabling bow-tie repair and hull fallback fails the repair/hull cases and the census. No served bytes change.
+
+Slice 4: same files. `build_road_junctions(tile, context, rules, stats, options)` adds trim-overlap clusters (design 3.2,
+decisions D16-D21): links over one entry when the capped single-node trims cover it (roundabout ways never link), bounded BFS
+with caps 48 m / 12 nodes, owner = smallest node. A cluster's ring is the outer face of the darts' rotation system (absorbed
+stretches are two darts, D16). A node whose discovery reaches a possible link to an incomplete node is skipped
+(`skipped_unresolved`); an over-cap discovery keeps the singles plus a `ClusterTooLarge` record from its smallest node (D19).
+All builders now close obtuse open pairs on cap segments at the node and send every layer to the hull when one needs it (D17,
+ring nesting). `JunctionBuildOptions` switches exist for tests only. Tests: `test_road_junction.cpp` T4 cases, D17 cases,
+cluster census with multi-tile identity and its negative control (`unknown_links_are_absent`), a `[.][diag]` for two-stretch
+links. No served bytes change.

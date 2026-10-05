@@ -1,10 +1,11 @@
-// Street fidelity P2 slice 3 (design sections 2 and 3): single-node junction polygons by the osm2streets
+// Street fidelity P2 slices 3-4 (design sections 2 and 3): junction polygons by the osm2streets
 // offset-intersect-trim algorithm, ported to integer-mm P1 edge polylines with exact predicates. Pure functions of a
 // RoadGeomTile (its entries' references and cross-sections), the context graph's node degrees and the rules.
 //
-// Slice 3 builds junctions of ONE node. Clusters of trim-overlapping nodes (3.2), junction heights (4.2), raised
-// tables (4.4), the ownership filter (5.1) and the roads.geom encoding of the records (section 9) come in later
-// slices; RoadGeomTile therefore does not carry the records yet and no served byte changes.
+// Slice 3 builds junctions of ONE node; slice 4 adds clusters of trim-overlapping nodes (3.2) with one ring around
+// the whole cluster (the boundary walk of decision D16). Junction heights (4.2), raised tables (4.4), the ownership
+// filter (5.1) and the roads.geom encoding of the records (section 9) come in later slices; RoadGeomTile therefore
+// does not carry the records yet and no served byte changes.
 #pragma once
 #include "g2m/core/geom/exact.h"
 #include "g2m/core/result.h"
@@ -44,7 +45,7 @@ enum class JunctionFlags : std::uint16_t {
 };
 enum class JunctionDecline : std::uint16_t {
     None = 0,
-    ClusterTooLarge = 1,  // slice 4
+    ClusterTooLarge = 1,  // the linked set exceeds cluster_max_nodes or cluster_max_extent (decision D19)
     ReachExceeded = 2,    // a ring vertex > reach_max from the nearest cluster node
     SingleApproach = 3,   // fewer than two used approaches
     Degenerate = 4,       // even the hull fallback has < 3 non-collinear vertices (or an edge cannot be placed)
@@ -53,9 +54,9 @@ enum class JunctionDecline : std::uint16_t {
 inline constexpr std::size_t kJunctionDeclineCount = 6;
 struct RoadJunction {
     std::vector<std::int64_t> nodes;            // ascending OSM ids; nodes.front() is the owner node
-    std::vector<JunctionApproach> approaches;   // used approaches in counter-clockwise order starting at the smallest
+    std::vector<JunctionApproach> approaches;   // used approaches (stubs) in ring order starting at the smallest
                                                 // (way id, stretch start_ref, at_end), then the excluded ones in that key order
-    std::vector<std::size_t> absorbed;          // entry indices of the stretches inside a cluster (slice 4)
+    std::vector<std::size_t> absorbed;          // entry indices of the stretches inside a cluster, ascending
     std::array<JunctionRing, 3> rings;          // RoadBed, Paved, Outer; empty when declined
     std::uint16_t flags = 0;
     JunctionDecline decline = JunctionDecline::None;
@@ -67,6 +68,7 @@ struct RoadJunction {
 struct JunctionBuildStats {
     std::size_t junction_nodes = 0;      // nodes of the tile graph with degree >= 3 in the context graph
     std::size_t skipped_incomplete = 0;  // fewer approaches in the tile than the node's degree (the tile is not the owner)
+    std::size_t skipped_unresolved = 0;  // complete, but a possible link leads to an incomplete node (slice 4)
     std::size_t built = 0;               // records produced (declined ones included)
     std::array<std::size_t, kJunctionDeclineCount> declines{};   // by JunctionDecline value (index 0 = built without a decline)
     std::size_t partial = 0, on_structure = 0, hull_fallbacks = 0;
@@ -75,6 +77,20 @@ struct JunctionBuildStats {
     std::size_t excluded_approaches = 0;
     std::size_t approaches_used = 0;
     std::size_t max_ring_vertices = 0;   // largest outer ring
+    std::size_t clusters = 0;            // built records with more than one node (ClusterTooLarge records excluded)
+    std::size_t cluster_nodes = 0;       // nodes in those records
+    std::size_t absorbed = 0;            // absorbed stretches in those records
+    std::size_t face_fallbacks = 0;      // a stub off the cluster's outer boundary walk: hull rings (D16)
+    std::size_t max_cluster_nodes = 0;
+};
+
+// Switches for the tests' sabotages and negative controls. Production uses the defaults.
+struct JunctionBuildOptions {
+    bool corner_caps = true;               // D17: a pair may close on the cap segments at the node
+    bool hull_all_layers = true;           // D17: one non-simple layer sends every layer to the hull
+    bool roundabouts_never_link = true;    // 3.2 rule 2
+    bool cluster_caps = true;              // 3.2 rule 4 (node count and extent)
+    bool unknown_links_are_absent = false; // a possible link to an incomplete node ends discovery (D20)
 };
 
 // True iff `ring` has at least 3 vertices, no repeated vertex, positive (counter-clockwise) area and no two
@@ -82,14 +98,27 @@ struct JunctionBuildStats {
 // design 3.5 / 9.2.
 bool junction_ring_valid(const JunctionRing& ring);
 
-// The junction of the node `node_id`, which needs degree >= 3 in `context` and one entry of `tile` per stretch end
-// at the node (else an error). A declined junction is still returned with its approaches and `decline` set.
+// The single-node junction of `node_id`, which needs degree >= 3 in `context` and one entry of `tile` per stretch
+// end at the node (else an error). A declined junction is still returned with its approaches and `decline` set.
 Result<RoadJunction> build_node_junction(const RoadGeomTile& tile, const RoadReferenceBuilder& context,
-    std::int64_t node_id, const RoadRules& rules = builtin_road_rules_de(), JunctionBuildStats* stats = nullptr);
+    std::int64_t node_id, const RoadRules& rules = builtin_road_rules_de(), JunctionBuildStats* stats = nullptr,
+    const JunctionBuildOptions& options = {});
 
-// Every node of the tile's graph whose degree in `context` is >= 3 and whose approaches all have an entry in the
-// tile, ascending by node id. Nodes seen only partially (their other ways lie outside the tile's graph) are
-// skipped and counted: some other tile owns them. No ownership filter yet (design 5.1, slice 8).
+// The single-node junction of every node of the tile's graph whose degree in `context` is >= 3 and whose approaches
+// all have an entry in the tile, ascending by node id, without clustering. Nodes seen only partially (their other
+// ways lie outside the tile's graph) are skipped and counted: some other tile owns them.
 Result<std::vector<RoadJunction>> build_node_junctions(const RoadGeomTile& tile, const RoadReferenceBuilder& context,
-    const RoadRules& rules = builtin_road_rules_de(), JunctionBuildStats* stats = nullptr);
+    const RoadRules& rules = builtin_road_rules_de(), JunctionBuildStats* stats = nullptr,
+    const JunctionBuildOptions& options = {});
+
+// The junctions of the tile with clustering (design 3.2, decisions D16-D20): per complete junction node either its
+// single-node junction or, from the cluster's smallest node, the cluster junction. A node whose bounded discovery
+// exceeds the caps keeps its single-node junction, and the smallest node of its discovery set also stores a
+// ClusterTooLarge record (nodes, untrimmed approaches, linking entries; no rings). A node whose discovery reaches
+// a possible link to an incomplete node is skipped and counted (the owner tile resolves it). Ascending by
+// nodes.front(); for one owner the single-node record precedes the ClusterTooLarge one. Tile-invariant: every
+// record depends only on nodes within cluster_max_extent + link_trim_cap * 2 of its owner, inside the halo.
+Result<std::vector<RoadJunction>> build_road_junctions(const RoadGeomTile& tile, const RoadReferenceBuilder& context,
+    const RoadRules& rules = builtin_road_rules_de(), JunctionBuildStats* stats = nullptr,
+    const JunctionBuildOptions& options = {});
 } // namespace g2m

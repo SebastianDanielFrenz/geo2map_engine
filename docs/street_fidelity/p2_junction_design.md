@@ -1,6 +1,8 @@
 # P2: junction surfaces, server-side carving and junction furniture — implementation design
 
-Status: design only, 2026-10-05. Nothing in this document has been implemented.
+Status: design 2026-10-05. Slices 1-4 implemented (78d189d rules, 399b460 surface
+function, 68985c6 single-node junctions, slice 4 clusters). Deviations found while
+implementing are recorded in section 15 (D16-D21); the owner answers are in section 17.
 Audience: the implementing agents. Each slice in section 14 can be built from this
 document plus the P1 design ([p1_cross_section_design.md](p1_cross_section_design.md)).
 P2 is G3-D (PLAN.md 6.3 steps 4-7) plus the furniture additions of
@@ -161,6 +163,7 @@ counts 2).
 | 25 m clusters > 40 m extent / > 8 nodes / max extent | 8 / 3 / **88.3 m** | 3 / 3 / **106.3 m** |
 | trim-overlap clustering (section 3.2) sizes | 1:451 2:27 3:4 4:1 7:1 9:1 | 1:244 2:16 3:4 4:4 6:1 |
 | trim-overlap > 40 m / > 8 nodes / max extent | 1 / 1 / 40.2 m | 1 / 0 / 45.3 m |
+| **implemented** clustering (slice 4; records counted in the owner node's L2 tile, context degrees, real trims) | 1:482 2:19 3:2 4:1 7:1; 32 absorbed stretches; max extent 27.6 m; 0 `ClusterTooLarge` | 1:271 2:14 3:2 5:1; 24 absorbed; 35.4 m; 0 |
 | roundabout ways (junction nodes on them) | 3 (4) | 0 |
 | junction nodes with a bridge / tunnel approach | 1 / 1 | 2 / 5 |
 | junction nodes with an approach pair < 15° | 12 | 22 |
@@ -336,12 +339,25 @@ The probe (1.4) shows the PLAN's "within 25 m" rule makes chains, not junctions.
 4. **Caps:** bounding box ≤ 48 m per axis and ≤ 12 nodes.
    - A component over a cap is declined `ClusterTooLarge`: one record holds the
      reason, and every member node falls back to a single-node junction.
-   - Measured: 1 such component per fixture.
+   - Probe estimate: 1 such component per fixture. Implemented (slice 4): 0 in both
+     fixtures (1.4).
    - Cluster discovery is a BFS over links that stops as soon as a cap is exceeded.
      It therefore never visits a node more than 48 m + one link (≤ 60 m) away from
      where it started (section 5).
 
 Alternatives in D2 (section 15).
+
+**As implemented (slice 4, `build_road_junctions`):**
+- "Directly" means one `roads.geom` entry. A connection that runs over a degree-2 way
+  join is two entries and never links (D20); measured 0 such pairs whose trims would
+  cover them in either fixture.
+- A possible link to a node the tile sees only partially (`ta + 30 ≥ L`) makes the
+  discovery **unresolved**: that tile skips the node, the owner tile resolves it (D20).
+- Rule 4's "every member falls back" keeps the members' single records, and the
+  smallest node of each discovery set that exceeds a cap stores the `ClusterTooLarge`
+  record (D19).
+- Rule 3's second sentence covers loops at one member node; two members joined by two
+  parallel stretches absorb both when both link.
 
 ### 3.3 Edge polylines and corners (the ported osm2streets step)
 
@@ -355,8 +371,9 @@ For each used approach, at the junction end:
     10 m is 3.1 mm.
 - **Angular order.**
   - Single node: sort approaches by the direction of their first polyline segment.
-  - Cluster: sort by the direction from the cluster centroid (integer mm, the floor
-    mean of the node positions) to the approach's reference point at σ = 0.
+  - Cluster: ~~sort by the direction from the cluster centroid~~ replaced by the
+    boundary walk of D16: every node sorts its own darts (stubs and the ends of
+    absorbed stretches) as for a single node, and the ring follows the outer face.
   - Comparison is exact: half-plane, then the sign of the integer cross product. Ties
     break on (way id, start_ref, at_end).
 - **Corner of an adjacent pair (i, i+1)** (outward-left edge of i against
@@ -367,15 +384,22 @@ For each used approach, at the junction end:
     approach is the segment's start station plus the segment parameter × Δ.
   - If no intersection exists within σ_max, the pair is **open**: a straight-through
     pair at a T, or an angular gap over 180°.
+  - **Caps (D17, slice 4).** Each edge polyline starts with a cap segment from the
+    approach's reference point at σ = 0 out to its edge point at σ = 0 (station −1 to
+    0 on the cap). A pair whose edge lines meet behind the node (an obtuse pair with
+    unequal offsets) closes on a cap instead of staying open; cap against cap never
+    counts. Trims use max(station, 0).
 
 ### 3.4 Trims
 
 - `trim_i = max(corner station of (i−1, i) on i, corner station of (i, i+1) on i,
   trim_min) + trim_margin`.
   - Open pairs contribute 0.
-  - `trim_min` = 1 m; for a cluster it is also at least the projection of every
-    cluster node onto approach i's direction + 1 m, so no node is left outside the
-    ring.
+  - `trim_min` = 1 m. ~~For a cluster it is also at least the projection of every
+    cluster node onto approach i's direction + 1 m~~ — dropped (D18): with the
+    boundary walk every node lies inside the ring by construction.
+  - In a cluster only the stubs (approaches that are not absorbed) have trims; a
+    corner on an absorbed stretch moves no trim.
   - `trim_margin` = 0.5 m.
   - All values come from the rules (8.1).
 - **Clamp:** `trim_i ≤ L_i − 0.5`. When the clamp bites, the junction gets flag
@@ -411,19 +435,28 @@ Then:
    to both trims of every approach whose edge takes part in a crossing pair, then
    rebuilds.
 4. If the ring is still not simple, use the **hull fallback**: the convex hull of
-   all trim points (always simple), flag `HullFallback`.
+   all trim points (always simple), flag `HullFallback`. In a cluster the hull also
+   takes the edge samples of the absorbed stretches. **When one layer needs the hull,
+   all three layers take it (D17)**: hulls of points on the same trim lines nest, a
+   hull next to an offset ring does not.
 5. A hull with fewer than 3 non-collinear points declines `Degenerate`.
 6. **Reach:** every vertex must lie within 128 m of the nearest cluster node, else
    decline `ReachExceeded`.
+
+In a cluster (D16) the walk is the outer face of the darts' rotation system: per
+step, the trim points of a stub; then the left edge of the dart arriving at the
+node, back to the pair's corner; the corner; the right edge of the next stub out to
+its trim. An absorbed stretch contributes its outer edge between the corners at its
+two ends (the whole edge when a pair is open).
 
 ### 3.6 Degenerate and special cases
 
 | Case | Rule | Fixture count |
 |---|---|---|
 | **T junction** (straight pair open) | open pair: the ring follows the main road's edge back to the node and out again; no bevel across the main road | most of the 758 degree-3 nodes |
-| **Bow-tie** (non-adjacent edges cross: acute Y, approaches curving back) | 3 trim-extension rounds, then `HullFallback` | measured in slice 4 |
+| **Bow-tie** (non-adjacent edges cross: acute Y, approaches curving back) | 3 trim-extension rounds, then `HullFallback` | slice 4: 1 / 1 repaired; hull 21 of 504 / 22 of 283 ring records (D21) |
 | **Shallow merge / diverge** (pair < 15°) | corner found at the gore nose (trim = w/sin θ, up to 80 m). The reach cap is 128 m (not the link cap), so the long thin ring is legal. Its heights come from the approaches' own surfaces (4.2), not from extrapolation. Beyond 128 m: `ReachExceeded`, and the approaches carve independently with lowest-wins | 12 / 22 nodes with such a pair; 6 trims > 64 m in B |
-| **Dual-carriageway crossing** (4 nodes, a cycle of 4 short stretches) | one cluster; the ring comes from the 8 outer approaches only, so the box interior, including the median gap, is filled. That is right: the median gap inside a crossing is paved | trim-overlap clusters of 4-9 nodes |
+| **Dual-carriageway crossing** (4 nodes, a cycle of 4 short stretches) | one cluster; the ring comes from the 8 outer approaches only, so the box interior, including the median gap, is filled. That is right: the median gap inside a crossing is paved. A median wide enough that the two carriageways' trims do not overlap gives four single junctions | slice 4: largest clusters 4 and 7 nodes in A, 5 in B (not classified by kind) |
 | **Short stretch to a non-junction node** | trim clamped to L − 0.5; the join or dead end beyond is unaffected | rare |
 | **Tile borders** | none: geometry comes from the merged context graph and complete ways (section 5) | — |
 | **Bridge at a junction** | exactly one bridge (an abutment): a ground junction; the bridge approach takes part in ring and heights with its anchored profile, and its core is not carved. All used approaches bridges (junction on a deck): `OnStructure`, rings and heights served for G3-E, never carved. Two or more bridges at a node: P1 declines them, so they are `NoProfile` and excluded | 1 / 2 |
@@ -431,7 +464,7 @@ Then:
 | **Roundabout** | ring stretches never link (3.2), so each entry node is its own junction (or a cluster with its own split-entry arms). The ring carriageway is an ordinary one-way core. P1's one-way crown falls to the right of travel, which on a counter-clockwise DE roundabout is outward, as the design guides want. The island is never filled. A mini roundabout node (`highway=mini_roundabout`, degree ≥ 3) is an ordinary junction | 3 ways / 4 nodes in A |
 | **Grade exception** (owner: endpoint heights win, steep stretches flagged) | the approach profile is used as served; the junction surface interpolates between approaches, so it never exceeds their steepest grade plus crossfall (4.3); flagged stretches are not special | — |
 | **Calming on a junction node** | section 4.4 (raised junction) | to measure |
-| **Approach with a declined profile** | excluded (`NoProfile`), flag `Partial`. The ring closes across its mouth along the neighbours' edges. After the switch that area is a hole in the carved road, which is why the switch gate (Q1) counts these | to measure on home |
+| **Approach with a declined profile** | excluded (`NoProfile`), flag `Partial`. The ring closes across its mouth along the neighbours' edges. After the switch that area is a hole in the carved road; the census lists these (10.4, Q1) | to measure on home |
 
 ### 3.7 Junction decline reasons
 
@@ -442,7 +475,10 @@ These are listed in `JunctionDecline` (section 2). A declined junction:
   under the lowest-wins rule.
 
 A `ClusterTooLarge` record is extra: its member nodes also have their own single-node
-records.
+records. As implemented (D19) it holds the discovery set of its smallest node (sorted),
+every approach of those nodes that is not a link between two of them (key order,
+trim 0) and the linking entries as `absorbed`; one over-cap component can produce
+more than one such record.
 
 ---
 
@@ -582,6 +618,13 @@ one tile stores it. Test: build every fixture tile, collect junctions by owner n
 and compare against a build in which T is replaced by a neighbour that sees the same
 cluster through its halo (white-box build without the ownership filter). Negative
 control: degree from the tile graph instead of the context graph.
+
+As implemented (slice 4): a tile that cannot see a node's whole discovery set does not
+guess. A possible link to an incomplete node marks the discovery unresolved and the
+tile skips that node (D20); the owner tile always resolves it (census: every junction
+node is covered in its own tile). The slice 4 test compares every record built in two
+or more fixture tiles (210 / 160 records, 0 mismatches). Its negative control treats a
+possible link to an incomplete node as absent: 4 records then differ between tiles.
 
 ### 5.3 What the carver needs
 
@@ -1037,6 +1080,13 @@ per item:
 - **Rings.** Counter-clockwise (exact signed area > 0), simple (exact predicates), no
   duplicate consecutive vertex; the road bed ring lies inside the paved ring, and the
   paved ring inside the outer ring (vertex-in-polygon, exact).
+  - **Slice 8 must settle two points first (D21).** (1) Each layer's vertices are
+    rounded to mm independently, so a vertex on an edge two layers share can lie up
+    to ~1.5 mm outside the next ring; an exact check rejects that. Either allow
+    2 mm or build the inner rings by containment. (2) After slice 4, 5 vertices in 2
+    junctions of fixture A (worst 352 mm, both on short, strongly curved approaches)
+    still stick out. Before validation runs, the builder should send such a junction
+    to the all-layer hull, which nests.
 - **Trims.** In [0, L − 0.5], finite.
 - **Furniture.**
   - Enums in range.
@@ -1130,11 +1180,16 @@ handled by the existing Absent/gate logic. It never falls back to `terrain.heigh
 
 ### 10.4 Switch gate
 
-The switch is one racing_game commit, done after P2 slice 12 has measured the home
-region (section 12). It removes completion and carving in the game, so every
-drivable stretch must be carved by the server. The precondition (owner question Q1):
-- no ground stretch of the home region is declined after the completion tier; or
-- the owner accepts the measured list of uncarved stretches.
+The switch is one racing_game commit. It removes completion and carving in the
+game, so from then on only server-carved stretches are carved.
+
+**Owner answer to Q1 (2026-10-05):** "There is no prod environment; work in progress
+states are acceptable." So the gate is **not** zero gaps:
+- The switch may happen as soon as the carved layer works end to end (slices 9-11).
+- The census (section 12) lists the stretches that are still uncarved after the
+  completion tier. The list is information for later work; it does not block the
+  switch.
+- Those stretches show as bare terrain between carved roads until fixed.
 
 ---
 
@@ -1148,6 +1203,7 @@ Each test is listed with its negative control or sabotage, which must make it fa
 | T2 corners and trims (synthetic X, T, Y, 30°, 10°, curved approaches) | trims equal hand-computed offset intersections within 1 mm; T: the straight pair is open, no bevel across the main road | swap left and right edges: trims wrong by the width |
 | T3 rings | counter-clockwise, simple, nested road bed ⊂ paved ⊂ outer; acute Y triggers a bow-tie repair; a constructed self-crossing case falls back to the hull with the flag | disable repair: validation rejects the ring |
 | T4 clusters | dual-carriageway crossing fixture → 1 cluster of 4, interior filled; a 5-node chain at 20 m spacing beyond 48 m → `ClusterTooLarge` + singles; roundabout ring never absorbed | the PLAN 25 m rule on the fixtures reproduces the 17/14-node chains (diag) |
+| T4 as implemented (slice 4) | synthetic dual crossing (median 10.5 m between centre lines) → 1 cluster of 4, 4 absorbed, 8 stubs turning one full turn, median and nodes inside the road bed ring; staggered T pair 5 m apart → 1 cluster, the main road between the nodes inside the road bed ring; a 3-node chain at 18 m (30° diagonal crossings) → 1 cluster, 5 nodes over 72 m → 5 singles + 1 `ClusterTooLarge`; node cap 2 → too large; roundabout middle stretch → 2 singles; fixture census with tile identity; D17 caps and all-layer hull on fixture nodes 507567 / 562041 | options in the tests: caps off → 507567 not nested (and 527505 back to a bow-tie round); one-layer hull → 562041 not nested; roundabout rule off → linked; cluster caps off → one 5-node cluster; unknown links absent → 4 records differ between tiles. Code sabotage: the walk not crossing absorbed stretches → dual crossing and staggered T fail, 34 face-walk fallbacks per fixture. The PLAN 25 m diag was not built: D2 already rests on the probe's measurement |
 | T5 junction heights | on 64 points per trim segment |z_J − ẑ_i| ≤ 1e-9 m; finite-difference normal slope across the trim line equal within 1e-4; min ≤ z_J ≤ max everywhere on a 0.25 m lattice | weights from plain distances instead of squared distances: the slope test fails; plain average: the match test fails |
 | T6 node agreement | for every fixture junction all used approaches' ẑ at the node agree within 1/256 m (strict and completed) | completion tier refitting only one stretch at an anchored node: fails |
 | T7 tile invariance | every junction and furniture record identical whichever fixture tile builds it; owned exactly once | degree from the tile graph instead of the context graph: differs at halo edges (P1 slice 1 negative control reused) |
@@ -1216,7 +1272,7 @@ Each test is listed with its negative control or sabotage, which must make it fa
 
 | Risk | Effect | Mitigation |
 |---|---|---|
-| Profile declines remain after the completion tier | holes in carved roads after the switch (no game fallback) | gate Q1; the census lists them before the switch |
+| Profile declines remain after the completion tier | holes in carved roads after the switch (no game fallback) | the census lists them; per the Q1 answer they do not block the switch (10.4) |
 | Multi-node rings (clusters) look wrong: edges attached to different nodes, hull fallback covering verge or buildings | odd paved shapes at dual-carriageway crossings | clusters are a separate Opus slice; hull flagged and counted; the 48 m cap keeps the hull small |
 | Gore junctions up to 128 m | long thin rings, Shepard mixing two diverging profiles | both profiles are the approaches' own surfaces (4.2); the mix lies between them; measured max gradient |
 | Shepard warp ("egg-crate") in large boxes | small bumps of ≤ c·w/2 | bounded by property 4.3.3; measured; fallback (later): flatten crowns inside clusters above 30 m |
@@ -1258,7 +1314,9 @@ Sizes: **S** ≤ 1 day, **M** 1-2 days, **L** 3+ days of agent work [estimate].
 
 - Slices 2-7 are pure computation with no encoding change, so `roads.geom` bytes stay
   untouched until slice 8 bumps the encoding once (as P1 did in its slice 5).
-- The racing_game switch (10.2) is a separate task after slice 12 and the Q1 answer.
+- The racing_game switch (10.2) is a separate task; by the Q1 answer (10.4) it may
+  follow as soon as the carved layer works (slices 9-11), with slice 12's list of
+  uncarved stretches as information, not a gate.
 
 ---
 
@@ -1378,6 +1436,110 @@ does not touch the open Q3 question for older code.
 `stop=*`, `crossing_ref` and `traffic_signals=*` details are not added. Their absence
 costs only the all-way-stop case, which is rare in DE.
 
+### Decisions made while implementing (slice 4)
+
+**D16. Cluster rings by a boundary walk, not by the angular order around the centroid.**
+- Alt A (3.3 as designed): sort the stubs by the direction from the cluster centroid
+  and run the single-node ring over the stubs only. Con: at a staggered T pair the
+  pair (west arm of node 1, east arm of node 2) gets a chord or a corner that cuts
+  across the main road between the nodes, and its other edge is never part of the
+  ring. A dual crossing works only by luck of symmetry.
+- Alt B: union of single-node polygons and approach strips (polygon clipping). Pro:
+  exact coverage. Con: a clipping library with exact integer output, new failure
+  modes, no corners of its own.
+- Alt C: treat each absorbed stretch as two darts. Every node sorts its darts as for a
+  single node (exact half-plane and cross product). The ring is the outer face of
+  that rotation system: next = the dart after the arrival dart at its node. Pairs
+  are always two darts at one node, so 3.3's corner search is reused unchanged.
+  Pro: a single node is exactly slice 3. The absorbed stretches' edges become ring
+  pieces, so the road between the nodes is covered. Con: a stub that lies inside a
+  cycle of absorbed stretches is not on the outer face. Then every layer falls back
+  to the hull (counted as `face_fallbacks`; 0 on both fixtures).
+- **Chosen: C.** Sabotage: arrival = departure dart (not its twin). The walk then never
+  leaves a node; the dual crossing and the staggered T fail, with 34 face-walk
+  fallbacks per fixture.
+
+**D17. Corner caps and all-layer hulls (slice-3 finding (a), fixed now).**
+- Finding: rings not nested at open pairs whose angular gap is under 180° but whose
+  edge lines meet behind the node (unequal offsets). The chord between the two σ = 0
+  points then runs on the wrong side of the node, and inner layers with smaller
+  offsets poke out. Slice 3: A 97 vertices in 46 junctions, worst 663 mm; B 85 in
+  50, worst 876 mm. A second source: one non-simple layer took the hull while the
+  others kept offset rings.
+- Alt A: tolerate it and let slice 8 validation allow it. Con: slices 8 and 10 assume
+  road bed ⊆ paved ⊆ outer (9.2; 6.5 classifies by "inside the road bed ring" first).
+- Alt B: clip inner rings to the outer ring. Con: polygon clipping again (D16 Alt B).
+- Alt C: start each edge polyline with a cap segment from the reference point at
+  σ = 0, so such a pair closes on the cap. For straight arms, a cap hit happens
+  exactly when the plain corner lies at σ < 0; the result is the union of the
+  half-strips per layer. When one layer needs the hull, all three take it.
+- **Chosen: C.** Measured with clustering: A 5 vertices in 2 junctions, worst 352 mm
+  (both on short, strongly curved approaches; D21 hands the rest to slice 8); B 0.
+  Side effects: the single-node hull count falls (A 31 → 27, B 25 → 23), and A 66
+  node 527505, slice 3's bow-tie example, needs no repair round any more.
+- What the later slices assume: heights (4.2) and the carver's junction core (6.3)
+  use only the outer ring and the trims, so the residual does not affect them. Slice
+  10's class roles and slice 8's validation need the nesting.
+- Sabotages: caps off → node 507567 not nested (and 527505 back to one bow-tie
+  round); one-layer hull → node 562041 not nested.
+
+**D18. No cluster `trim_min` projection.** 3.4 asked every stub's trim to reach past the
+projection of every cluster node, so that no node is left outside the ring. With D16
+every node is on the walk's interior side by construction, and the projection would
+over-trim stubs on long clusters (a 30 m cluster would push every stub ≥ 30 m out).
+Dropped; T4 checks that the nodes lie inside the road bed ring.
+
+**D19. `ClusterTooLarge` records per discovery set.** The full over-cap component is
+not computable in one tile: discovery stops at the cap, which is the point of the cap.
+- Alt A: one record per component. Con: needs the whole component, which the halo does
+  not guarantee.
+- Alt B (chosen): each node keeps its single-node record. A node that is the smallest
+  of its own discovery set also stores a `ClusterTooLarge` record (nodes = that set,
+  every non-link approach untrimmed, the links as `absorbed`, no rings). The set
+  depends only on links within 108 m, so the record is tile-invariant.
+- Con: an over-cap component can yield more than one such record. Slice 8's encoding
+  must allow several. The fixtures have none.
+
+**D20. Links over one entry only; unresolved discovery is skipped, not guessed.**
+- A stretch between two junction nodes is one `roads.geom` entry, unless two ways join
+  end to end at a degree-2 node between them. Linking across such joins needs the
+  entry chain and the trims of both ends of each entry.
+  - Measured (`[diag]` "junction pairs joined over two stretches"): 0 such pairs
+    whose capped trims would cover the chain, against 32 / 24 direct links.
+  - Kept simple: one entry.
+- A tile computing links of a complete node may meet a neighbour it sees only
+  partially. If the capped trim of the near end plus the 30 m cap could cover the
+  stretch, the link is unknown, and any discovery that reaches it is unresolved.
+  The tile skips that node (16 / 17 skips over all tiles).
+  - Treating unknown as no link is the tested negative control: 4 records then
+    differ between tiles.
+  - The owner tile always resolves its nodes: 0 uncovered junction nodes on both
+    fixtures.
+
+**D21. Judgement of the open slice-3 findings.**
+- (a) Ring nesting: **a defect, fixed now** (D17). The residual (A: 2 junctions,
+  worst 352 mm) and the mm rounding between layers go to slice 8 (9.2): validation
+  needs a ≤ 2 mm allowance or nested construction, and the builder should send a
+  junction that still does not nest to the all-layer hull. This is deferred
+  because the exact check belongs with the encoding's own validation, and the
+  residual does not affect heights or carving (D17).
+- (b) Hull fallback rate: **acceptable, deferred.**
+  - Rate before / after: A 31/536 (5.8 %) → 27/536 with caps → 21/504 ring records
+    with clusters (4.2 %); B 25/305 (8.2 %) → 23/305 → 22/283 (7.8 %; the
+    denominator fell by 22 merged records).
+  - Of the remaining hulls (A / B):
+    - 12 / 13 have a pair under 25°: a shallow merge whose facing edges do not meet
+      before one approach ends at a way join;
+    - 6 / 6 have an approach shorter than 12 m;
+    - 3 / 3 are other.
+  - Clustering fixes only short stretches between two junctions. It cannot fix the
+    merges: the link test caps trims at 30 m, and the approach that ends early ends
+    at a degree-2 join, not at a junction.
+  - A hull is a valid simple ring, flagged and counted. It covers the gore with a
+    convex shape, slightly over-paving the nose.
+  - Later fix, if slice 12's home census shows it matters: continue edge polylines
+    across degree-2 way joins up to the reach (the same chain walk D20 avoided).
+
 ---
 
 ## 16. What P2 changes in P1's implementation
@@ -1424,6 +1586,11 @@ between carved roads? **Recommendation: zero on every road the game can reach on
 home map. The census (section 12) lists them, and each is fixed or explicitly
 accepted before the switch.**
 
+> **Answer (owner, 2026-10-05):** "There is no prod environment; work in progress
+> states are acceptable." The gate is therefore not zero gaps. The remaining uncarved
+> stretches are listed and do not block the switch. 10.4, the risk table (13) and
+> section 14 are updated.
+
 **Q2 — relaxed profiles as served data.** The game today invents profiles where the
 strict fit fails. For bridges it re-fits spans; for ground roads it uses relaxed
 limits (grade bound raised to at least 12 %, end grades clamped to ±10 %, 40 m
@@ -1431,3 +1598,6 @@ samples). May the server serve these as ordinary drivable profiles, flagged as
 "completed" so tools can list them? **Recommendation: yes. It is what you drive today.
 Moving it to the server only makes it shared and visible, and the flag keeps it
 honest.**
+
+> **Answer (owner, 2026-10-05):** yes. Serve the relaxed profiles, flagged
+> "completed" (D14, 6.6).

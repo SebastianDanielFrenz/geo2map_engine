@@ -298,14 +298,32 @@ bool has(const RoadJunction& j, JunctionFlags f) { return (j.flags & static_cast
 }
 
 TEST_CASE("T3: a repairable bow-tie is repaired by trim extension; without the repair it falls back to the hull", "[layer][junction][roads]") {
-    // Hoechst A 66 node 527505 (three arms at -17, -55 and 125 degrees): the first ring is not simple, one extension
-    // round of 1 m on the involved approaches makes every layer simple (measured in the census).
+    // Hoechst A 66 node 2152308547: the first ring is not simple, one extension round of 1 m on the involved
+    // approaches makes every layer simple (measured in the census). Slice 3 used node 527505 (arms at -17, -55 and
+    // 125 degrees); its bow-tie was the open-pair chord of finding (a), which the corner caps (D17) now close, so it
+    // builds without any extension.
     const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/hoechst_a66.osm.pbf");
     const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
     const auto builder = RoadReferenceBuilder::make(*world); REQUIRE(builder);
-    auto g = g2m_test::geometry_in_tile(*world, TileKey{g2m_test::kZone32N, 2, 455, 5421}); REQUIRE(g);
+    {
+        auto g0 = g2m_test::geometry_in_tile(*world, TileKey{g2m_test::kZone32N, 2, 455, 5421}); REQUIRE(g0);
+        JunctionBuildStats s0;
+        const auto capped = build_node_junction(*g0, *builder, 527505, builtin_road_rules_de(), &s0); REQUIRE(capped);
+        CHECK(capped->decline == JunctionDecline::None);
+        CHECK(s0.bowtie_rounds == 0); CHECK(s0.hull_fallbacks == 0);
+        JunctionBuildOptions no_caps; no_caps.corner_caps = false;
+        JunctionBuildStats s1;
+        REQUIRE(build_node_junction(*g0, *builder, 527505, builtin_road_rules_de(), &s1, no_caps));
+        CHECK(s1.bowtie_rounds == 1);   // the slice-3 behaviour
+    }
+    constexpr std::int64_t kNode = 2152308547;
+    const auto node = std::find_if(world->nodes.begin(), world->nodes.end(), [](const auto& n) { return n.osm_id == kNode; });
+    REQUIRE(node != world->nodes.end());
+    const auto home = tile_key_at(g2m_test::kZone32N, 2, static_cast<double>(node->position.x) / 1000.0, static_cast<double>(node->position.y) / 1000.0);
+    REQUIRE(home);
+    auto g = g2m_test::geometry_in_tile(*world, *home); REQUIRE(g);
     JunctionBuildStats stats;
-    const auto repaired = build_node_junction(*g, *builder, 527505, builtin_road_rules_de(), &stats); REQUIRE(repaired);
+    const auto repaired = build_node_junction(*g, *builder, kNode, builtin_road_rules_de(), &stats); REQUIRE(repaired);
     CHECK(repaired->decline == JunctionDecline::None);
     CHECK_FALSE(has(*repaired, JunctionFlags::HullFallback));
     CHECK(stats.bowtie_rounds == 1); CHECK(stats.bowtie_repaired == 1);
@@ -313,7 +331,7 @@ TEST_CASE("T3: a repairable bow-tie is repaired by trim extension; without the r
     // Sabotage in the test: with the repair disabled (0 rounds) the same junction takes the hull for its non-simple layer.
     auto no_repair = builtin_road_rules_de(); no_repair.junction.bowtie_rounds = 0;
     JunctionBuildStats stats0;
-    const auto hull = build_node_junction(*g, *builder, 527505, no_repair, &stats0); REQUIRE(hull);
+    const auto hull = build_node_junction(*g, *builder, kNode, no_repair, &stats0); REQUIRE(hull);
     CHECK(has(*hull, JunctionFlags::HullFallback));
     CHECK(stats0.bowtie_rounds == 0); CHECK(stats0.hull_fallbacks == 1);
     for (const auto& ring : hull->rings) CHECK(junction_ring_valid(ring));
@@ -543,5 +561,406 @@ TEST_CASE("Fixtures: every junction ring is valid, the same node builds identica
         CHECK(c.owned_nodes > 50);
         CHECK(c.invalid_rings == 0);
         CHECK(c.multi_tile_mismatch == 0);
+    }
+}
+
+// ---- slice 4: corner caps (D17), clusters (3.2, D16-D20) ----
+
+namespace {
+geom::PointMm at(double x, double y) { return {std::llround((kOriginE + x) * 1000.0), std::llround((kOriginN + y) * 1000.0)}; }
+bool inside(const JunctionRing& ring, geom::PointMm p) {
+    geom::RingSet set; set.outers.push_back(ring.vertices); set.bbox = geom::bounding_box(set);
+    return geom::contains(set, p);
+}
+std::vector<RoadJunction> road_junctions(const Scene& scene, const RoadRules& rules = builtin_road_rules_de(), JunctionBuildStats* stats = nullptr,
+    const JunctionBuildOptions& options = {}) {
+    auto js = build_road_junctions(scene.tile, *scene.builder, rules, stats, options);
+    REQUIRE(js);
+    return std::move(*js);
+}
+const RoadJunction* record_of(const std::vector<RoadJunction>& js, std::int64_t owner, bool cluster_too_large = false) {
+    for (const auto& j : js) if (j.nodes.front() == owner && (j.decline == JunctionDecline::ClusterTooLarge) == cluster_too_large) return &j;
+    return nullptr;
+}
+void check_cluster_rings(const RoadJunction& j) {
+    for (const auto& ring : j.rings) CHECK(junction_ring_valid(ring));
+    check_nested(j);
+}
+// Two one-way carriageways per road, crossing: nodes 1 (-d,-d), 2 (d,-d), 3 (d,d), 4 (-d,d).
+std::unique_ptr<Scene> dual_crossing_scene(double d) {
+    const Tags t = {{"highway", "primary"}, {"oneway", "yes"}};
+    return make_scene({{1, -d, -d}, {2, d, -d}, {3, d, d}, {4, -d, d}, {101, -300, -d}, {102, 300, -d}, {103, 300, d}, {104, -300, d},
+                          {105, d, -300}, {106, d, 300}, {107, -d, 300}, {108, -d, -300}},
+        {{20, {101, 1, 2, 102}, t}, {21, {103, 3, 4, 104}, t}, {22, {105, 2, 3, 106}, t}, {23, {107, 4, 1, 108}, t}});
+}
+// A main road west-east with a side road south at node 1 (0,0) and north at node 2 (s,0). The middle stretch
+// optionally its own way with extra tags.
+std::unique_ptr<Scene> staggered_scene(double s, const Tags& middle = {}) {
+    std::vector<N> nodes = {{1, 0, 0}, {2, s, 0}, {3, -300, 0}, {4, 300, 0}, {5, 0, -300}, {6, s, 300}};
+    if (middle.empty()) return make_scene(nodes, {{10, {3, 1, 2, 4}}, {11, {1, 5}}, {12, {2, 6}}});
+    return make_scene(nodes, {{10, {3, 1}}, {11, {1, 5}}, {12, {2, 6}}, {13, {1, 2}, middle}, {14, {2, 4}}});
+}
+// A main road west-east with nodes 1..n every `spacing` metres from x = 0, each crossed by its own diagonal road at
+// 30 degrees: both main-road arms of every node pair acutely with a diagonal arm and trim far.
+std::unique_ptr<Scene> chain_scene(int n, double spacing) {
+    std::vector<N> nodes = {{900, -300, 0}, {901, 300 + spacing * n, 0}};
+    std::vector<W> ways;
+    std::vector<std::int64_t> main = {900};
+    for (int i = 1; i <= n; ++i) {
+        const double x = spacing * (i - 1);
+        nodes.push_back({i, x, 0});
+        const double c = 200.0 * std::cos(kPi / 6.0), s = 200.0 * std::sin(kPi / 6.0);
+        nodes.push_back({100 + i, x - c, -s}); nodes.push_back({200 + i, x + c, s});
+        ways.push_back({100 + i, {100 + i, i, 200 + i}});
+        main.push_back(i);
+    }
+    main.push_back(901);
+    ways.push_back({10, main});
+    return make_scene(nodes, ways);
+}
+}
+
+TEST_CASE("D17: corner caps close an obtuse pair whose edges meet behind the node; the rings nest", "[layer][junction][roads]") {
+    // Hoechst A 66 node 507567: an obtuse pair (~137 degrees) with unequal outer offsets. Without the caps the pair
+    // is open, its chord runs on the wrong side of the node and the inner rings stick out of the outer one (slice-3
+    // finding (a), up to 876 mm); with the caps the pair closes on the cap of the narrower arm.
+    const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/hoechst_a66.osm.pbf");
+    const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
+    const auto builder = RoadReferenceBuilder::make(*world); REQUIRE(builder);
+    const auto home_of = [&](std::int64_t id) {
+        const auto n = std::find_if(world->nodes.begin(), world->nodes.end(), [&](const auto& x) { return x.osm_id == id; });
+        REQUIRE(n != world->nodes.end());
+        const auto k = tile_key_at(g2m_test::kZone32N, 2, static_cast<double>(n->position.x) / 1000.0, static_cast<double>(n->position.y) / 1000.0);
+        REQUIRE(k);
+        return *k;
+    };
+    {
+        auto g = g2m_test::geometry_in_tile(*world, home_of(507567)); REQUIRE(g);
+        const auto capped = build_node_junction(*g, *builder, 507567); REQUIRE(capped);
+        REQUIRE(capped->decline == JunctionDecline::None);
+        CHECK_FALSE(has(*capped, JunctionFlags::HullFallback));
+        for (const auto& ring : capped->rings) CHECK(junction_ring_valid(ring));
+        CHECK(nested_violations(*capped) == 0);
+        // Sabotage in the test: without the caps the same junction does not nest.
+        JunctionBuildOptions no_caps; no_caps.corner_caps = false;
+        const auto open = build_node_junction(*g, *builder, 507567, builtin_road_rules_de(), nullptr, no_caps); REQUIRE(open);
+        double worst = 0;
+        CHECK(nested_violations(*open, &worst) > 0);
+        CHECK(worst > 100.0);
+    }
+    // One non-simple layer sends all three to the hull (D17): node 562041 falls back on one layer; the hulls of the
+    // three layers' trim points nest, an offset ring next to a hull does not (the sabotage).
+    {
+        auto g = g2m_test::geometry_in_tile(*world, home_of(562041)); REQUIRE(g);
+        const auto all = build_node_junction(*g, *builder, 562041); REQUIRE(all);
+        REQUIRE(has(*all, JunctionFlags::HullFallback));
+        CHECK(nested_violations(*all) == 0);
+        JunctionBuildOptions one; one.hull_all_layers = false;
+        const auto mixed = build_node_junction(*g, *builder, 562041, builtin_road_rules_de(), nullptr, one); REQUIRE(mixed);
+        CHECK(nested_violations(*mixed) > 0);
+    }
+}
+
+TEST_CASE("T4: a dual-carriageway crossing is one cluster of four nodes around the median", "[layer][junction]") {
+    const auto scene = dual_crossing_scene(5.25);
+    JunctionBuildStats stats;
+    const auto js = road_junctions(*scene, builtin_road_rules_de(), &stats);
+    REQUIRE(js.size() == 1);
+    const RoadJunction& j = js.front();
+    CHECK(j.nodes == std::vector<std::int64_t>{1, 2, 3, 4});
+    CHECK(j.decline == JunctionDecline::None);
+    CHECK(has(j, JunctionFlags::Cluster));
+    CHECK_FALSE(has(j, JunctionFlags::HullFallback));
+    CHECK(j.absorbed.size() == 4);
+    CHECK(std::is_sorted(j.absorbed.begin(), j.absorbed.end()));
+    REQUIRE(j.approaches.size() == 8);
+    for (const auto& a : j.approaches) { CHECK(a.status == JunctionApproachStatus::Used); CHECK(a.trim_m > 0.0); }
+    check_cluster_rings(j);
+    // The median and every node lie inside the road bed.
+    CHECK(inside(j.rings[0], at(0, 0)));
+    for (const auto& [x, y] : std::vector<std::pair<double, double>>{{-5.25, -5.25}, {5.25, -5.25}, {5.25, 5.25}, {-5.25, 5.25}}) CHECK(inside(j.rings[0], at(x, y)));
+    // Stubs counter-clockwise around the cluster: the outward directions turn by exactly one full turn.
+    const auto pos = [&](std::int64_t id) { return std::find_if(scene->graph.nodes.begin(), scene->graph.nodes.end(), [&](const auto& n) { return n.osm_id == id; })->position; };
+    double turned = 0, prev = 0;
+    for (std::size_t i = 0; i <= j.approaches.size(); ++i) {
+        const auto& a = j.approaches[i % j.approaches.size()];
+        const auto& e = scene->tile.entries[a.entry_index];
+        const auto& way = *std::find_if(scene->graph.ways.begin(), scene->graph.ways.end(), [&](const auto& w) { return w.osm_id == e.way_id; });
+        const auto near = pos(way.node_ids[a.at_end ? e.stretch.end_ref : e.stretch.start_ref]);
+        const auto far = pos(way.node_ids[a.at_end ? e.stretch.start_ref : e.stretch.end_ref]);
+        const double ang = std::atan2(static_cast<double>(far.y - near.y), static_cast<double>(far.x - near.x));
+        if (i > 0) { double d = ang - prev; while (d < -1e-12) d += 2 * kPi; turned += d; }   // parallel stubs of two nodes turn by 0
+        prev = ang;
+    }
+    CHECK(turned == Approx(2 * kPi).margin(1e-9));
+    CHECK(stats.clusters == 1); CHECK(stats.cluster_nodes == 4); CHECK(stats.absorbed == 4); CHECK(stats.max_cluster_nodes == 4);
+    CHECK(stats.junction_nodes == 4); CHECK(stats.skipped_unresolved == 0); CHECK(stats.face_fallbacks == 0);
+    // Bit-identical on a second build. Far apart, the four nodes stay single junctions.
+    CHECK(road_junctions(*scene) == js);
+    const auto apart = road_junctions(*dual_crossing_scene(40.0));
+    REQUIRE(apart.size() == 4);
+    for (const auto& s : apart) { CHECK(s.nodes.size() == 1); CHECK(s.absorbed.empty()); CHECK(s.decline == JunctionDecline::None); }
+}
+
+TEST_CASE("T4: a staggered T pair is one cluster; the main road between the nodes stays covered", "[layer][junction]") {
+    const auto scene = staggered_scene(5.0);
+    const auto js = road_junctions(*scene);
+    REQUIRE(js.size() == 1);
+    const RoadJunction& j = js.front();
+    CHECK(j.nodes == std::vector<std::int64_t>{1, 2});
+    REQUIRE(j.decline == JunctionDecline::None);
+    CHECK_FALSE(has(j, JunctionFlags::HullFallback));
+    CHECK(j.absorbed.size() == 1);
+    CHECK(j.approaches.size() == 4);
+    check_cluster_rings(j);
+    // Both edges of the main road between the two nodes, just inside the road bed.
+    const auto& e = scene->tile.entries[j.absorbed.front()];
+    const auto f = carve_footprint(*e.cross_section, e.profile->reference.length_m / 2);
+    for (const double x : {0.5, 2.5, 4.5}) {
+        CHECK(inside(j.rings[0], at(x, f.roadbed_left - 0.05)));
+        CHECK(inside(j.rings[0], at(x, f.roadbed_right + 0.05)));
+    }
+    // The single-node builds do not link at 40 m: two records.
+    CHECK(road_junctions(*staggered_scene(40.0)).size() == 2);
+}
+
+TEST_CASE("T4: a roundabout stretch never links; without the rule it does", "[layer][junction]") {
+    const auto plain = road_junctions(*staggered_scene(5.0, {{"highway", "residential"}}));
+    REQUIRE(plain.size() == 1);
+    CHECK(plain.front().nodes.size() == 2);
+    const Tags ring = {{"highway", "residential"}, {"junction", "roundabout"}};
+    const auto scene = staggered_scene(5.0, ring);
+    const auto js = road_junctions(*scene);
+    REQUIRE(js.size() == 2);
+    for (const auto& j : js) { CHECK(j.nodes.size() == 1); CHECK(j.absorbed.empty()); }
+    // Negative control: the rule switched off links the two nodes again.
+    JunctionBuildOptions sabotage; sabotage.roundabouts_never_link = false;
+    const auto linked = road_junctions(*scene, builtin_road_rules_de(), nullptr, sabotage);
+    REQUIRE(linked.size() == 1);
+    CHECK(linked.front().nodes.size() == 2);
+}
+
+TEST_CASE("T4: cluster caps - a chain within 48 m is one cluster, a longer one keeps its singles plus a ClusterTooLarge record", "[layer][junction]") {
+    constexpr double kSpacing = 18.0;
+    // Three nodes over 36 m: one cluster.
+    {
+        const auto scene = chain_scene(3, kSpacing);
+        JunctionBuildStats stats;
+        const auto js = road_junctions(*scene, builtin_road_rules_de(), &stats);
+        REQUIRE(js.size() == 1);
+        CHECK(js.front().nodes == std::vector<std::int64_t>{1, 2, 3});
+        CHECK(js.front().absorbed.size() == 2);
+        CHECK(js.front().decline == JunctionDecline::None);
+        CHECK(js.front().approaches.size() == 8);   // 12 stretch ends, 4 of them on the two absorbed stretches
+        check_cluster_rings(js.front());
+        // White-box: a node cap of 2 makes the same chain too large.
+        auto rules = builtin_road_rules_de(); rules.junction.cluster_max_nodes = 2;
+        const auto capped = road_junctions(*scene, rules);
+        CHECK(capped.size() == 4);   // three singles plus one ClusterTooLarge record from node 1
+        REQUIRE(record_of(capped, 1, true));
+    }
+    // Five nodes over 72 m exceed the 48 m extent.
+    const auto scene = chain_scene(5, kSpacing);
+    JunctionBuildStats stats;
+    const auto js = road_junctions(*scene, builtin_road_rules_de(), &stats);
+    std::size_t singles = 0, too_large = 0;
+    for (const auto& j : js) {
+        if (j.decline == JunctionDecline::ClusterTooLarge) {
+            ++too_large;
+            CHECK(has(j, JunctionFlags::Cluster));
+            CHECK(j.nodes.size() >= 2);
+            CHECK(j.nodes.front() == 1);
+            for (const auto& ring : j.rings) CHECK(ring.vertices.empty());
+            for (const auto& a : j.approaches) CHECK(a.trim_m == 0.0);
+            CHECK_FALSE(j.absorbed.empty());
+        } else {
+            ++singles;
+            CHECK(j.nodes.size() == 1);
+            CHECK(j.decline == JunctionDecline::None);
+        }
+    }
+    CHECK(singles == 5);
+    CHECK(too_large == 1);
+    CHECK(stats.declines[static_cast<std::size_t>(JunctionDecline::ClusterTooLarge)] == 1);
+    CHECK(stats.clusters == 0);
+    // Ascending by owner; for one owner the single record first.
+    for (std::size_t i = 1; i < js.size(); ++i) CHECK(js[i - 1].nodes.front() <= js[i].nodes.front());
+    CHECK(js[0].nodes.size() == 1); CHECK(js[1].decline == JunctionDecline::ClusterTooLarge);
+    // Negative control: without the caps the five nodes form one cluster.
+    JunctionBuildOptions no_caps; no_caps.cluster_caps = false;
+    const auto all = road_junctions(*scene, builtin_road_rules_de(), nullptr, no_caps);
+    REQUIRE(all.size() == 1);
+    CHECK(all.front().nodes.size() == 5);
+}
+
+namespace {
+struct ClusterCensus {
+    std::size_t tiles = 0, owned_records = 0, uncovered = 0, multi_tile_records = 0, multi_tile_mismatch = 0;
+    std::size_t skipped_unresolved = 0, invalid_rings = 0, nested_bad = 0, nested_junctions = 0, face_fallbacks = 0;
+    double nested_worst_mm = 0;
+    std::map<std::size_t, std::size_t> sizes;                          // nodes per built record (ClusterTooLarge excluded)
+    std::array<std::size_t, kJunctionDeclineCount> declines{};
+    std::size_t hulls = 0, hull_shallow = 0, hull_short = 0, hull_other = 0, ring_records = 0, absorbed = 0;
+    double max_extent_m = 0;                                          // largest bounding-box side of a cluster's nodes
+};
+// Every L2 tile of the fixture, its junctions built WITH clustering. A record is counted in the tile of its owner node.
+// Every build of the same record (owner, decline kind) in another tile must be identical after normalising entry
+// indices; every junction node of a built tile must be covered by a record of its owner's tile.
+ClusterCensus cluster_census_of(const std::string& pbf, const JunctionBuildOptions& options = {}) {
+    const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + pbf);
+    const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
+    const auto builder = RoadReferenceBuilder::make(*world); REQUIRE(builder);
+    const auto home_of = [&](std::int64_t id) {
+        const auto n = std::lower_bound(world->nodes.begin(), world->nodes.end(), id, [](const auto& x, std::int64_t v) { return x.osm_id < v; });
+        return *tile_key_at(g2m_test::kZone32N, 2, static_cast<double>(n->position.x) / 1000.0, static_cast<double>(n->position.y) / 1000.0);
+    };
+    std::set<TileKey> keys;
+    for (const auto& n : world->nodes) {
+        const auto k = tile_key_at(g2m_test::kZone32N, 2, static_cast<double>(n.position.x) / 1000.0, static_cast<double>(n.position.y) / 1000.0);
+        if (k) keys.insert(*k);
+    }
+    ClusterCensus c;
+    std::map<std::pair<std::int64_t, bool>, std::vector<RoadJunction>> by_record;
+    std::set<std::int64_t> covered, built_junction_nodes;
+    for (const auto& key : keys) {
+        const auto probe = select_road_graph_tile(*world, key);
+        if (!probe || probe->owned_edges.empty()) continue;
+        auto g = g2m_test::geometry_in_tile(*world, key); REQUIRE(g);
+        ++c.tiles;
+        JunctionBuildStats stats;
+        auto js = build_road_junctions(*g, *builder, builtin_road_rules_de(), &stats, options); REQUIRE(js);
+        c.skipped_unresolved += stats.skipped_unresolved;
+        for (const auto& n : g->source.graph.nodes) if (builder->degree(n.osm_id) >= 3 && home_of(n.osm_id) == key) built_junction_nodes.insert(n.osm_id);
+        for (auto& j : *js) {
+            const bool too_large = j.decline == JunctionDecline::ClusterTooLarge;
+            // Normalise per-tile entry indices to (way id, start_ref) identities.
+            double min_gap = 360, min_len = 1e9;
+            std::vector<double> angs;
+            for (auto& a : j.approaches) {
+                const auto& e = g->entries[a.entry_index];
+                if (a.status == JunctionApproachStatus::Used && e.profile) {
+                    const double L = e.profile->reference.length_m; min_len = std::min(min_len, L);
+                    const auto p0 = lateral_point(e.profile->reference, a.at_end ? L : 0.0, 0.0);
+                    const auto p1 = lateral_point(e.profile->reference, a.at_end ? std::max(L - 5.0, 0.0) : std::min(5.0, L), 0.0);
+                    if (p0 && p1) angs.push_back(std::atan2(p1->y - p0->y, p1->x - p0->x) * 180.0 / kPi);
+                }
+                a.entry_index = static_cast<std::size_t>(e.way_id * 1000 + e.stretch.start_ref);
+            }
+            for (auto& x : j.absorbed) { const auto& e = g->entries[x]; x = static_cast<std::size_t>(e.way_id * 1000 + e.stretch.start_ref); }
+            std::sort(j.absorbed.begin(), j.absorbed.end());
+            by_record[{j.nodes.front(), too_large}].push_back(j);
+            if (home_of(j.nodes.front()) != key) continue;
+            ++c.owned_records;
+            ++c.declines[static_cast<std::size_t>(j.decline)];
+            if (!too_large) {
+                ++c.sizes[j.nodes.size()]; for (const auto n : j.nodes) covered.insert(n); c.absorbed += j.absorbed.size();
+                std::int64_t x0 = INT64_MAX, x1 = INT64_MIN, y0 = INT64_MAX, y1 = INT64_MIN;
+                for (const auto n : j.nodes) {
+                    const auto p = std::lower_bound(world->nodes.begin(), world->nodes.end(), n, [](const auto& x, std::int64_t v) { return x.osm_id < v; })->position;
+                    x0 = std::min(x0, p.x); x1 = std::max(x1, p.x); y0 = std::min(y0, p.y); y1 = std::max(y1, p.y);
+                }
+                c.max_extent_m = std::max(c.max_extent_m, static_cast<double>(std::max(x1 - x0, y1 - y0)) / 1000.0);
+            }
+            if (j.decline != JunctionDecline::None) continue;
+            ++c.ring_records;
+            for (const auto& ring : j.rings) if (!junction_ring_valid(ring)) ++c.invalid_rings;
+            double worst = 0; const auto bad = nested_violations(j, &worst);
+            c.nested_bad += bad; if (bad) ++c.nested_junctions; c.nested_worst_mm = std::max(c.nested_worst_mm, worst);
+            if (has(j, JunctionFlags::HullFallback)) {
+                ++c.hulls;
+                std::sort(angs.begin(), angs.end());
+                for (std::size_t i = 0; i < angs.size(); ++i) min_gap = std::min(min_gap, (i + 1 < angs.size() ? angs[i + 1] : angs[0] + 360.0) - angs[i]);
+                if (min_gap < 25.0) ++c.hull_shallow; else if (min_len < 12.0) ++c.hull_short; else ++c.hull_other;
+            }
+        }
+        c.face_fallbacks += stats.face_fallbacks;
+    }
+    for (const auto n : built_junction_nodes) if (!covered.count(n)) ++c.uncovered;
+    for (const auto& [k, list] : by_record) {
+        if (list.size() < 2) continue;
+        ++c.multi_tile_records;
+        for (std::size_t i = 1; i < list.size(); ++i) if (!(list[i] == list[0])) { ++c.multi_tile_mismatch; break; }
+    }
+    return c;
+}
+void print_cluster_census(const char* name, const ClusterCensus& c) {
+    std::printf("[cluster census] %s: tiles %zu, records counted in the owner's tile %zu (ring records %zu), records by node count:", name, c.tiles, c.owned_records, c.ring_records);
+    for (const auto& [n, k] : c.sizes) std::printf(" %zu:%zu", n, k);
+    std::printf(", largest cluster extent %.1f m, absorbed stretches %zu\n  declines: none %zu, cluster too large %zu, reach %zu, single approach %zu, degenerate %zu, underground %zu\n", c.max_extent_m, c.absorbed,
+        c.declines[0], c.declines[1], c.declines[2], c.declines[3], c.declines[4], c.declines[5]);
+    std::printf("  hull fallbacks %zu of %zu (shallow pair < 25 deg %zu, an approach shorter than 12 m %zu, other %zu), face-walk fallbacks over all tiles %zu\n", c.hulls,
+        c.ring_records, c.hull_shallow, c.hull_short, c.hull_other, c.face_fallbacks);
+    std::printf("  invalid rings %zu, nesting violations %zu in %zu records (worst %.0f mm), unresolved skips over all tiles %zu, junction nodes not covered by their tile %zu, records built in >= 2 tiles %zu (mismatching %zu)\n",
+        c.invalid_rings, c.nested_bad, c.nested_junctions, c.nested_worst_mm, c.skipped_unresolved, c.uncovered, c.multi_tile_records, c.multi_tile_mismatch);
+}
+}
+
+TEST_CASE("Fixtures with clustering: valid rings, every junction node covered in its own tile, every record identical in every tile that builds it", "[layer][junction][roads]") {
+    for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
+        INFO(pbf);
+        const auto c = cluster_census_of(pbf);
+        print_cluster_census(pbf, c);
+        CHECK(c.owned_records > 50);
+        CHECK(c.sizes.size() > 1);            // some clusters exist
+        CHECK(c.invalid_rings == 0);
+        CHECK(c.face_fallbacks == 0);
+        CHECK(c.uncovered == 0);
+        CHECK(c.multi_tile_records > 50);
+        CHECK(c.multi_tile_mismatch == 0);
+    }
+}
+
+TEST_CASE("Negative control: a possible link to an incomplete node treated as absent breaks tile invariance", "[layer][junction][roads]") {
+    // The same census with the sabotage: a tile that sees a cluster member only partially builds a different record
+    // than the tile that sees the whole cluster. This shows the identity check can fail.
+    JunctionBuildOptions sabotage; sabotage.unknown_links_are_absent = true;
+    std::size_t mismatches = 0;
+    for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) mismatches += cluster_census_of(pbf, sabotage).multi_tile_mismatch;
+    std::printf("[cluster census, sabotage unknown links absent] records mismatching between tiles: %zu\n", mismatches);
+    CHECK(mismatches > 0);
+}
+
+TEST_CASE("Diag: junction pairs joined over two stretches (a degree-2 way join) that the single-entry link rule cannot cluster", "[.][diag][junction]") {
+    // D20: a link needs ONE stretch between the two junction nodes. Two ways joined end to end at a degree-2 node
+    // make the connection two stretches; this counts the pairs whose capped single-node trims would cover both.
+    for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
+        const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + pbf);
+        const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
+        const auto builder = RoadReferenceBuilder::make(*world); REQUIRE(builder);
+        std::set<TileKey> keys;
+        for (const auto& n : world->nodes) { const auto k = tile_key_at(g2m_test::kZone32N, 2, n.position.x / 1000.0, n.position.y / 1000.0); if (k) keys.insert(*k); }
+        std::set<std::pair<std::int64_t, std::int64_t>> chained, direct;
+        for (const auto& key : keys) {
+            const auto probe = select_road_graph_tile(*world, key);
+            if (!probe || probe->owned_edges.empty()) continue;
+            auto g = g2m_test::geometry_in_tile(*world, key); REQUIRE(g);
+            auto js = build_node_junctions(*g, *builder); REQUIRE(js);
+            std::map<std::int64_t, const RoadJunction*> by_node;
+            for (const auto& j : *js) by_node[j.nodes.front()] = &j;
+            const auto& ways = g->source.graph.ways;
+            const auto way_of = [&](std::int64_t id) { return &*std::lower_bound(ways.begin(), ways.end(), id, [](const auto& w, std::int64_t v) { return w.osm_id < v; }); };
+            const auto ends = [&](std::size_t entry) { const auto& e = g->entries[entry]; const auto* w = way_of(e.way_id); return std::make_pair(w->node_ids[e.stretch.start_ref], w->node_ids[e.stretch.end_ref]); };
+            const auto trim_at = [&](const RoadJunction& j, std::size_t entry, bool at_end) { for (const auto& a : j.approaches) if (a.entry_index == entry && a.at_end == at_end) return std::min(a.trim_m, 30.0); return 0.0; };
+            for (const auto& [x, jx] : by_node) {
+                for (const auto& a : jx->approaches) {
+                    if (a.status != JunctionApproachStatus::Used) continue;
+                    const auto [s0, s1] = ends(a.entry_index);
+                    const std::int64_t y = a.at_end ? s0 : s1;
+                    const double l1 = g->entries[a.entry_index].profile->reference.length_m;
+                    if (builder->degree(y) >= 3) { if (by_node.count(y) && trim_at(*jx, a.entry_index, a.at_end) + trim_at(*by_node[y], a.entry_index, !a.at_end) >= l1) direct.insert({std::min(x, y), std::max(x, y)}); continue; }
+                    if (builder->degree(y) != 2) continue;
+                    for (std::size_t k = 0; k < g->entries.size(); ++k) {
+                        if (k == a.entry_index || !g->entries[k].profile) continue;
+                        const auto [t0, t1] = ends(k);
+                        if (t0 != y && t1 != y) continue;
+                        const std::int64_t z = t0 == y ? t1 : t0;
+                        if (z == x || builder->degree(z) < 3 || !by_node.count(z)) continue;
+                        const double l2 = g->entries[k].profile->reference.length_m;
+                        if (trim_at(*jx, a.entry_index, a.at_end) + trim_at(*by_node[z], k, t1 == z) >= l1 + l2) chained.insert({std::min(x, z), std::max(x, z)});
+                    }
+                }
+            }
+        }
+        std::printf("[chained links] %s: junction pairs linked over one stretch %zu, pairs whose trims cover a two-stretch connection %zu\n", pbf, direct.size(), chained.size());
     }
 }
