@@ -41,6 +41,7 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/road_junction.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_furniture.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_features.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/terrain_carve.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/derive_road_graph.cpp
   CACHE INTERNAL "g2m_layers sources (also compiled into the fuzz-instrumented copy, tests/fuzz_formats)"
 )
@@ -71,5 +72,5 @@ target_include_directories(g2m_layers PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_include_directories(g2m_layers PRIVATE ${G2M_GENERATED_INCLUDE_DIR})
 target_link_libraries(g2m_layers
   PUBLIC  g2m_core
-  PRIVATE g2m_dep_zstd g2m_dep_json g2m_warnings g2m_options
+  PRIVATE g2m_dep_zstd g2m_dep_json g2m_warnings g2m_options Threads::Threads
 )

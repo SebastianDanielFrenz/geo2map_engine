@@ -52,6 +52,7 @@ add_executable(g2m_layer_tests
   test_region.cpp
   test_derive_terrain.cpp
   test_terrain_pyramid.cpp
+  test_terrain_carve.cpp
   alloc_counter.cpp
 )
 target_link_libraries(g2m_layer_tests PRIVATE

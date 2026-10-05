@@ -21,7 +21,8 @@ flowchart TD
   JUNC["junctions: offset-intersect-trim rings, trims, trim-overlap clusters, Shepard junction heights and raised tables (P2 slices 3-5); rings and trims served in roads.geom section 5, heights a library function for the carver"]
   FURN["furniture: crossings, stop and give-way lines, signals; with declines (P2 slice 7), served in roads.geom section 6"]
   GEOM7["roads.geom encoding 7: sections 5 junctions (owner tile only), 6 furniture, 7 provenance - implemented, P2 slice 8"]
-  CARVE["g2m.terrain.carved and g2m.terrain.class from one CarveModel - planned, P2 slices 9-10 = G3-D"]
+  CARVE["g2m.terrain.carved L0-L6 from a CarveModel - implemented, P2 slice 9 (opt-in, no consumer yet)"]
+  CLASSL["g2m.terrain.class from the same CarveModel - planned, P2 slice 10"]
   RIB["ribbons, markings, bridge bodies - planned, G3-E"]
   OSM9 --> GRAPH
   ATTR --> GRAPH
@@ -49,16 +50,17 @@ flowchart TD
   JUNC --> GEOM7
   FURN --> GEOM7
   GEOM --> GEOM7
-  GEOM7 -.->|"L2 tiles within 192 m"| CARVE
-  API -.-> CARVE
+  GEOM7 -->|"L2 tiles within 192 m"| CARVE
+  API --> CARVE
+  CARVE -.-> CLASSL
   API -.-> RIB
   GEOM7 -.-> RIB
   classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
   classDef part fill:#fff3cd,stroke:#b58900,stroke-dasharray:4 3,color:#000;
   classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
-  class OSM9,ATTR,GRAPH,REF,DEMDEP,GEOM,RULES,XS,API,FEAT,COMPL,JUNC,FURN,GEOM7 done;
+  class OSM9,ATTR,GRAPH,REF,DEMDEP,GEOM,RULES,XS,API,FEAT,COMPL,JUNC,FURN,GEOM7,CARVE done;
   class PROF part;
-  class CARVE,RIB plan;
+  class CLASSL,RIB plan;
 ```
 
 ## `g2m.roads.graph` (G3 slices A and B: implemented)
@@ -85,9 +87,9 @@ flowchart TD
 - Home-region probe (`tools/road_probe`, 2026-10-02, single run): 478 stretches in 344 ways all fit horizontally with 47 flagged curvature exceptions; vertical profiles succeed for 339; 19 tunnels unsupported, 76 curvature-bound failures, 1 over class grade, 43 solver non-convergence. Acceptance of complete profiles is **not** reached.
 - Tests: `tests/layer/test_road_geom.cpp`, `test_road_geom_xs.cpp` (encoding 6 and 7 round trips, one rejection test per validation rule of design 7.2, encoding-5 compatibility, config hash and release id), `test_road_geom_enc7.cpp` (T8: one rejection per junction/furniture/provenance rule of P2 design 9.2 with its own malformed body; T7: every junction owned exactly once and equal to every other tile's build, entry furniture identical across tiles, with the tile-graph negative control), `test_road_cross_section.cpp`, `test_road_joins.cpp`, `test_road_features.cpp`, `test_road_api.cpp` (footprint, lane queries, zero allocations, painted envelope against the carve footprint on a 0.25 m lattice and over real Hoechst A 66 stretches, edge error at tapers, F8 lane order), `test_road_reference.cpp`, `test_road_profile.cpp`, `test_vertical_profile.cpp`, `test_road_dem_*.cpp`; probe in `tools/road_probe/README.md`.
 
-## Junctions, furniture (served) and carving (planned) - street fidelity P2 = G3-D
+## Junctions, furniture (served) and carving (terrain.carved served, terrain.class planned) - street fidelity P2 = G3-D
 
-Design: [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) (12 slices, section 14). Status: slices 1-8 (rules data, `road_surface_height_m`, per-node junction rings and trims, clusters, junction heights and raised tables, the profile completion tier, junction furniture, roads.geom encoding 7) implemented, slices 9-12 (carving, consumer switch) planned. Slice 8 serves the junction rings and trims, the furniture and the completion tier with its provenance in roads.geom encoding 7 (`build_road_geom_tile` stores only the junctions whose owner node lies in the tile; validation of design 9.2 in `encode_road_geom`/`decode_road_geom`); junction heights stay a library function for the carver. Implemented before slice 8: Implemented so far: the furniture builder `build_road_furniture` (`road_furniture.h`: crossings with pattern, length and flags, stop and give-way lines spanning exactly the lanes of the controlled direction, signal posts at the travel-right edge + 0.5 m, one record per source node and item with its own decline reason, entry furniture owned by one entry chosen from the context graph so tiles agree, `furniture_quad` and `signal_post`; library functions, no served bytes); the completion tier `complete_road_profiles` (`road_completion.h`: opt-in retry, bridge and ground re-fits of strict declines, every added profile flagged by `ProfileProvenance`, anchors a pure function of the node so tiles agree; tile bytes unchanged until encoding 7); `make_junction_surface` / `junction_height_m` (Shepard blend of the approach surfaces by the product form of inverse squared distances to the trim segments, exact on every trim line, plus table and hump ramps over the carriageway and the suppression of approach features inside a ring: `adjust_features_for_junctions`; library functions, no served bytes); `build_node_junction` and `build_road_junctions` (`road_junction.h`, offset-intersect-trim rings with corner caps, trims, bow-tie repair, convex-hull fallback on all three layers, declines; trim-overlap clusters with one ring around the cluster by a boundary walk, `ClusterTooLarge` records, tile-invariant discovery that skips what a tile cannot resolve; library functions, no stage or served bytes yet); `road_surface_height_m` (`road_surface.h`, the canonical road height of design 4.1, a pure library function over a `RoadGeomTile` entry); the `junction` and `furniture` blocks of `de.json` (loader only, `JunctionRules`/`FurnitureRules`), `data/carve/carve_default.json` (`carve_params.h`) and `data/classifiers/esa_worldcover_v200.json` (`landcover_classifier.h`); the surface function is a library function only.
+Design: [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) (12 slices, section 14). Status: slices 1-9 (rules data, `road_surface_height_m`, per-node junction rings and trims, clusters, junction heights and raised tables, the profile completion tier, junction furniture, roads.geom encoding 7, the `g2m.terrain.carved` layer) implemented, slices 10-12 (`g2m.terrain.class`, consumer switch) planned. Slice 8 serves the junction rings and trims, the furniture and the completion tier with its provenance in roads.geom encoding 7 (`build_road_geom_tile` stores only the junctions whose owner node lies in the tile; validation of design 9.2 in `encode_road_geom`/`decode_road_geom`); junction heights stay a library function for the carver. Implemented before slice 8: Implemented so far: the furniture builder `build_road_furniture` (`road_furniture.h`: crossings with pattern, length and flags, stop and give-way lines spanning exactly the lanes of the controlled direction, signal posts at the travel-right edge + 0.5 m, one record per source node and item with its own decline reason, entry furniture owned by one entry chosen from the context graph so tiles agree, `furniture_quad` and `signal_post`; library functions, no served bytes); the completion tier `complete_road_profiles` (`road_completion.h`: opt-in retry, bridge and ground re-fits of strict declines, every added profile flagged by `ProfileProvenance`, anchors a pure function of the node so tiles agree; tile bytes unchanged until encoding 7); `make_junction_surface` / `junction_height_m` (Shepard blend of the approach surfaces by the product form of inverse squared distances to the trim segments, exact on every trim line, plus table and hump ramps over the carriageway and the suppression of approach features inside a ring: `adjust_features_for_junctions`; library functions, no served bytes); `build_node_junction` and `build_road_junctions` (`road_junction.h`, offset-intersect-trim rings with corner caps, trims, bow-tie repair, convex-hull fallback on all three layers, declines; trim-overlap clusters with one ring around the cluster by a boundary walk, `ClusterTooLarge` records, tile-invariant discovery that skips what a tile cannot resolve; library functions, no stage or served bytes yet); `road_surface_height_m` (`road_surface.h`, the canonical road height of design 4.1, a pure library function over a `RoadGeomTile` entry); the `junction` and `furniture` blocks of `de.json` (loader only, `JunctionRules`/`FurnitureRules`), `data/carve/carve_default.json` (`carve_params.h`) and `data/classifiers/esa_worldcover_v200.json` (`landcover_classifier.h`); the surface function is a library function only.
 
 - **Junctions:**
   - nodes of degree ≥ 3 in the merged context graph;
@@ -102,8 +104,8 @@ Design: [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junctio
   - sections 1-4 keep their format;
   - new rule blocks `junction` and `furniture` in `de.json`.
 - **Carving** (new layers; `g2m.terrain.height` stays the bare default):
-  - `g2m.terrain.carved` L0-L6: the game's smoothing ported as an integer kernel, then road cores, junctions, blends and the deck clearance clamp; L1-L6 are the mean-of-4 of the carved L0;
-  - `g2m.terrain.class` L0-L6: node-registered 257 x 257 at integer metres, the physics cell centres; land class, surface, role and rank from the same ownership function.
+  - `g2m.terrain.carved` L0-L6 (implemented, slice 9; [format](../formats/terrain_carved.md), `src/layer/terrain_carve.cpp`, opt-in through `BuiltinTerrainDerivers::ordered(..., include_carved)`, no consumer yet): the game's smoothing ported as an integer kernel, then road cores, junctions, blends and the deck clearance clamp; L1-L6 are the mean-of-4 of the carved L0. Bridges, tunnels and `OnStructure` junctions are not carved. Tests `tests/layer/test_terrain_carve.cpp`, golden `g3d_golden.txt`;
+  - `g2m.terrain.class` L0-L6 (planned, slice 10): node-registered 257 x 257 at integer metres, the physics cell centres; land class, surface, role and rank from the same ownership function.
   - Inputs of a carved L0 tile: its 3 x 3 `elev.base` neighbourhood and every `roads.geom` tile within 192 m.
   - Carving parameters live in `data/carve/carve_default.json`, so re-tuning them does not re-derive `roads.geom`.
 - **Consumer switch:** racing_game then deletes its smoothing, `RoadSurfacePatch` carving, deck clearance cut, profile completion and src.osm road raster, with no fallback ([design section 10](../street_fidelity/p2_junction_design.md#10-consumer-switch-what-racing_game-needs-and-deletes)).
@@ -115,4 +117,4 @@ Design: [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junctio
 
 ## What is still open
 
-G3-C complete-profile acceptance; G3-D junction surfaces and server-side carving (designed as street fidelity P2, [design](../street_fidelity/p2_junction_design.md); slices 1-8 implemented, junctions, furniture and completion served in roads.geom encoding 7 since slice 8); G3-E ribbons, markings, bridge bodies; G3-F 20-junction route acceptance. Street fidelity P1 (lane-aware cross-sections, [design](../street_fidelity/p1_cross_section_design.md)) slices 1-7 are implemented; P3 markings follow P2. See [README section 6](README.md#6-roadmap) and [open questions](README.md#9-open-questions-and-contradictions).
+G3-C complete-profile acceptance; G3-D junction surfaces and server-side carving (designed as street fidelity P2, [design](../street_fidelity/p2_junction_design.md); slices 1-9 implemented, junctions, furniture and completion served in roads.geom encoding 7 since slice 8, carved terrain served as `g2m.terrain.carved` since slice 9; `terrain.class` and the consumer switch open); G3-E ribbons, markings, bridge bodies; G3-F 20-junction route acceptance. Street fidelity P1 (lane-aware cross-sections, [design](../street_fidelity/p1_cross_section_design.md)) slices 1-7 are implemented; P3 markings follow P2. See [README section 6](README.md#6-roadmap) and [open questions](README.md#9-open-questions-and-contradictions).

@@ -62,7 +62,7 @@ foreach(_t container elev landcover osm pack manifest path region roadgraph road
   target_compile_options(fuzz_${_t} PRIVATE -fsanitize=fuzzer-no-link)
   target_link_options(fuzz_${_t} PRIVATE -fsanitize=fuzzer)
   target_include_directories(fuzz_${_t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(fuzz_${_t} PRIVATE g2m_core g2m_dep_zstd g2m_warnings g2m_options)
+  target_link_libraries(fuzz_${_t} PRIVATE g2m_core g2m_dep_zstd g2m_warnings g2m_options Threads::Threads)
   # -seed fixed so a failure reproduces; the work corpus is cleared by the
   # fixture; crash artifacts land next to it.
   add_test(NAME fuzz_${_t}

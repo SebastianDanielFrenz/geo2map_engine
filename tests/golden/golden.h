@@ -74,6 +74,11 @@ std::vector<Entry> compute_g3xs();
 // testdata/golden/g3j_golden.txt.
 std::vector<Entry> compute_g3j();
 
+// G3d (golden_g3d.cpp, street fidelity P2 slice 9): the carved terrain g2m.terrain.carved at level 0 over the same two
+// fixtures on carve_fixture.h's tilted bumpy rough DEM - four tiles' heights and owner counters, 1 == 4 workers;
+// testdata/golden/g3d_golden.txt.
+std::vector<Entry> compute_g3d();
+
 // "name count hash\n" per entry, the golden file's line format.
 std::string format(const std::vector<Entry>& entries);
 

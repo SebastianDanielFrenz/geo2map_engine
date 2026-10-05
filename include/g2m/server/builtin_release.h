@@ -8,6 +8,7 @@
 #include "g2m/layer/derive_terrain.h"
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_geom_tile.h"
+#include "g2m/layer/terrain_carve.h"
 #include "g2m/server/server.h"
 
 #include <string>
@@ -31,11 +32,15 @@ struct BuiltinTerrainDerivers {
 
     RoadGraphDeriver roads;
     RoadGeomDeriver geometry;
-    // Explicit opt-in preserves existing terrain-only release identities.
-    std::vector<const IDeriver*> ordered(bool include_roads = false, bool include_geometry = false) const {
+    // Street fidelity P2 slice 9: g2m.terrain.carved (reads elev.base and roads.geom; coverage follows elev.base).
+    TerrainCarvedDeriver carved;
+    // Explicit opt-in preserves existing terrain-only release identities. The carved layer implies both road layers
+    // (one release, one geometry: design 6.1).
+    std::vector<const IDeriver*> ordered(bool include_roads = false, bool include_geometry = false, bool include_carved = false) const {
         std::vector<const IDeriver*> result{&elev, &height};
-        if (include_roads || include_geometry) result.push_back(&roads);
-        if (include_geometry) result.push_back(&geometry);
+        if (include_roads || include_geometry || include_carved) result.push_back(&roads);
+        if (include_geometry || include_carved) result.push_back(&geometry);
+        if (include_carved) result.push_back(&carved);
         return result;
     }
 };
@@ -46,6 +51,7 @@ struct BuiltinTerrainDerivers {
 // LayerRegistry::builtin()) - set them on the returned struct before
 // calling make_local_release() if the caller needs otherwise.
 LocalReleaseParams builtin_local_release_params(std::string scope, const BuiltinTerrainDerivers& derivers,
-                                                std::vector<ReleaseSource> sources, bool include_roads = false, bool include_geometry = false);
+                                                std::vector<ReleaseSource> sources, bool include_roads = false, bool include_geometry = false,
+                                                bool include_carved = false);
 
 } // namespace g2m

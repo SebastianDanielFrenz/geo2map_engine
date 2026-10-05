@@ -774,6 +774,13 @@ Candidates for a cell X (from its block bucket):
   game carving tunnel floors, which the server never does.
 - **`OnStructure` junctions** are not carved. They are served for G3-E.
 
+**As implemented (slice 9):** `include/g2m/layer/terrain_carve.h` / `src/layer/terrain_carve.cpp`: `CarveTerrain` (smoothing,
+6.2 step 1), `CarveModel` (build and `evaluate`, 6.2 step 2 - 6.4), `carve_terrain_tile` (rows split over threads, identical for
+every worker count), `carve_road_geom_keys`, `TerrainCarvedDeriver` (config text `g2m.terrain.carved/1 smooth+carve L0 roads.geom
+enc=7 radius=192 carve=<sha256 of carve_default.json>; L1-L6 mean-of-4 half-even`). Deviations and readings: D36-D41. Wiring of
+`BuiltinTerrainDerivers` and `bake` is pulled forward from slice 11 (D39). Tests and measured values: section 11, "Slice 9 as
+implemented", and the record after D41.
+
 ### 6.5 terrain.class derivation
 
 **Sample lattice.**
@@ -1242,6 +1249,7 @@ Each test is listed with its negative control or sabotage, which must make it fa
 | T11 as implemented (slice 7) | post at the travel-right edge + 0.5 m (left edge - 0.5 m for the left post), facing opposite to the travel direction (dot -1 to 1e-9); left post only on a one-way with >= 3 lanes (3 lanes: 2 records, 2 lanes: 1, two-way 6 lanes: none) | post offset 0: 3 test cases fail (10 checks) |
 | Slice 7 tile invariance | every owner (entry or junction) emitted by two or more tiles has identical records (828 / 853 repeated owners on the fixtures, 0 differ) | node degrees and incident ways read from the tile graph instead of the context: 2 / 6 owners differ |
 | T19 zero allocation / workers | carve with 1 and 10 workers bit-identical; CarveModel::evaluate allocation-free | — |
+| Slice 9 as implemented | `test_terrain_carve.cpp` over the four busiest fixture L0 tiles (A 1856/21718, 1852/21718; B 1822/21685, 1820/21684), flat DEM and the libm-free tilted bumpy rough DEM of `carve_fixture.h`. **T12**: owner switches between adjacent cell centres bisected to 1e-10 m: core↔blend ≤ 0.12 mm, blend↔terrain 0, junction core↔approach core on the trim line ≤ 5.04 mm (bound 1 cm), trim-line samples (16 per used approach, 336 points) ≤ 2.02 mm (bound 1/256 m), every cell = half-even quantisation of the model; reported only (D41): blend↔blend up to 3.44 m, core↔core up to 2.20 m, ring overlap up to 0.296 m. **T13**: 1507 stations, LS crossfall error p50 0.00012, p95 0.00070, p99 0.00108, max 0.00155 (bound 0.002; patch ±2.5 m along the road, ≥ 3 m across, regressors grade + vertical curvature + crown). **T14**: 8851 core/blend cells × 100 seeded candidate orders, 0 differ. **T15**: synthetic bridge over a valley and a lower road: 1696 footprint cells, 542 lowered, 0 above the limit, 0 changed outside the footprint, 2048 lower-road cells unchanged, 0 clearance violations. **T17**: served L0 = `carve_terrain_tile`, header offset applied once, L1 = mean-of-4 of the served L0, L1 ≠ bare pyramid; absent centre = NotFound, roads.geom in another datum rejected. **T19**: 1 = 10 workers, evaluate 0 allocations. **Tile invariance**: 3 seams (an L0 seam, an L0 seam that is also an L2 seam, an L2 seam with roads crossing it), flat and tilted, 2048 cells each: 0 difference. **Smoothing parity** against the game's double smoothing: max 0.80, p99 0.65 height units (1/256 m), 0 NoData mismatches. **Served path**: server and four-worker bake give the same L0 and L1 containers (10 inputs per L0 tile) | T12: blends toward the raw DEM: blend↔terrain 7.03 cm; T13: single-cell slopes 0.102 (cannot meet 0.2 %); T14: first-come ownership: 354 cells differ; T15: clamp off: 542 cells above the limit; T17: no centre, wrong datum, short input list rejected; T19: an allocation in the counted scope is seen; invariance: centre-only DEM differs (0.08-1.05 m), own-L2-tile roads only differs (0.224 m on the seam with crossing roads); smoothing strength 100: 42.9 units |
 | Goldens | `g3xs` re-recorded (encoding 7 bodies); new `g3j` (junction + furniture sections of both fixtures), `g3d` (carved L0 + class tiles over 4 fixture L0 tiles on the synthetic DEM); Windows = Linux | — |
 
 ---
@@ -1896,6 +1904,110 @@ defects fixed in the junction pass and the crossing rule.**
   inputs; `test_server.cpp` checks the server's stage loop (1, 2 and 4 stages, stop at the first stage that adds nothing).
   D29's fence test now builds on the stage-1 set explicitly (D35 would add DEM around its bridge and hide the control's missing
   cell; the fence is a property of the stage-1 read).
+
+### Decisions made while implementing (slice 9)
+
+**D36. Readings of 6.2-6.4 where the text left a choice.**
+- **Smoothing rounding.** 6.2 writes `h + (35·(s − h) + 50)/100, rounded half-even`; the `+ 50` is a half-up rounding, which
+  contradicts "half-even". Implemented: `h + round_half_even(strength·(s − h) / 100)` exactly on int64 (`div_half_even`), and
+  each axis pass `round_half_even(Σ k·h / Σ k)` over the taps that are not NoData. A tap row whose own centre cell is NoData gives
+  no x value and is skipped by the y pass (the game's first pass yields NaN there and its second pass skips the NaN), so the
+  NoData pattern matches the game exactly (0 mismatches measured). Alternative: the literal `+ 50` then floor - half-up, the only
+  rounding in the layer that would not be half-even (D13); rejected.
+- **Junction blend widths along the ring.** 6.3 says corner vertices take the mean of their two trims' values. Implemented: one
+  knot per used approach and side, at the ring point nearest the approach's outer edge on its trim line, whose value is the
+  approach's own blend width at the trim station (the linear interpolation between the two stations of the approach's station set
+  that bracket it, computed from the station set, not from the tile's culled line, so every tile gets the same knot); between
+  knots the width is linear in arc length, cyclic. Corners therefore take the arc-weighted value, not the mean. Reason: the knot
+  on the extension of a trim line must equal the value the approach blend uses there, or the two blends step on that line; a
+  corner mean adds a kink in the width for no gain. Alternative (the mean at corner vertices): continuous too, but a second rule
+  for the same quantity; rejected.
+- **Deck ramp distance.** 6.4 writes "e = the distance inside the footprint edge". Implemented: `e = min(s, L − s)`, the station
+  distance from the nearer bridge end, laterally a hard footprint (paved + 1 m). The ramp lets the clearance meet the ground at
+  the abutments, where the deck itself meets the road; a lateral ramp would leave terrain under the deck edges up to the deck top.
+  Alternative (lateral distance): rejected for that reason; T15 tests the implemented rule.
+
+**D37. The smoothed DEM outside the covered region, and what the model builds.**
+- **Decision.** `CarveTerrain` tabulates the smoothed DEM over the tile grown by 32 cells (`kCarveMarginCells`) and computes any
+  other cell on demand with the same function. A junction ring's blend knot reads the DEM at the trim point of each approach, which
+  can lie up to ~190 m from the tile (5.3's own radius), outside the 3 x 3 window; there the blend width falls back to `b_class`
+  and the knot is counted (`CarveStats::junction_knots_outside_window`), because that value is not tile-invariant. Measured: 0 on
+  both fixtures, flat and tilted. Approach stations obey 5.3's bound (≤ 15 m + 2 cells outside the tile) and never fall back.
+- **Culling.** Approach stations are built only over reference segments within 64 m of the covered region, and junction surfaces
+  only for junctions whose ring plus blend can reach it (`make_junction_surface` is the expensive call). Both only drop work
+  that cannot touch a cell; the tile-invariance test covers them.
+- **Alternatives.** (a) A 5 x 5 DEM window: knots would always read real DEM, at 25 instead of 9 inputs per tile, for a case
+  that does not occur on the fixtures. (b) Store the knot widths in roads.geom: changes the served encoding for a carver detail.
+  Both rejected while the counter stays 0; slice 12 reports it for the home region.
+
+**D38. Ends without a junction blend round the end (end caps).** 6.3 allows an approach blend only "with s inside the trimmed
+range", which leaves a cliff at a dead end or an untrimmed end. Implemented: beyond a global end the blend continues round the
+end as a cap (the distance to the end line, the width interpolated across the road between its two sides). Since D40 this is a
+property of the band rectangles, not separate code. Alternative (no cap): a step of up to the cut depth at every dead end;
+rejected.
+
+**D39. Wiring pulled forward from slice 11; output datum of L1-L6.**
+- `BuiltinTerrainDerivers` gains `carved`; `ordered(include_roads, include_geometry, include_carved)` appends it after the road
+  derivers, and `bake` with `--layers g2m.terrain.carved` adds both road layers (6.1: one release, one geometry). T17 and the
+  served-path test need a deriver the server can run; slice 11 keeps the physics, render and bridge parts. `terrain.class` does
+  not exist yet, so naming the carved layer does not add it (6.1's "naming either adds both" follows in slice 10).
+- Release ids: a release changes only when it names the carved layer; terrain-only, roads.graph and roads.geom releases keep
+  their ids (the test checks a carved release differs from the same release with roads.geom only).
+- L1-L6 are labelled DHHN2016, as `g2m.terrain.height`'s pyramid is (the children carry no datum the pyramid code reads). L0
+  takes the DEM's datum and rejects a roads.geom tile in another one.
+
+**D40. Blends are per segment band rectangle and per ring edge; a core needs an unclamped foot.**
+- **Problem.** 6.3's approach blend uses the nearest projection: d = |t| − outer at the projected s, width and edge height at
+  that station. Inside a bend the nearest segment switches on the medial axis, where the two stations' widths and edge heights
+  differ: a step at w > 0 (measured up to several cm between blend and terrain before the fix). Outside a bend the projection
+  clamps to a vertex, so the core (radial distance) and the rectangular blend next to it disagreed by up to 1 cm. The trim cut
+  of the nearest-projection blend produced a third step.
+- **Decision.** Every segment of a line in the cell's bucket offers the blend of its own band rectangle: the segment's part of
+  the carved range (between the trims, the global ends where there are none) times [outer_right, outer_left]; d is the distance to
+  that rectangle, the width is interpolated along the segment and, round an end, across the road between its two sides; the edge
+  height z_b is the core height at the clamped point. Each junction ring edge likewise offers its own blend from its clamped
+  nearest point, width `ring_blend_width` at that arc position. The largest weight wins, ties to the lowest z (6.3's own rule):
+  the maximum of functions each continuous in the position is continuous. A cell is an approach core only where its foot on the
+  nearest segment is not clamped to a vertex; the wedges beyond the vertices on the outer side of a bend belong to the blends,
+  whose rectangles meet the core there exactly.
+- **Effect.** T12 on all 8 tile/DEM combinations: blend↔terrain 0, core↔blend ≤ 0.12 mm. Cost: every segment of a line in the
+  bucket within reach is evaluated (part of the derive cost below).
+- **Alternatives.** (a) The nearest projection of 6.3: steps of cm, rejected. (b) Smooth the station switch across the medial
+  axis: approximate, and the cliff at the trim cut stays. (c) The distance to the polygonal outer boundary of the whole core
+  (offset polygon, union with the caps): exact too, but needs polygon offsetting and boolean union per line; the rectangle
+  maximum gives the same continuity with plain arithmetic. (b) and (c) rejected.
+
+**D41. The junction gradient is measured, not bounded; T12's other owner switches are reported.**
+- 12.3 lists "max junction gradient against the steepest approach grade + crossfall" and 4.3 suggests the Shepard surface stays
+  within its approaches' slopes. It does not: the surface is a convex combination of the approach surfaces (no overshoot, 4.3.3
+  holds), but its gradient is not bounded by theirs - where two trim segments are close (gore corners, short arms) it turns from
+  one approach surface to the other within a fraction of a metre. Measured on the busy tiles (91 junctions): max gradient 1.10
+  (A66 tile 1822/21685, flat DEM, a 4-approach junction whose bound is 0.025), every junction above its bound + 0.02, max ratio
+  44. The test asserts what carving itself must keep: no discontinuity inside a junction (max gradient ≤ 1.5; a step reads as a
+  gradient of tens - the deck clamp under the flat DEM's ground-level bridges gave 12.7 before clamped samples were excluded) and
+  fewer than 1 % of blend stations steeper than 1:1.5. A bound would need a different junction surface (P3, with the cluster
+  review); recorded as an open item, not hidden.
+- T12 asserts the switches the design names (core↔blend, blend↔terrain, the trim line). The others are reported: blend↔blend up
+  to 3.44 m (two blends of equal weight meet on their bisector; the max-weight rule is order-independent but not continuous
+  there), core↔core up to 2.20 m (lowest-wins between overlapping cores of roads at different heights, 6.3 rule 2), ring overlap
+  up to 0.30 m (a junction ring reaching past its own approach's trim line, e.g. merging ramps). They are properties of 6.3's
+  ownership rules, not of the implementation; making them continuous is a design change.
+
+**Slice 9 as implemented.**
+- Tests: section 11 "Slice 9 as implemented". New golden `g3d` `all 346681 7e1f25b0cea2bd92` (heights and owner counters of
+  the four busy tiles on the tilted DEM, 1 = 4 workers); the other goldens and every existing release id are unchanged.
+- G3-D measurements (12.3) on the two fixtures (A frankfurt_hoechst, 86 L0 tiles; B hoechst_a66, 84), flat / tilted DEM:
+  trim-line mismatch ≤ 2.02 mm; LS crossfall error max 0.00155; road-to-blend step ≤ 0.12 mm; blends steeper than 1:1.5 A 0 of
+  172435 / 837 of 133847 stations, B 0 of 137739 / 256 of 96292 (busy tiles 74 of 29963); junction gradient as D41; deck
+  clearance violations (core cells the clamp lowered: a ground road closer than 0.55 m under a deck) A 1229 / 15, B 2570 / 28 -
+  the flat DEM puts every bridge at ground level, so the flat counts are a property of the synthetic DEM; junction knots outside
+  the window 0.
+- Derive cost per level-0 tile (`"carve: per-tile census and derive cost of the fixtures (diag)"`, release, Windows, two runs
+  on an otherwise idle machine): mean 201-445 ms on 1 worker and 97-172 ms on 10 workers (busiest case: A on the flat DEM),
+  worst tile 0.59-1.54 s, of which smoothing and model build 89-126 ms (serial); about 3-7 CPU-s per km². A third run while
+  other test suites saturated the CPU measured 0.48-3.9 s mean / 2.5-9.7 s worst - an upper bound, not a figure for the
+  layer. `terrain.height` L0 is a copy. No budget exists (12.4); the blend loop in `CarveModel::evaluate` evaluates every
+  candidate in the bucket, so a distance pruning bound there is the obvious follow-up if the cost matters.
 ---
 
 

@@ -93,6 +93,11 @@ TEST_CASE("G3j golden hashes match testdata/golden/g3j_golden.txt", "[golden][ro
     check_against("g3j_golden.txt", g2m_golden::compute_g3j());
 }
 
+// Street fidelity P2 slice 9: the carved terrain g2m.terrain.carved level 0 (golden_g3d.cpp).
+TEST_CASE("G3d golden hashes match testdata/golden/g3d_golden.txt", "[golden][carve]") {
+    check_against("g3d_golden.txt", g2m_golden::compute_g3d());
+}
+
 // dem.h/osm.h/landcover.h all document their sink output as independent of
 // `jobs` (only DemImportReport's scheduling-dependent counters are not, and
 // the fixture's 2 unique 1km DGM1 keys never evict from the default 256-

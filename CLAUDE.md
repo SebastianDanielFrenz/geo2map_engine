@@ -234,7 +234,8 @@ geo2map_engine/
                                       would not catch a road-painting bug. bridge_test_support.h gained
                                       install_square_with_roads (install_square's road-carrying counterpart).
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
-                                      src_landcover, src_osm, pack, release_manifest, protocol, cache_db
+                                      src_landcover, src_osm, road_graph, road_geom, terrain_carved, pack,
+                                      release_manifest, regions, protocol, cache_db
   docs/pipeline/                      THE human entry point: README.md (overview + layer-dependency + runtime-sequence + roadmap
                                       Mermaid diagrams, per-stage tables, data sources, runbook, glossary, open questions) and
                                       raw_layers.md, terrain.md, roads.md, client_side.md
@@ -874,3 +875,15 @@ D35: `IDeriver::discovery_stages()` (default 1, max 4; the server re-calls `addi
 so far until a stage adds nothing); roads.geom uses 2 - stage 2 adds every bridge incident to a node of the tile's ways
 (`road_bridge_dependencies`: DEM along it + 65 m, graph tiles of its nodes), closing the D32 far-end read; `derive()`
 rejects a stage-1-only input set. Test helper `g2m_test::road_geom_inputs(world, key, bridge_far_end)`.
+
+Slice 9: `g2m.terrain.carved` v1, L0-L6, body encoding 1 (`docs/formats/terrain_carved.md`). `include/g2m/layer/terrain_carve.h`
+/ `src/layer/terrain_carve.cpp`: `CarveTerrain` (the 3 x 3 elev.base window, on-demand integer smoothing [138,621,1024,621,138]
+strength 35), `CarveModel` (cores, D40 band-rectangle/ring blends, deck clamp; buckets of `kCarveBucketM` 16 m), `CarveOptions`
+(sabotage switches `blend_from_raw`, `first_come_ownership`, `deck_clamp`, `candidate_order_seed`), `carve_terrain_tile`,
+`carve_road_geom_keys` (roads.geom L2 tiles within `kCarveRoadRadiusM` 192 m, half-open), `TerrainCarvedDeriver` (L1-L6 =
+`downsample_2x2`), `terrain_carved_config_text()`. Opt-in: `BuiltinTerrainDerivers::ordered(..., include_carved)` (implies both
+road layers), `builtin_local_release_params(..., include_carved)`, `g2m_tiler bake --layers g2m.terrain.carved`; release ids
+without it unchanged. Decisions D36-D41 in `docs/street_fidelity/p2_junction_design.md`. Tests `tests/layer/test_terrain_carve.cpp`
+(T12-T15, T17, T19, smoothing parity, server + 4-worker bake), fixture `tests/support/carve_fixture.h` (`CarveFixture`,
+`fixture_world`, `carve_tilted_dem`); golden `g3d` (`tests/golden/golden_g3d.cpp`, `testdata/golden/g3d_golden.txt`, 4 tiles,
+1 vs 4 workers checked, Windows = Linux).

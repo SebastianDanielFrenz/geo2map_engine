@@ -33,7 +33,7 @@ flowchart TB
   SRC["<b>1. Raw sources</b> - files on S:<br/>DGM1 1 m heights - HVBG<br/>OSM Hessen extract - Geofabrik<br/>ESA WorldCover 10 m<br/><i>downloaded, not used yet:</i> GLO-30, LoD2, DOM1, DOP20, Basis-DLM, tree data"]
   IMP["<b>2. Import</b> - g2m_tiler import<br/>resolve region to level-2 tiles<br/>import-dem, import-osm, import-landcover"]
   RAW["<b>3. Raw layers</b> - level 2, 1024 m, source store<br/>g2m.src.elev.dgm1 / g2m.src.osm / g2m.src.landcover"]
-  BAKE["<b>4. Derived layers</b> - pure derivers, g2m_tiler bake<br/>g2m.elev.base L0 / g2m.terrain.height L0-L6<br/>g2m.roads.graph L2 / g2m.roads.geom L2<br/><i>planned:</i> terrain.carved + terrain.class (P2), buildings, trees, markings"]
+  BAKE["<b>4. Derived layers</b> - pure derivers, g2m_tiler bake<br/>g2m.elev.base L0 / g2m.terrain.height L0-L6<br/>g2m.roads.graph L2 / g2m.roads.geom L2<br/>g2m.terrain.carved L0-L6 (opt-in, not consumed yet)<br/><i>planned:</i> terrain.class (P2), buildings, trees, markings"]
   SRV["<b>5. Server and cache</b> - in-process today<br/>g2m::Server: cache, derive on miss, upstream<br/>tiles.sqlite3 + blob files, release id<br/><i>planned:</i> HTTP server, packs, hosted CDN"]
   GAME["<b>6a. racing_game</b> WorldTerrain<br/>render chunks, road raster and grip,<br/>road carving at L0, NPC traffic"]
   PHYS["<b>6b. physics_sim</b><br/>g2m_ps_bridge G2mTerrainSource<br/>TileManager Jolt heightfield pool"]
@@ -46,8 +46,8 @@ flowchart TB
 
 What the diagram hides, in short:
 
-- **Terrain heights are not carved on the server.** `g2m.terrain.height` is a plain DGM1 pyramid. Road carving into the height tile happens in `racing_game` today (stage "client derivations" below). A server-side carving step is planned (G3-D = street fidelity P2, [design](../street_fidelity/p2_junction_design.md)): new layers `g2m.terrain.carved` and `g2m.terrain.class`, while `g2m.terrain.height` stays bare. Once it ships the game consumes the carved layers and its own carve step is removed (owner decision 2026-10-05).
-- **`roads.graph` and `roads.geom` are opt-in.** They are only added to a release when asked for, so the release id of terrain-only releases did not change when they were added.
+- **Two height layers.** `g2m.terrain.height` is the plain DGM1 pyramid and stays the default. `g2m.terrain.carved` (street fidelity P2 slice 9, [design](../street_fidelity/p2_junction_design.md) section 6) is the same pyramid with the roads carved in on the server: smoothed DEM, junction and approach cores, blends, deck clearance. No consumer reads it yet: `racing_game` still carves its own copy of the level-0 tile (stage "client derivations" below) until it switches; then its carve step is removed, not kept as a fallback (owner decision 2026-10-05). `g2m.terrain.class` (slice 10) is still planned.
+- **`roads.graph`, `roads.geom` and `terrain.carved` are opt-in.** They are only added to a release when asked for, so the release id of terrain-only releases did not change when they were added. Asking for `terrain.carved` adds both road layers.
 - **Some things never travel over the wire.** Render meshes, LOD selection, the road colour raster and physics surface ids are computed in the client from tiles.
 
 ---
@@ -95,7 +95,7 @@ Details: [raw_layers.md](raw_layers.md).
 | Halo | None. Neighbouring tiles are not read. A missing child counts as all-NoData. |
 | Tests | `tests/layer/test_derive_terrain.cpp`, `test_terrain_pyramid.cpp`; golden `g2_golden.txt`. |
 | Consumers | `racing_game` `WorldTerrain` (render and physics); `g2m_ps_bridge` (physics). |
-| Not done | `g2m.terrain.class` has a declared slot and no deriver. No multi-source blending (GLO-30 etc.) and no halo blending: PLAN.md 6.1 describes more than the code does. Planned (street fidelity P2, [design](../street_fidelity/p2_junction_design.md) section 6): a separate carved layer `g2m.terrain.carved` (L0 carved, L1-L6 mean-of-4 of it) and the first `g2m.terrain.class` deriver (node-registered 257 x 257 at integer metres). `terrain.height` stays the bare default. |
+| Not done | `g2m.terrain.class` has a declared slot and no deriver. No multi-source blending (GLO-30 etc.) and no halo blending: PLAN.md 6.1 describes more than the code does. Planned (street fidelity P2 slice 10, [design](../street_fidelity/p2_junction_design.md) section 6.5): the first `g2m.terrain.class` deriver (node-registered 257 x 257 at integer metres). The carved heights are a separate layer, section 2.4; `terrain.height` stays the bare default. |
 
 Details: [terrain.md](terrain.md).
 
@@ -109,10 +109,24 @@ Details: [terrain.md](terrain.md).
 | Halo | `roads.graph` uses a 128 m halo and complete ways. An edge belongs to the tile that contains its midpoint (integer mm). `roads.geom` reads DEM tiles up to 65 m outside the road. |
 | Config hash | graph: `g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours node-tags=1 enc=5`. geom: `g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=7 rules=de:<sha256 of de.json> join-bisector=1 context=nodes junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/60 completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1` (`road_geom_config_text()`; the completion values come from `served_road_completion_options()`). The rules hash ties a release id to the exact `data/road_rules/de.json` bytes. |
 | Tests | `tests/layer/test_road_*.cpp`, `test_vertical_profile.cpp`; goldens `g2roads_golden.txt`, `g3xs_golden.txt` (served encoding-7 bodies and cross-section boundaries of the two committed OSM fixtures) and `g3j_golden.txt` (their junction, furniture and provenance sections), compared Windows = Linux; `test_road_geom_enc7.cpp` (T7 ownership invariance, T8 one rejection per encoding-7 validation rule); probe `tools/road_probe`. |
-| Consumers | `racing_game`: road surface patch (carving into the level-0 height tile), road visuals, bridge structures, NPC traffic and trucks. |
-| Status | Slices A and B of G3 implemented. C has a tested foundation, acceptance open. D to F open. D is designed as street fidelity P2 ([design](../street_fidelity/p2_junction_design.md)); slices 1-7 are library functions (rules, road surface height, junction rings and clusters, junction heights and raised tables, the profile completion tier, junction furniture) and slice 8 serves them: `roads.geom` encoding 7 with junction, furniture and profile-provenance sections, the completion tier on. Carving (`terrain.carved`, slice 9) and `terrain.class` (slice 10) are next. See [roads.md](roads.md) and [../g3_road_pipeline.md](../g3_road_pipeline.md). |
+| Consumers | `racing_game`: road surface patch (carving into the level-0 height tile), road visuals, bridge structures, NPC traffic and trucks. `g2m.terrain.carved` (section 2.4). |
+| Status | Slices A and B of G3 implemented. C has a tested foundation, acceptance open. D to F open. D is designed as street fidelity P2 ([design](../street_fidelity/p2_junction_design.md)); slices 1-7 are library functions (rules, road surface height, junction rings and clusters, junction heights and raised tables, the profile completion tier, junction furniture) and slice 8 serves them: `roads.geom` encoding 7 with junction, furniture and profile-provenance sections, the completion tier on. Slice 9 carves them into `terrain.carved` (section 2.4); `terrain.class` (slice 10) is next. See [roads.md](roads.md) and [../g3_road_pipeline.md](../g3_road_pipeline.md). |
 
-### 2.4 Client-side derivations (not served)
+### 2.4 Carved terrain: `g2m.terrain.carved`
+
+| | |
+|---|---|
+| Inputs | Level 0: the 3 x 3 `g2m.elev.base` neighbourhood of the tile (absent = NoData; an absent centre is NotFound) and every `g2m.roads.geom` level-2 tile intersecting the tile grown by 192 m (one typically, at most four; absent = no roads). Levels 1-6: the 4 same-layer children. |
+| Code | `src/layer/terrain_carve.cpp`, `include/g2m/layer/terrain_carve.h` (`CarveTerrain`, `CarveModel`, `carve_terrain_tile`, `carve_road_geom_keys`, `TerrainCarvedDeriver`); parameters `data/carve/carve_default.json` via `carve_params.cpp`; surfaces from `road_surface.cpp` and `road_junction.cpp` (`junction_height_m`). Builtin wiring: `BuiltinTerrainDerivers::ordered(include_roads, include_geometry, include_carved)`. |
+| Output | `g2m.terrain.carved` v1, levels 0-6, body encoding 1 like `terrain.height` ([terrain_carved.md](../formats/terrain_carved.md)). Level 0 per cell (centre E + 0.5, N + 0.5): the DEM smoothed by the game's kernel as integers; junction cores (Shepard junction surface) beat approach cores, the lowest core wins; else the blend (3-15 m, widened to 1:1.5) of largest weight, ties to the lowest z; then the deck clearance clamp (0.55 m under bridges, ramped over 4 m from each end); `round_half_even(z * 256)`. Bridges and tunnels are never carved, `OnStructure` junctions neither. Levels 1-6: mean-of-4 half-even of the carved level below. |
+| Config hash | `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 carve=<sha256 of carve_default.json>; L1-L6 mean-of-4 half-even` (`terrain_carved_config_text()`). |
+| Halo | No shared samples: every cell is a function of its world position, so neighbouring tiles agree at their edge (tested across L0 and L2 seams). DEM reads (smoothing, blend widths) stay inside the 3 x 3 window; a junction blend knot whose DEM point falls outside it uses the class width and is counted (0 on the fixtures). |
+| Cost | 0.2-0.45 s per level-0 tile on 1 worker on the fixtures (about 0.1 s of it serial: smoothing and model build), against a copy for `terrain.height` L0; numbers in the design's slice 9 record. |
+| Tests | `tests/layer/test_terrain_carve.cpp` (T12-T15, T17, T19, tile invariance, smoothing parity, grade limits, served path); golden `g3d_golden.txt`, Windows = Linux. |
+| Consumers | None yet. `racing_game` switches to it (request `g2m.terrain.carved` L0-L6 instead of `g2m.terrain.height`, no fallback) and deletes its own carving: [P2 design section 10](../street_fidelity/p2_junction_design.md#10-consumer-switch-what-racing_game-needs-and-deletes). |
+| Not done | `g2m.terrain.class` (slice 10) and the physics / render / bridge wiring (slice 11); home-region measurement (slice 12). |
+
+### 2.5 Client-side derivations (not served)
 
 | What | Where | Note |
 |---|---|---|
@@ -122,11 +136,11 @@ Details: [terrain.md](terrain.md).
 | Physics tile fill (255 m tiles, 256 samples, node-registered, anchored on DGM1 cell centres by integer offset copy) | `include/g2m/phys/fill_physics_heights.h` | No interpolation. |
 | Physics surface ids per cell | `include/g2m/phys/fill_physics_surfaces.h` | |
 | Residency, gate, prefetch, look-ahead | `include/g2m/phys/{resident_heights,height_tile_loader,physics_streamer}.h` | |
-| Road carving into a copy of the level-0 height tile | `racing_game/core/src/world_terrain.cpp` (`fetch_and_decode`) | Stays in the game until G3-D ships server-side carved heights; then the game step is removed, not kept as a fallback (owner decision 2026-10-05). The full delete list (smoothing, `RoadSurfacePatch`, deck clearance cut, `complete_road_profiles` and its retry, the src.osm grip and colour raster, junction fades) and the switch gate are in [P2 design section 10](../street_fidelity/p2_junction_design.md#10-consumer-switch-what-racing_game-needs-and-deletes). |
+| Road carving into a copy of the level-0 height tile | `racing_game/core/src/world_terrain.cpp` (`fetch_and_decode`) | Stays in the game until it switches to the served `g2m.terrain.carved` (section 2.4, available since P2 slice 9); then the game step is removed, not kept as a fallback (owner decision 2026-10-05). The full delete list (smoothing, `RoadSurfacePatch`, deck clearance cut, `complete_road_profiles` and its retry, the src.osm grip and colour raster, junction fades) and the switch gate are in [P2 design section 10](../street_fidelity/p2_junction_design.md#10-consumer-switch-what-racing_game-needs-and-deletes). |
 
 Details: [client_side.md](client_side.md).
 
-### 2.5 Server, cache, releases
+### 2.6 Server, cache, releases
 
 | | |
 |---|---|
@@ -154,7 +168,8 @@ flowchart TD
   RG["g2m.roads.graph - L2"]
   RM["g2m.roads.geom - L2"]
   TC["g2m.terrain.class - L0 to L6 - deriver planned, P2"]
-  CARVE["g2m.terrain.carved - L0 to L6 - planned, P2 = G3-D"]
+  CARVE["g2m.terrain.carved L0 - smoothed and carved"]
+  CARVE1["g2m.terrain.carved L1 to L6"]
   BLD["buildings from LoD2 - planned"]
   TRE["trees and vegetation - planned"]
 
@@ -165,8 +180,9 @@ flowchart TD
   RG -->|"same key"| RM
   EB -->|"every L0 tile near a road, margin 65 m"| RM
   LC -.->|"planned: L2 ancestor"| TC
-  RM -.->|"planned: L2 tiles within 192 m"| CARVE
-  EB -.->|"planned: 3 x 3 L0 neighbourhood"| CARVE
+  RM -->|"L2 tiles within 192 m, 1 to 4"| CARVE
+  EB -->|"3 x 3 L0 neighbourhood"| CARVE
+  CARVE -->|"4 children of the level below"| CARVE1
   RM -.->|"planned: same CarveModel"| TC
   EB -.-> TC
   OSM -.-> BLD
@@ -174,8 +190,8 @@ flowchart TD
 
   classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
   classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
-  class OSM,DEM,LC,EB,H0,H1,RG,RM done;
-  class TC,CARVE,BLD,TRE plan;
+  class OSM,DEM,LC,EB,H0,H1,RG,RM,CARVE,CARVE1 done;
+  class TC,BLD,TRE plan;
 ```
 
 Tile-level rules worth remembering:
@@ -183,7 +199,7 @@ Tile-level rules worth remembering:
 - `elev.base` has **no halo**. Two neighbouring tiles share no samples. Seams are handled by the consumers (render halo window, physics edge weld).
 - The terrain pyramid needs all four children even for a tile at the data edge. A missing child counts as NoData, never as an error.
 - `roads.geom` is the only built-in layer whose input list depends on the data (`additional_inputs_for`), in two discovery stages (D35): stage 1 names the DEM tiles under the complete ways and the `roads.graph` tiles holding every way incident to their nodes; stage 2, once those are resolved, names the DEM along every bridge incident to those nodes (65 m margin) and the `roads.graph` tiles of its nodes, so the far end of a bridge span is always an input. Other derivers use one stage.
-- Planned (P2): a `terrain.carved` / `terrain.class` L0 tile reads its own and its 8 neighbouring `elev.base` tiles and every `roads.geom` tile within 192 m (one typically, at most four). Each junction is stored only in the `roads.geom` tile holding its smallest node id; the 192 m radius is what makes that sufficient ([design section 5](../street_fidelity/p2_junction_design.md#5-tile-invariance)).
+- A `terrain.carved` L0 tile (and, planned, a `terrain.class` L0 tile) reads its own and its 8 neighbouring `elev.base` tiles and every `roads.geom` tile within 192 m (one typically, at most four). Each junction is stored only in the `roads.geom` tile holding its smallest node id; the 192 m radius is what makes that sufficient ([design section 5](../street_fidelity/p2_junction_design.md#5-tile-invariance)).
 - A tile in the 1 km halo of the region may have no DGM1 coverage: 85 such tiles were skipped at import (`import_report_home-2026-09r1.json`).
 
 ---
@@ -273,7 +289,7 @@ flowchart TB
   G2C["G2 terrain.class deriver - open"]
   G3A["G3 A,B roads.graph and roads.geom codec - done"]
   G3C["G3 C profile acceptance - in progress"]
-  G3D["G3 D junction surfaces and carving - open"]
+  G3D["G3 D junction surfaces and carving - served, consumer switch open"]
   G3E["G3 E ribbons, markings, bridge bodies - open"]
   G3F["G3 F route acceptance - open"]
   G4["G4 routing - planned"]
@@ -283,7 +299,7 @@ flowchart TB
   G8["G8 worldwide - planned"]
   P0["P0 OSM tag coverage probe - done"]
   P1["P1 lane-aware cross-section - slices 1-7 done"]
-  P2["P2 junction surfaces, carving, furniture - slices 1-5 of 12 done"]
+  P2["P2 junction surfaces, carving, furniture - slices 1-9 of 12 done"]
   P3["P3 markings - planned"]
   P4["P4 buildings - planned"]
   P5["P5 trees - planned"]
@@ -306,23 +322,24 @@ flowchart TB
   classDef part fill:#fff3cd,stroke:#b58900,stroke-dasharray:4 3,color:#000;
   classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
   class G0,G1,G2,G3A,P0,P1 done;
-  class G3C,P2 part;
-  class G2C,G3D,G3E,G3F,G4,G5,G6,G7,G8,P3,P4,P5,P6,P7,P8 plan;
+  class G3C,G3D,P2 part;
+  class G2C,G3E,G3F,G4,G5,G6,G7,G8,P3,P4,P5,P6,P7,P8 plan;
 ```
 
 | Item | Status | Where it is described |
 |---|---|---|
 | Terrain pyramid, render chunks, physics bridge, prefetch ring | Implemented | [terrain.md](terrain.md), `racing_game/PLAN.md` G2/R2 |
+| `terrain.carved` deriver | Implemented (street fidelity P2 slice 9), opt-in, no consumer yet | section 2.4, [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) section 6 |
 | `terrain.class` deriver | Open (slot only); designed in street fidelity P2 slice 10 | `PLAN.md` G2.5, [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) section 6.5 |
 | G3 A: identity-preserving graph | Implemented | [../g3_road_pipeline.md](../g3_road_pipeline.md) |
 | G3 B: graph and geom tile encoding, derivation, opt-in serving | Implemented | [../g3_road_pipeline.md](../g3_road_pipeline.md), [../formats/road_geom.md](../formats/road_geom.md) |
 | G3 C: reference lines and vertical profiles | Foundation implemented, acceptance open | [../g3_profile_foundation.md](../g3_profile_foundation.md), [../g3_reference_lines.md](../g3_reference_lines.md) |
-| G3 D: junction surfaces and server-side carving | Open; designed as street fidelity P2 | [../g3_road_pipeline.md](../g3_road_pipeline.md) section D, [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) |
+| G3 D: junction surfaces and server-side carving | In progress as street fidelity P2: junction surfaces served (slice 8), carved heights served (slice 9); terrain.class, wiring and the game switch open | [../g3_road_pipeline.md](../g3_road_pipeline.md) section D, [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) |
 | G3 E: ribbons, markings, bridge bodies | Open | section E |
 | G3 F: route acceptance | Open | section F |
 | Street fidelity P0 (tag probe) | Done | [../osm_tag_coverage_home.md](../osm_tag_coverage_home.md) |
 | Street fidelity P1 (lane-aware cross-section) | Slices 1 to 7 implemented (context, node tags, base and join resolution, encoding 6, consumer API: carve footprint, lane queries, grip-raster envelope, carved profile features) | [../street_fidelity/p1_cross_section_design.md](../street_fidelity/p1_cross_section_design.md) |
-| Street fidelity P2 (junction surfaces, carving, furniture = G3-D) | Slices 1-8 of 12 done: rules, surface height, junction rings and clusters, junction heights, the completion tier and furniture as library functions, served since slice 8 in `roads.geom` encoding 7 (junctions, furniture, provenance); carving (9-11) open; both owner questions answered 2026-10-05 (switch gate not zero gaps, relaxed profiles served flagged) | [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) |
+| Street fidelity P2 (junction surfaces, carving, furniture = G3-D) | Slices 1-9 of 12 done: rules, surface height, junction rings and clusters, junction heights, the completion tier and furniture as library functions, served since slice 8 in `roads.geom` encoding 7 (junctions, furniture, provenance); slice 9 serves the carved heights `g2m.terrain.carved`; terrain.class and wiring (10-11) open; both owner questions answered 2026-10-05 (switch gate not zero gaps, relaxed profiles served flagged) | [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) |
 | Street fidelity P3 to P8 | Planned, nothing written | [../street_fidelity/plan.md](../street_fidelity/plan.md) section 6 |
 | HTTP server, packs, hosted CDN (G6, G7) | Planned | [../formats/protocol.md](../formats/protocol.md), [../formats/pack.md](../formats/pack.md) |
 
@@ -370,7 +387,7 @@ g2m_tiler bake --store STORE_DIR --scope SCOPE --derived DERIVED_DIR `
     --layers g2m.elev.base,g2m.terrain.height [--levels 0-6] [--jobs N] [--pin]
 ```
 
-`--store` must be a finished, `--pin`ned scope. The result does not depend on `--jobs`. Without `bake`, a consumer derives tiles on demand through `g2m::Server` into its own derived store (`racing_game` does this for the home region, store `S:\claude_code\geo2map_cache\home-r1\baked`). Levels a layer does not have are skipped (`roads.*` exist only at level 2). Naming `g2m.roads.graph` in `--layers` adds the road graph deriver to the release; naming `g2m.roads.geom` adds both (`src/import/bake.cpp`: `include_roads` / `include_geometry`). Adding them changes the release id; terrain-only bakes keep the old one.
+`--store` must be a finished, `--pin`ned scope. The result does not depend on `--jobs`. Without `bake`, a consumer derives tiles on demand through `g2m::Server` into its own derived store (`racing_game` does this for the home region, store `S:\claude_code\geo2map_cache\home-r1\baked`). Levels a layer does not have are skipped (`roads.*` exist only at level 2). Naming `g2m.roads.graph` in `--layers` adds the road graph deriver to the release; naming `g2m.roads.geom` adds both; naming `g2m.terrain.carved` adds the carved deriver and both road derivers (`src/import/bake.cpp`: `include_roads` / `include_geometry` / `include_carved`). Adding them changes the release id; terrain-only bakes keep the old one.
 
 ### 7.4 Probes
 
@@ -436,7 +453,7 @@ These are listed, not resolved. Each needs an owner decision or a check.
 1. **G3 endpoint heights vs class grade.** [../g3_road_pipeline.md](../g3_road_pipeline.md) (checkpoint, top) says the priority between endpoint heights and class grade "needs an owner choice". [../g3_profile_foundation.md](../g3_profile_foundation.md) says endpoint heights and class bounds "retain priority". `racing_game/PLAN.md` G3 status says the grade-policy question "is withdrawn" (it came from reading an underpass as a deck slope). The geo2map docs still show it pending. **Resolved 2026-10-05 (owner):** measured endpoint heights win. Where honouring them needs a grade steeper than the class bound, the profile keeps the endpoint heights and the stretch is flagged as a grade exception (the existing exception mechanism), not clamped. [../g3_road_pipeline.md](../g3_road_pipeline.md) and [../g3_profile_foundation.md](../g3_profile_foundation.md) say so now; the `racing_game` note about a withdrawn question stays true for the underpass case.
 2. **HVBG LoD2 licence.** `geo2map_data/SOURCES.md` records dl-de/**by**-2.0 (attribution required) after reading the primary metadata. [../street_fidelity/plan.md](../street_fidelity/plan.md) and `PLAN.md` 3.9, 5.3 and 13 plan with dl-de/**zero**-2.0 for HVBG products. **Resolved 2026-10-05 (documents):** `street_fidelity/plan.md` and `PLAN.md` 3.9, 5.3 and 13 now plan with dl-de/by-2.0 and attribution for LoD2; the attribution list must include it before buildings ship.
 3. **Attribution is not shown to players.** `racing_game`'s manifest lists only the DGM1 attribution. OSM (ODbL), WorldCover (CC BY 4.0) and Copernicus are in use or downloaded, but the credits screen (R5) is not built.
-4. **Where road carving lives.** Today `racing_game` carves a road patch into the level-0 height tile after decode. The roadmap (G3-D) says the server derives carved heights and `terrain.class` from the same geometry. Until G3-D, two consumers that skip the game's step would see uncarved terrain. **Resolved 2026-10-05 (owner):** carving stays in `racing_game` (`WorldTerrain::fetch_and_decode`, level 0) until G3-D ships server-side carved heights. When G3-D lands, the game consumes the server's carved heights and its own carve step is REMOVED, not kept as a fallback: one source of truth for render and physics (same principle as the G2M-010 grip rule). The P2 design ([section 10](../street_fidelity/p2_junction_design.md#10-consumer-switch-what-racing_game-needs-and-deletes)) lists what the game needs and deletes. It also moves the game's profile completion to the server. Owner question Q1 is answered (2026-10-05): work-in-progress states are acceptable, so the switch does not wait for zero uncarved stretches; the census lists the remaining ones.
+4. **Where road carving lives.** Today `racing_game` carves a road patch into the level-0 height tile after decode. The roadmap (G3-D) says the server derives carved heights and `terrain.class` from the same geometry. Until G3-D, two consumers that skip the game's step would see uncarved terrain. **Resolved 2026-10-05 (owner):** carving stays in `racing_game` (`WorldTerrain::fetch_and_decode`, level 0) until G3-D ships server-side carved heights. When G3-D lands, the game consumes the server's carved heights and its own carve step is REMOVED, not kept as a fallback: one source of truth for render and physics (same principle as the G2M-010 grip rule). The P2 design ([section 10](../street_fidelity/p2_junction_design.md#10-consumer-switch-what-racing_game-needs-and-deletes)) lists what the game needs and deletes. Status: the server layer `g2m.terrain.carved` exists since P2 slice 9 (section 2.4); the game has not switched yet. It also moves the game's profile completion to the server. Owner question Q1 is answered (2026-10-05): work-in-progress states are acceptable, so the switch does not wait for zero uncarved stretches; the census lists the remaining ones.
 5. **`CLAUDE.md` of this repo is partly stale.** It still describes `elev.base`, `terrain.height`, `bake`, roads and the road probe as not built or planned in places. This docs folder is checked against code; `CLAUDE.md` should be reconciled.
 6. **PLAN.md vs code, terrain.** PLAN.md 6.1 describes multi-source blending and a 16 m halo for `elev.base`. The code is DGM1-only without halo. `g2m.terrain.class` has no deriver although the slot exists.
 7. **PLAN.md vs code, CLI.** PLAN.md 3.10 and 5.5 describe a CLI that differs from the real `g2m_tiler` subcommands. `apps/g2m_server` and `g2m_cli` are not built.
