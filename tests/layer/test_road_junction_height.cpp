@@ -90,7 +90,7 @@ RoadJunction junction_of(const Scene& scene, std::int64_t node, JunctionBuildSta
 // ---- the probes of T5, all parameterised by the weight function so the sabotages can swap it ----
 
 using WeightFn = std::function<void(const JunctionSurface&, double, double, std::span<double>)>;
-void real_weights(const JunctionSurface& s, double x, double y, std::span<double> w) { junction_weights(s, x, y, w); }
+const WeightFn real_weights{};   // the production surface junction_height_m
 double seg_dist(double px, double py, double ax, double ay, double bx, double by) {
     const double dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
     const double u = len2 > 0 ? std::clamp(((px - ax) * dx + (py - ay) * dy) / len2, 0.0, 1.0) : 0.0;
@@ -112,7 +112,10 @@ void plain_distance_weights(const JunctionSurface& s, double x, double y, std::s
 void average_weights(const JunctionSurface& s, double, double, std::span<double> w) {
     for (std::size_t m = 0; m < s.approaches.size(); ++m) w[m] = 1.0 / static_cast<double>(s.approaches.size());
 }
+// z_J itself for the empty WeightFn (the production surface of D42), else the D22-D24 form sum_i w_i z_i with the
+// given (sabotage) weights.
 double z_blend(const JunctionSurface& s, const RoadGeomTile& tile, double x, double y, const WeightFn& weights) {
+    if (!weights) return junction_height_m(s, tile, x, y);
     std::vector<double> w(s.approaches.size());
     weights(s, x, y, w);
     double z = 0;
@@ -155,7 +158,9 @@ double worst_slope_mismatch(const JunctionSurface& s, const RoadGeomTile& tile, 
     }
     return worst;
 }
-// Points of a `step` m lattice inside the outer ring where z_J lies outside [min z_i, max z_i] (+ 1e-9).
+// Points of a `step` m lattice inside the outer ring where z_J lies outside the range of the approaches' own heights at
+// the point (+ 1e-9): each approach's base b_i, paved p_i and full z_i reading (D42 blends these three; D22-D24 read z_i
+// only).
 std::size_t bound_violations(const JunctionSurface& s, const RoadGeomTile& tile, const RoadJunction& j, double step, std::size_t* tested = nullptr) {
     geom::RingSet ring; ring.outers.push_back(j.rings[2].vertices); ring.bbox = geom::bounding_box(ring);
     std::int64_t x0 = ring.bbox.w, x1 = ring.bbox.e, y0 = ring.bbox.s, y1 = ring.bbox.n;
@@ -167,7 +172,10 @@ std::size_t bound_violations(const JunctionSurface& s, const RoadGeomTile& tile,
             if (!geom::contains(ring, {xx, yy})) continue;
             const double x = static_cast<double>(xx) / 1000.0, y = static_cast<double>(yy) / 1000.0;
             double lo = 1e18, hi = -1e18;
-            for (std::size_t i = 0; i < s.approaches.size(); ++i) { const double z = junction_approach_height_m(s, tile, i, x, y); lo = std::min(lo, z); hi = std::max(hi, z); }
+            for (std::size_t i = 0; i < s.approaches.size(); ++i) {
+                const auto h = junction_approach_heights(s, tile, i, x, y);
+                lo = std::min({lo, h.base, h.paved, h.full}); hi = std::max({hi, h.base, h.paved, h.full});
+            }
             const double z = junction_height_m(s, tile, x, y);
             ++count;
             if (z < lo - 1e-9 || z > hi + 1e-9) ++bad;

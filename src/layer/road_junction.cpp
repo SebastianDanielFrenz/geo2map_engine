@@ -898,7 +898,82 @@ ProfileFeature junction_ramp_record(const RoadGeomEntry& e, const JunctionApproa
 }
 } // namespace
 
-std::optional<JunctionSurface> make_junction_surface(const RoadGeomTile& tile, const RoadJunction& junction, const RoadRules& rules) {
+namespace {
+// One approach read at a point: the full approach surface z_i and the base b_i (lateral offset 0) of D42, from one
+// projection onto the reference polyline. `full` false skips z_i (it is then left at b_i).
+struct ApproachValue { double z = 0, paved = 0, base = 0; };
+ApproachValue approach_value(const JunctionSurface& surface, const RoadGeomTile& tile, std::size_t approach,
+    double x, double y, const RoadSurfaceParams& params, bool full) noexcept {
+    const JunctionSurfaceApproach& a = surface.approaches[approach];
+    // Nearest segment of the reference polyline; the first segment is a ray backwards past station 0 (the tangent
+    // extension), every other parameter is clamped to its segment. Ties keep the lowest segment.
+    const std::size_t segments = a.sigma.size() - 1;
+    double best = std::numeric_limits<double>::infinity(), best_u = 0.0, best_cross = 0.0, best_len = 1.0;
+    std::size_t best_k = 0;
+    for (std::size_t k = 0; k < segments; ++k) {
+        const double ax = a.ref_x[k], ay = a.ref_y[k], dx = a.ref_x[k + 1] - ax, dy = a.ref_y[k + 1] - ay;
+        const double len2 = dx * dx + dy * dy;
+        const double vx = x - ax, vy = y - ay;
+        double u = len2 > 0.0 ? (vx * dx + vy * dy) / len2 : 0.0;
+        if (u < 0.0 && k > 0) u = 0.0;
+        if (u > 1.0) u = 1.0;
+        const double qx = ax + u * dx - x, qy = ay + u * dy - y;
+        const double d2 = qx * qx + qy * qy;
+        if (d2 < best) { best = d2; best_k = k; best_u = u; best_cross = dx * vy - dy * vx; best_len = len2 > 0.0 ? det::sqrt(len2) : 1.0; }
+    }
+    const double sigma = a.sigma[best_k] + best_u * (a.sigma[best_k + 1] - a.sigma[best_k]);
+    const double t_out = best_cross / best_len;                 // positive left of the outward direction
+    const double t = a.at_end ? -t_out : t_out;                 // the reference direction runs the other way at an end
+    const double s_free = a.at_end ? a.length_m - sigma : sigma;
+    const double s = std::clamp(s_free, 0.0, a.length_m);
+    double extension = 0.0;
+    if (s_free != s) {
+        const auto pose = tile.entries[a.entry_index].profile->at(s);
+        if (pose) extension = pose->grade * (s_free - s);
+    }
+    ApproachValue out;
+    // The raise of a table junction acts over the carriageway only (the rule of road_surface_height_m for features).
+    const bool ramp = a.has_ramp;
+    const double ramp_z = ramp ? feature_height_contribution_m(a.ramp, s) : 0.0;
+    const CarveFootprint f = carve_footprint(*tile.entries[a.entry_index].cross_section, s);
+    const auto height = [&](double tt) {
+        double z = road_surface_height_m(tile, a.entry_index, s, tt, params) + extension;
+        if (ramp && tt >= f.carriageway_right && tt <= f.carriageway_left) z += ramp_z;
+        return z;
+    };
+    out.base = out.paved = out.z = height(0.0);
+    if (full) {
+        const double tp = std::clamp(t, f.paved_right, f.paved_left);
+        out.paved = tp == 0.0 ? out.base : height(tp);
+        out.z = tp == t ? out.paved : height(t);
+    }
+    return out;
+}
+
+// The relief of approach `a` at its trim station: max |z(t) - z(0)| over the paved band (D42), at the band edges,
+// the carriageway edges and the crown pivot (the crown is linear or a rounded roof, so its extremes lie there).
+double trim_relief_m(const RoadGeomTile& tile, const JunctionSurfaceApproach& a, const RoadSurfaceParams& params) {
+    const double s = std::clamp(a.at_end ? a.length_m - a.trim_m : a.trim_m, 0.0, a.length_m);
+    const CarveFootprint f = carve_footprint(*tile.entries[a.entry_index].cross_section, s);
+    const double raise = a.has_ramp ? feature_height_contribution_m(a.ramp, s) : 0.0;
+    const auto z_at = [&](double t) {
+        double z = road_surface_height_m(tile, a.entry_index, s, t, params);
+        if (a.has_ramp && t >= f.carriageway_right && t <= f.carriageway_left) z += raise;
+        return z;
+    };
+    const double z0 = z_at(0.0);
+    double relief = 0.0;
+    for (const double t : {f.paved_right, f.carriageway_right, f.crown_pivot, f.carriageway_left, f.paved_left}) {
+        if (t < f.paved_right || t > f.paved_left) continue;
+        const double d = z_at(t) - z0;
+        relief = std::max(relief, d < 0.0 ? -d : d);
+    }
+    return relief;
+}
+} // namespace
+
+std::optional<JunctionSurface> make_junction_surface(const RoadGeomTile& tile, const RoadJunction& junction, const RoadRules& rules,
+    const RoadSurfaceParams& params, const JunctionFadeParams& fade) {
     if (junction.decline != JunctionDecline::None) return std::nullopt;
     const double spacing = static_cast<double>(rules.junction.edge_station_spacing_mm) / 1000.0;
     JunctionSurface surface;
@@ -932,6 +1007,9 @@ std::optional<JunctionSurface> make_junction_surface(const RoadGeomTile& tile, c
             out.ref_x.push_back(p->x); out.ref_y.push_back(p->y);
         }
         if (junction.flags & static_cast<std::uint16_t>(JunctionFlags::RaisedTable)) { out.has_ramp = true; out.ramp = junction_ramp_record(e, a, junction); }
+        out.relief_m = trim_relief_m(tile, out, params);
+        out.fade_m = std::clamp(fade.slope > 0.0 ? 2.0 * out.relief_m / fade.slope : fade.max_m, fade.min_m, fade.max_m);
+        out.verge_fade_m = std::min(fade.verge_m, out.fade_m);   // psi <= phi: v_i stays a convex combination
         surface.approaches.push_back(std::move(out));
     }
     if (surface.approaches.size() < 2) return std::nullopt;
@@ -951,39 +1029,30 @@ double segment_distance2(double px, double py, double ax, double ay, double bx, 
 
 double junction_approach_height_m(const JunctionSurface& surface, const RoadGeomTile& tile, std::size_t approach,
     double x, double y, const RoadSurfaceParams& params) noexcept {
+    return approach_value(surface, tile, approach, x, y, params, true).z;
+}
+
+JunctionApproachHeights junction_approach_heights(const JunctionSurface& surface, const RoadGeomTile& tile, std::size_t approach,
+    double x, double y, const RoadSurfaceParams& params) noexcept {
+    const ApproachValue v = approach_value(surface, tile, approach, x, y, params, true);
+    return {v.base, v.paved, v.z};
+}
+
+namespace {
+double fade_weight(double d2, double& d, bool& have_d, double length) noexcept {
+    if (!(length < std::numeric_limits<double>::infinity())) return 1.0;
+    if (d2 >= length * length) return 0.0;
+    if (!have_d) { d = det::sqrt(d2); have_d = true; }
+    return road_smooth_step(1.0 - d / length);
+}
+} // namespace
+
+void junction_relief_weights(const JunctionSurface& surface, std::size_t approach, double x, double y, double& phi, double& psi) noexcept {
     const JunctionSurfaceApproach& a = surface.approaches[approach];
-    // Nearest segment of the reference polyline; the first segment is a ray backwards past station 0 (the tangent
-    // extension), every other parameter is clamped to its segment. Ties keep the lowest segment.
-    const std::size_t segments = a.sigma.size() - 1;
-    double best = std::numeric_limits<double>::infinity(), best_u = 0.0, best_cross = 0.0, best_len = 1.0;
-    std::size_t best_k = 0;
-    for (std::size_t k = 0; k < segments; ++k) {
-        const double ax = a.ref_x[k], ay = a.ref_y[k], dx = a.ref_x[k + 1] - ax, dy = a.ref_y[k + 1] - ay;
-        const double len2 = dx * dx + dy * dy;
-        const double vx = x - ax, vy = y - ay;
-        double u = len2 > 0.0 ? (vx * dx + vy * dy) / len2 : 0.0;
-        if (u < 0.0 && k > 0) u = 0.0;
-        if (u > 1.0) u = 1.0;
-        const double qx = ax + u * dx - x, qy = ay + u * dy - y;
-        const double d2 = qx * qx + qy * qy;
-        if (d2 < best) { best = d2; best_k = k; best_u = u; best_cross = dx * vy - dy * vx; best_len = len2 > 0.0 ? det::sqrt(len2) : 1.0; }
-    }
-    const double sigma = a.sigma[best_k] + best_u * (a.sigma[best_k + 1] - a.sigma[best_k]);
-    const double t_out = best_cross / best_len;                 // positive left of the outward direction
-    const double t = a.at_end ? -t_out : t_out;                 // the reference direction runs the other way at an end
-    const double s_free = a.at_end ? a.length_m - sigma : sigma;
-    const double s = std::clamp(s_free, 0.0, a.length_m);
-    double z = road_surface_height_m(tile, a.entry_index, s, t, params);
-    if (a.has_ramp) {   // the table or hump plateau, over the carriageway only (the rule of road_surface_height_m for features)
-        const CarveFootprint f = carve_footprint(*tile.entries[a.entry_index].cross_section, s);
-        if (t >= f.carriageway_right && t <= f.carriageway_left) z += feature_height_contribution_m(a.ramp, s);
-    }
-    if (s_free != s) {
-        const RoadGeomEntry& e = tile.entries[a.entry_index];
-        const auto pose = e.profile->at(s);
-        if (pose) z += pose->grade * (s_free - s);
-    }
-    return z;
+    const double d2 = segment_distance2(x, y, a.trim_ax, a.trim_ay, a.trim_bx, a.trim_by);
+    double d = 0.0; bool have_d = false;
+    phi = fade_weight(d2, d, have_d, a.fade_m);
+    psi = fade_weight(d2, d, have_d, a.verge_fade_m);
 }
 
 void junction_weights(const JunctionSurface& surface, double x, double y, std::span<double> weights) noexcept {
@@ -1025,7 +1094,13 @@ double junction_height_m(const JunctionSurface& surface, const RoadGeomTile& til
     if (n > kInline) { heap.assign(n, 0.0); w = std::span<double>(heap); }   // beyond 32 approaches only; never on the fixtures
     junction_weights(surface, x, y, w);
     double z = 0.0;
-    for (std::size_t i = 0; i < n; ++i) if (w[i] != 0.0) z += w[i] * junction_approach_height_m(surface, tile, i, x, y, params);
+    for (std::size_t i = 0; i < n; ++i) {
+        if (w[i] == 0.0) continue;
+        double phi = 0.0, psi = 0.0;
+        junction_relief_weights(surface, i, x, y, phi, psi);
+        const ApproachValue v = approach_value(surface, tile, i, x, y, params, phi > 0.0 || psi > 0.0);
+        z += w[i] * (v.base + phi * (v.paved - v.base) + psi * (v.z - v.paved));
+    }
     return z;
 }
 

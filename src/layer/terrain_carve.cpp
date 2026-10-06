@@ -531,7 +531,9 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
             if (x1 + reach < terrain.e0() * 1000 || x0 - reach > (terrain.e0() + terrain.size()) * 1000 ||
                 y1 + reach < terrain.n0() * 1000 || y0 - reach > (terrain.n0() + terrain.size()) * 1000) continue;
         }
-        auto surface = make_junction_surface(m.kept, j, rules);
+        auto surface = make_junction_surface(m.kept, j, rules, m.surface, params.junction_fade_params());
+        if (surface && !options.junction_relief_fade)   // sabotage: the full relief everywhere (the D22-D24 surface)
+            for (auto& a : surface->approaches) a.fade_m = a.verge_fade_m = std::numeric_limits<double>::infinity();
         if (!surface) { if (stats) ++stats->junctions_no_surface; continue; }
         CarvedJunction c; c.record = r; c.ring = ring; c.surface = std::move(*surface);
         c.min_x = c.max_x = ring.front().x; c.min_y = c.max_y = ring.front().y;
@@ -880,7 +882,7 @@ LayerDesc terrain_carved_desc() {
 
 std::string terrain_carved_config_text() {
     const auto& sha = builtin_carve_default().content_sha256;
-    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 carve=" +
+    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 junction=D42 carve=" +
         to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even";
 }
 

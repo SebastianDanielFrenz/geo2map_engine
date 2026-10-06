@@ -50,6 +50,15 @@ RoadSurfaceParams CarveParams::surface_params() const {
     return p;
 }
 
+JunctionFadeParams CarveParams::junction_fade_params() const {
+    JunctionFadeParams p;
+    p.slope = static_cast<double>(junction_fade_slope_per_mille) / 1000.0;
+    p.min_m = static_cast<double>(junction_fade_min_mm) / 1000.0;
+    p.max_m = static_cast<double>(junction_fade_max_mm) / 1000.0;
+    p.verge_m = static_cast<double>(junction_fade_verge_mm) / 1000.0;
+    return p;
+}
+
 Result<CarveParams> load_carve_params(std::span<const std::byte> bytes) {
     const char* begin = reinterpret_cast<const char*>(bytes.data());
     const json j = json::parse(begin, begin + bytes.size(), nullptr, /*allow_exceptions=*/false);
@@ -57,7 +66,7 @@ Result<CarveParams> load_carve_params(std::span<const std::byte> bytes) {
     Reader rd;
     const auto fail = [&]() { return make_error(ErrorCode::InvalidArgument, "carve params: " + rd.err); };
     if (!rd.keys(j, "root", {"format", "smoothing", "crown_round_mm", "verge_drop_mm", "blend_mm", "blend_slope_factor", "blend_min_mm",
-            "blend_max_mm", "deck", "sources"})) return fail();
+            "blend_max_mm", "deck", "junction_fade", "sources"})) return fail();
     std::string format;
     if (!rd.text(j, "root", "format", format)) return fail();
     if (format != "g2m.carve/1") return make_error(ErrorCode::Unsupported, "carve params: format '" + format + "'");
@@ -76,6 +85,15 @@ Result<CarveParams> load_carve_params(std::span<const std::byte> bytes) {
         !rd.integer(*deck, "deck", "clearance_mm", 1, 5000, out.deck.clearance_mm) ||
         !rd.integer(*deck, "deck", "ramp_mm", 1, 50000, out.deck.ramp_mm) ||
         !rd.integer(*deck, "deck", "margin_mm", 0, 10000, out.deck.margin_mm)) return fail();
+    const auto* fade = rd.field(j, "root", "junction_fade");
+    if (!fade || !rd.keys(*fade, "junction_fade", {"slope_per_mille", "min_mm", "max_mm", "verge_mm"}) ||
+        !rd.integer(*fade, "junction_fade", "slope_per_mille", 1, 1000, out.junction_fade_slope_per_mille) ||
+        !rd.integer(*fade, "junction_fade", "min_mm", 1, 100000, out.junction_fade_min_mm) ||
+        !rd.integer(*fade, "junction_fade", "max_mm", 1, 100000, out.junction_fade_max_mm) ||
+        !rd.integer(*fade, "junction_fade", "verge_mm", 1, 100000, out.junction_fade_verge_mm)) return fail();
+    if (out.junction_fade_min_mm > out.junction_fade_max_mm) { rd.fail("junction_fade.min_mm exceeds max_mm"); return fail(); }
+    // psi <= phi (D42): the verge term never outlasts the crown term, so z_J stays a convex combination of approach heights.
+    if (out.junction_fade_verge_mm > out.junction_fade_min_mm) { rd.fail("junction_fade.verge_mm exceeds min_mm"); return fail(); }
     const auto* sources = rd.field(j, "root", "sources");
     if (!sources || !rd.object(*sources, "sources")) return fail();
     for (auto it = sources->begin(); it != sources->end(); ++it)

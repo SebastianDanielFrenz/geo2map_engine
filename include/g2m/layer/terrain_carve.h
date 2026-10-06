@@ -77,6 +77,7 @@ struct CarveOptions {
     bool blend_from_raw = false;            // T12 sabotage: blends (and their widths) read the raw DEM, the terrain the smoothed one
     bool first_come_ownership = false;      // T14 sabotage: the first candidate of each kind wins instead of the min / max rules
     bool deck_clamp = true;                 // T15 sabotage: no clearance clamp under bridges
+    bool junction_relief_fade = true;       // D42 sabotage: false keeps every approach's full relief (the D22-D24 surface)
     std::uint64_t candidate_order_seed = 0; // T14: visit the candidates of a bucket in a seeded permutation (0 = stored order)
 };
 

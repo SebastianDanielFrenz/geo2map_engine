@@ -679,9 +679,9 @@ TEST_CASE("carve: junction gradients and blend slopes of the busy tiles (G3-D)",
         "%zu junctions over that bound + 0.02; blend stations steeper than 1:1.5: %zu of %zu\n", junctions, max_grad, worst_where, worst_excess, worst_ratio,
         over_bound, steep, stations);
     REQUIRE(junctions > 50);
-    // Measured, not bounded by the design's claim (D41): the Shepard junction surface (4.2) is a convex combination of
-    // the approach surfaces, but its gradient is not bounded by theirs - where two trim segments are close, it turns
-    // from one approach surface to the other within a fraction of a metre. What is asserted is that carving adds no
+    // The junction surface's own gradient bound (what the trim data allow) is asserted in test_junction_gradient.cpp
+    // (D42); counted over every core point including the verge corners, where two approaches' trim data sit centimetres
+    // apart, this line stays a report (D41). What is asserted here is that carving adds no
     // discontinuity of its own inside a junction (a step reads as a gradient of tens: the deck clamp under the flat
     // DEM's ground-level bridges gave 12.7 before clamped samples were excluded) and that the 1:1.5 blends that cannot
     // reach the terrain within 15 m stay rare (design 6.3: counted, not hidden).
@@ -769,7 +769,7 @@ TEST_CASE("carve: layer description, inputs and config text", "[layer][carve]") 
     for (int l = 0; l <= 6; ++l) CHECK(has_level(d.levels, l));
     CHECK_FALSE(has_level(d.levels, 7));
     const auto& sha = builtin_carve_default().content_sha256;
-    CHECK(terrain_carved_config_text() == "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 carve=" +
+    CHECK(terrain_carved_config_text() == "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 junction=D42 carve=" +
         to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even");
     // carve_road_geom_keys: one level-2 tile in the middle, four at a level-2 corner.
     CHECK(carve_road_geom_keys(l0(1821, 21685)).size() == 1);

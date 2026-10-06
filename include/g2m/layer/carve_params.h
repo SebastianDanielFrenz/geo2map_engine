@@ -5,6 +5,7 @@
 // Every number is an integer (millimetres, metres or percent) like the road rules. The JSON is embedded at build time.
 #pragma once
 #include "g2m/core/result.h"
+#include "g2m/layer/road_junction.h"
 #include "g2m/layer/road_surface.h"
 #include "g2m/layer/tile_container.h"
 #include <cstddef>
@@ -42,6 +43,9 @@ struct CarveParams {
     std::int32_t blend_slope_factor = 0; // b >= factor * |terrain - road| at the edge (1:1.5 slope limit, design 6.3)
     std::int32_t blend_min_mm = 0, blend_max_mm = 0;
     CarveDeck deck;
+    // Decision D42: the junction relief fade (junction_fade: slope_per_mille, min_mm, max_mm, verge_mm).
+    std::int32_t junction_fade_slope_per_mille = 0;
+    std::int32_t junction_fade_min_mm = 0, junction_fade_max_mm = 0, junction_fade_verge_mm = 0;
     ContentHash content_sha256{};      // SHA-256 of the JSON bytes the parameters were loaded from
     friend bool operator==(const CarveParams&, const CarveParams&) = default;
 
@@ -49,6 +53,8 @@ struct CarveParams {
     std::int32_t blend_for_class_mm(std::string_view highway) const;
     // The two numbers road_surface_height_m reads (crown_round_mm, verge_drop_mm) in metres.
     RoadSurfaceParams surface_params() const;
+    // The junction relief fade of D42 (slope as a ratio, lengths in metres).
+    JunctionFadeParams junction_fade_params() const;
 };
 
 // Strict loader: format "g2m.carve/1", integers only, unknown or missing keys rejected, every highway class of

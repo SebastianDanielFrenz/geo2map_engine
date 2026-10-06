@@ -112,16 +112,31 @@ struct JunctionSurfaceApproach {
     double trim_ax = 0, trim_ay = 0, trim_bx = 0, trim_by = 0;
     bool has_ramp = false;
     ProfileFeature ramp;                 // plateau [0, trim] at the raised height, one ramp beyond the trim line
+    double relief_m = 0;                 // max |z_i - b_i| over the paved band at the trim station (decision D42)
+    double fade_m = 0;                   // the crown fade length l_i (D42); +inf keeps the full relief everywhere
+    double verge_fade_m = 0;             // the verge fade length (D42); +inf keeps the full verge everywhere
 };
 // The data junction_height_m needs. Built once per junction; evaluation is pure and allocation-free.
 struct JunctionSurface {
     std::vector<JunctionSurfaceApproach> approaches;   // the junction's used approaches, in RoadJunction::approaches order
 };
 
+// The relief fade of decision D42: approach i's cross-section relief (crown, verge, the raise's sidewalk step) fades
+// out over l_i = clamp(2 * relief_i / slope, min_m, max_m) from its trim segment, so the fade itself is never steeper
+// than `slope` (the smooth step's peak slope is 2). Read from data/carve/carve_default.json ("junction_fade").
+struct JunctionFadeParams {
+    double slope = 0.010;
+    double min_m = 3.0;
+    double max_m = 15.0;
+    double verge_m = 1.5;     // the verge term (outside the paved band) fades over this fixed length
+    friend bool operator==(const JunctionFadeParams&, const JunctionFadeParams&) = default;
+};
+
 // The surface of a built junction (decline None, at least two used approaches). Nullopt otherwise or when a point
-// cannot be placed. `tile` is the tile the junction was built from.
+// cannot be placed. `tile` is the tile the junction was built from; `params` and `fade` set each approach's relief
+// and fade length (D42).
 std::optional<JunctionSurface> make_junction_surface(const RoadGeomTile& tile, const RoadJunction& junction,
-    const RoadRules& rules = builtin_road_rules_de());
+    const RoadRules& rules = builtin_road_rules_de(), const RoadSurfaceParams& params = {}, const JunctionFadeParams& fade = {});
 
 // The approach surface z_i(X) of design 4.2 for X = (x, y) in the UTM frame (metres): X is projected onto the
 // approach's reference polyline (nearest segment, parameter clamped to the polyline, except that it may run before
@@ -132,14 +147,31 @@ std::optional<JunctionSurface> make_junction_surface(const RoadGeomTile& tile, c
 double junction_approach_height_m(const JunctionSurface& surface, const RoadGeomTile& tile, std::size_t approach,
     double x, double y, const RoadSurfaceParams& params = {}) noexcept;
 
+// The three readings of approach i at X that decision D42 blends, from one projection (that of
+// junction_approach_height_m): base b_i at lateral offset 0 (profile height, the raise of a table junction where t = 0
+// lies on the carriageway, the tangent extension before station 0), paved p_i at t clamped to the paved band, and the
+// full surface z_i. All three are heights the approach's own cross-section takes at the projected station.
+struct JunctionApproachHeights { double base = 0, paved = 0, full = 0; };
+JunctionApproachHeights junction_approach_heights(const JunctionSurface& surface, const RoadGeomTile& tile, std::size_t approach,
+    double x, double y, const RoadSurfaceParams& params = {}) noexcept;
+
+// The relief weights of D42: phi_i(X) = road_smooth_step(1 - d_i / l_i) for the paved relief and psi_i(X) the same
+// with the verge fade length (d_i the distance to trim segment i): 1 on the trim segment with zero slope there, 0
+// from the fade length on. psi_i <= phi_i (the verge fade is never longer than the crown fade), so v_i is a convex
+// combination of b_i, p_i and z_i.
+void junction_relief_weights(const JunctionSurface& surface, std::size_t approach, double x, double y, double& phi, double& psi) noexcept;
+
 // The blend weights w_i of design 4.2 (product form of inverse squared distances to the trim segments; they sum to
 // 1, w_i = 1 on trim segment i). `weights` has one slot per approach.
 void junction_weights(const JunctionSurface& surface, double x, double y, std::span<double> weights) noexcept;
 
-// z_J(X) = sum_i w_i z_i(X). The raise of a table or hump junction is part of the z_i (decision D24), so over the
-// approaches' carriageways it equals the raised core on every trim line and it does not step on a sidewalk. X is
-// assumed to lie inside the junction's outer ring (the caller decides ownership). Fixed approach order, only
-// + - * / and det::sqrt: identical on every platform.
+// z_J(X) = sum_i w_i v_i(X), v_i = b_i + phi_i (p_i - b_i) + psi_i (z_i - p_i) (decision D42; D22-D24 had v_i = z_i),
+// p_i the approach surface with t clamped to its paved band: each approach's paved relief (crown, the sidewalk step of a
+// raise) fades out over l_i and its verge term over the verge fade length from its trim line, so inside the junction
+// the weights mix the approach bases, which agree at the node. v_i = z_i on trim i, so z_J matches the approach
+// surface there with C1 contact. The raise of a table or hump junction is part of b_i (decision D24) over the
+// carriageway. X is assumed to lie inside the junction's outer ring (the caller decides ownership). Fixed approach
+// order, only + - * / and det::sqrt: identical on every platform.
 double junction_height_m(const JunctionSurface& surface, const RoadGeomTile& tile, double x, double y,
     const RoadSurfaceParams& params = {}) noexcept;
 

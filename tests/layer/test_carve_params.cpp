@@ -36,7 +36,7 @@ TEST_CASE("The embedded carve file equals data/carve/carve_default.json and its 
     const std::string file((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     CHECK(file == embedded_text());
     const auto digest = Sha256::of(builtin_carve_default_bytes());
-    CHECK(to_hex(digest) == "5da32bdafbdeb64beab380df0cf9b4a56769f80bde197d696dd0ddf884e077af");
+    CHECK(to_hex(digest) == "db0a26a349d9ab5ec9cf62ffbaf23b0d69416e1126f7b7adf2843440afdc4020");
     CHECK(builtin_carve_default().content_sha256 == digest);
     // It is a separate file from the road rules: the roads.geom config hash never sees it (design D8, D12).
     CHECK(digest != builtin_road_rules_de().content_sha256);
@@ -51,6 +51,11 @@ TEST_CASE("The default carve parameters of design 8.2", "[layer][carve]") {
     CHECK(c.blend_slope_factor == 3); CHECK(c.blend_min_mm == 3000); CHECK(c.blend_max_mm == 15000);
     CHECK(c.deck.clearance_mm == 550); CHECK(c.deck.ramp_mm == 4000); CHECK(c.deck.margin_mm == 1000);
     CHECK(c.blend_default_mm == 4000);
+    CHECK(c.junction_fade_slope_per_mille == 10); CHECK(c.junction_fade_min_mm == 3000); CHECK(c.junction_fade_max_mm == 15000);
+    CHECK(c.junction_fade_verge_mm == 1500);
+    const JunctionFadeParams fade = c.junction_fade_params();
+    CHECK(fade.slope == 0.010); CHECK(fade.min_m == 3.0); CHECK(fade.max_m == 15.0); CHECK(fade.verge_m == 1.5);
+    CHECK(fade == JunctionFadeParams{});   // make_junction_surface's default is the shipped file
     REQUIRE(c.blend.size() == RoadStyle::default_style().highways.size());
     for (std::size_t i = 1; i < c.blend.size(); ++i) CHECK(c.blend[i - 1].highway < c.blend[i].highway);
     // The blend widths up to 15 m are what the junction rules' proof assumes.
@@ -100,4 +105,12 @@ TEST_CASE("The carve loader is strict", "[layer][carve]") {
     CHECK_FALSE(load_text(mutated("\"margin_mm\": 1000", "\"margin_mm\": -1")));
     CHECK_FALSE(load_text(mutated("\"deck\": {", "\"deckx\": {")));
     CHECK_FALSE(load_text(mutated("\"sources\": {", "\"sourcesx\": {")));
+    // junction_fade (D42)
+    CHECK_FALSE(load_text(mutated("\"junction_fade\": {", "\"junction_fadex\": {")));
+    CHECK_FALSE(load_text(mutated("\"slope_per_mille\": 10", "\"slope_per_mille\": 0")));
+    CHECK_FALSE(load_text(mutated("\"slope_per_mille\": 10", "\"slope_per_mille\": 10, \"bogus\": 1")));
+    CHECK_FALSE(load_text(mutated("\"min_mm\": 3000, \"max_mm\": 15000", "\"min_mm\": 16000, \"max_mm\": 15000")));   // min above max
+    CHECK_FALSE(load_text(mutated("\"verge_mm\": 1500", "\"verge_mm\": 3001")));                                     // verge above min
+    CHECK_FALSE(load_text(mutated("\"verge_mm\": 1500", "\"verge_mm\": 0")));
+    CHECK(load_text(mutated("\"verge_mm\": 1500", "\"verge_mm\": 3000")));                                           // verge == min is fine
 }

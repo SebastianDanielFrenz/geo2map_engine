@@ -18,7 +18,7 @@ cell-registered, row 0 = south, NoData = `INT32_MIN` (`encode_height_tile` / `de
 | Encoding | 1 (SrcElev), encoding version 1 |
 | Header datum | level 0: the datum of the `g2m.elev.base` inputs (DHHN2016 or EGM2008; mixed datums, or a `roads.geom` tile in another datum, are rejected); levels 1-6: DHHN2016, as `g2m.terrain.height` |
 | Header height offset | 0 (input offsets are applied once, before carving) |
-| Config hash | SHA-256 of `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 carve=<sha256 of data/carve/carve_default.json>; L1-L6 mean-of-4 half-even` (`terrain_carved_config_text()`) |
+| Config hash | SHA-256 of `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 junction=D42 carve=<sha256 of data/carve/carve_default.json>; L1-L6 mean-of-4 half-even` (`terrain_carved_config_text()`) |
 
 ## Inputs
 
@@ -36,7 +36,8 @@ Level 0, per cell with centre (E + 0.5, N + 0.5) in zone metres:
    k = [138, 621, 1024, 621, 138], rounded half-even on int64, then `h + round_half_even(35 · (s − h) / 100)`. A NoData cell
    stays NoData.
 2. **Cores.** Inside the outer ring of a carved junction (not declined, not `OnStructure`): the junction surface
-   (`junction_height_m`); junction cores beat approach cores; among several, the lowest z. Else, on a ground approach between
+   (`junction_height_m`, design D42: the weights mix the approach bases, each approach's crown and verge relief fades out
+   from its trim over `junction_fade`); junction cores beat approach cores; among several, the lowest z. Else, on a ground approach between
    its trims and within its outer edges (`carve_footprint`): `road_surface_height_m`; the lowest z.
 3. **Blends.** Else the blend of largest weight w = 1 − S(d/b), ties to the lowest z, value z_b + (T − z_b) · S(d/b), with
    S the smooth step, d the distance to an approach segment's band rectangle or to a junction ring edge (design D40), z_b the
