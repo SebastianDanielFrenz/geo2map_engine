@@ -887,3 +887,14 @@ without it unchanged. Decisions D36-D41 in `docs/street_fidelity/p2_junction_des
 (T12-T15, T17, T19, smoothing parity, server + 4-worker bake), fixture `tests/support/carve_fixture.h` (`CarveFixture`,
 `fixture_world`, `carve_tilted_dem`); golden `g3d` (`tests/golden/golden_g3d.cpp`, `testdata/golden/g3d_golden.txt`, 4 tiles,
 1 vs 4 workers checked, Windows = Linux).
+
+Junction gradient (design D42, after slice 9): the junction surface blends v_i = b_i + phi_i (p_i - b_i) + psi_i (z_i - p_i)
+instead of z_i (b base, p paved band only, z full approach surface; `junction_approach_heights` returns all three), with
+phi over l_i = clamp(2 relief_i / slope, min, max) and psi over the verge fade (<= min, so z_J stays convex). Parameters:
+`JunctionFadeParams`, the `junction_fade` block of `carve_default.json` (`slope_per_mille` 10, `min_mm` 3000, `max_mm` 15000,
+`verge_mm` 1500; `CarveParams::junction_fade_params()`), `make_junction_surface(tile, junction, rules, params, fade)`;
+`CarveOptions::junction_relief_fade` = false is the D22-D24 sabotage. Config text gains `junction=D42`. Test
+`tests/layer/test_junction_gradient.cpp` (`[layer][carve][junction]`): on the road bed and paved rings of every junction touching
+the busy tiles, flat and tilted DEM, gradient <= max(B, 2 F_paved) + 0.02 at >= 2 m from every trim and
+<= max(B, own, 2 F_all) + 0.02 nearer (B steepest approach grade + crossfall, F forced gradient between trim points); the
+sabotage case expects >= 10 flat junctions over; `[.][diag]` cases print per-junction tables, distance bins and a probe.

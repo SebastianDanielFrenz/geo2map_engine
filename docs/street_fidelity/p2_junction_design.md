@@ -539,6 +539,16 @@ For a point X inside the junction's outer ring, with used approaches i = 1..k:
 - **`z_J(X) = Σ_i w_i·ẑ_i(X)`.**
 - **RaisedTable:** add `raised_height_m` inside the ring (4.4).
 
+**As implemented (D24, D42).** The raise enters through the approach surfaces (D24). The blend
+mixes each approach's surface with its cross-section relief faded out away from its trim line
+(D42): `z_J = Σ_i w_i·v_i` with `v_i = b_i + φ_i·(p_i − b_i) + ψ_i·(ẑ_i − p_i)`, where `b_i` is
+ẑ_i read at t = 0 (profile, tangent extension, the raise over the carriageway), `p_i` is ẑ_i
+with t clamped to the paved band, `φ_i = smooth_step(1 − d_i/l_i)` with
+`l_i = clamp(2·relief_i/slope, min, max)` (relief_i = max |ẑ_i − b_i| over the paved band at
+the trim station) and `ψ_i` the same over the fixed verge length (`junction_fade` in
+`carve_default.json`: 10 ‰, 3 m, 15 m, 1.5 m). d_i is the distance to trim segment i, so
+φ_i = ψ_i = 1 with zero slope on the trim line and v_i = ẑ_i there.
+
 **Arithmetic.** Double precision, + − * / only, computed in the fixed approach order.
 Under `/fp:precise` and `-ffp-contract=off` this is bit-identical on Windows and Linux
 (the project's determinism rule). A product of 19 squared distances under 1e4 m²
@@ -555,6 +565,9 @@ stays far inside the double range.
 2. **C1 across trim lines.** Near trim line i, each w_m with m ≠ i ∝ D_i = O(d²), so
    ∂w/∂n = 0 on the line. The normal slope of z_J equals that of ẑ_i.
 3. **No overshoot.** z_J is a convex combination: min_i ẑ_i ≤ z_J ≤ max_i ẑ_i.
+   As implemented (D42): ψ_i ≤ φ_i, so each v_i is a convex combination of the approach's
+   own heights b_i, p_i, ẑ_i at the projected station, and z_J lies within the range of
+   those readings over all approaches (T5 checks exactly that).
 4. **Single node, flat crowns.** At the node all ẑ_i equal the node anchor height
    (P1 profiles share the node plane). Away from it the surface warps smoothly between
    the crowned approaches, with amplitude ≤ c·w_max/2 (≈ 9 cm for 7 m carriageways).
@@ -562,6 +575,17 @@ stays far inside the double range.
    incoming edges" already holds in P1, since every approach takes the same anchor.
    With the completion tier, a bridge anchor replaces the plane for **all** stretches
    at that node (6.6), so the property survives.
+6. **Gradient (D41, D42).** The design's expectation that z_J stays within its
+   approaches' slopes does not hold for any blend: where two trim segments are close
+   the trim data themselves force a gradient F = max |ẑ_i(P) − ẑ_j(Q)| / |PQ| (a crown
+   of 9 cm a few metres from another approach's crown line, a verge edge centimetres
+   from another approach's paved edge at a ring corner), and a C1 transition is steeper
+   than Δ/L somewhere (the product weights peak at 2Δ/L between parallel trims). What is
+   asserted (`test_junction_gradient.cpp`, D42): on the drivable rings (road bed,
+   paved) the gradient is ≤ max(B, 2·F_paved) + 0.02 at points ≥ 2 m from every trim
+   segment and ≤ max(B, own, 2·F_all) + 0.02 nearer, B = steepest approach grade +
+   crossfall; so wherever 2·F_paved ≤ B the bound B + 0.02 itself holds in the
+   interior. Junctions whose data force more are listed with their numbers.
 
 **Rejected:** the PLAN's least-squares plane (PLAN.md 6.3 step 5). A plane can match
 neither crowned approach edges nor a gore junction within 1 cm: a 2.5 % crown is
@@ -1044,6 +1068,10 @@ must not re-derive `roads.geom`, which costs minutes of profile fitting per tile
   "deck": { "clearance_m": 0.55, "ramp_m": 4, "margin_m": 1 } }
 ```
 
+As implemented the keys are integers in mm (`crown_round_mm`, `blend_mm`, ...), and D42
+adds `"junction_fade": { "slope_per_mille": 10, "min_mm": 3000, "max_mm": 15000,
+"verge_mm": 1500 }` (the relief fade of 4.2; verge_mm ≤ min_mm is enforced).
+
 The blend widths per class are [assumed] (the PLAN gives only the 3-15 m range); the
 game uses one `blend_mm` per class from `RoadAttributes`, which slice 1 reads and
 records as the defaults. The classifier table `data/classifiers/esa_worldcover_v200.json`
@@ -1250,6 +1278,7 @@ Each test is listed with its negative control or sabotage, which must make it fa
 | Slice 7 tile invariance | every owner (entry or junction) emitted by two or more tiles has identical records (828 / 853 repeated owners on the fixtures, 0 differ) | node degrees and incident ways read from the tile graph instead of the context: 2 / 6 owners differ |
 | T19 zero allocation / workers | carve with 1 and 10 workers bit-identical; CarveModel::evaluate allocation-free | — |
 | Slice 9 as implemented | `test_terrain_carve.cpp` over the four busiest fixture L0 tiles (A 1856/21718, 1852/21718; B 1822/21685, 1820/21684), flat DEM and the libm-free tilted bumpy rough DEM of `carve_fixture.h`. **T12**: owner switches between adjacent cell centres bisected to 1e-10 m: core↔blend ≤ 0.12 mm, blend↔terrain 0, junction core↔approach core on the trim line ≤ 5.04 mm (bound 1 cm), trim-line samples (16 per used approach, 336 points) ≤ 2.02 mm (bound 1/256 m), every cell = half-even quantisation of the model; reported only (D41): blend↔blend up to 3.44 m, core↔core up to 2.20 m, ring overlap up to 0.296 m. **T13**: 1507 stations, LS crossfall error p50 0.00012, p95 0.00070, p99 0.00108, max 0.00155 (bound 0.002; patch ±2.5 m along the road, ≥ 3 m across, regressors grade + vertical curvature + crown). **T14**: 8851 core/blend cells × 100 seeded candidate orders, 0 differ. **T15**: synthetic bridge over a valley and a lower road: 1696 footprint cells, 542 lowered, 0 above the limit, 0 changed outside the footprint, 2048 lower-road cells unchanged, 0 clearance violations. **T17**: served L0 = `carve_terrain_tile`, header offset applied once, L1 = mean-of-4 of the served L0, L1 ≠ bare pyramid; absent centre = NotFound, roads.geom in another datum rejected. **T19**: 1 = 10 workers, evaluate 0 allocations. **Tile invariance**: 3 seams (an L0 seam, an L0 seam that is also an L2 seam, an L2 seam with roads crossing it), flat and tilted, 2048 cells each: 0 difference. **Smoothing parity** against the game's double smoothing: max 0.80, p99 0.65 height units (1/256 m), 0 NoData mismatches. **Served path**: server and four-worker bake give the same L0 and L1 containers (10 inputs per L0 tile) | T12: blends toward the raw DEM: blend↔terrain 7.03 cm; T13: single-cell slopes 0.102 (cannot meet 0.2 %); T14: first-come ownership: 354 cells differ; T15: clamp off: 542 cells above the limit; T17: no centre, wrong datum, short input list rejected; T19: an allocation in the counted scope is seen; invariance: centre-only DEM differs (0.08-1.05 m), own-L2-tile roads only differs (0.224 m on the seam with crossing roads); smoothing strength 100: 42.9 units |
+| Junction gradient as implemented (D42) | `test_junction_gradient.cpp` over the junctions touching the four busy L0 tiles (71 flat, 20 tilted DEM), 0.5 m lattice of core points each junction owns: on the road bed and paved rings gradient ≤ max(B, 2·F_paved) + 0.02 at ≥ 2 m from every trim segment and ≤ max(B, own, 2·F_all) + 0.02 nearer (B steepest approach grade + crossfall, F the forced gradient between two approaches' trim points, own the approaches' slope at their trims): 0 over on both DEMs; where 2·F_paved ≤ B the interior meets B + 0.02 (worst excess over B 0.000 flat, 0.005 tilted); B + 0.02 met everywhere on the drivable rings at 36 of 71 flat junctions (D22-D24: 1), 6 of 20 tilted (5); 30 flat / 8 tilted junctions have F_paved > B + 0.02 (no surface can meet B) and are printed with their numbers. T5's no-overshoot reads the range of each approach's base, paved and full height | `CarveOptions::junction_relief_fade = false` (the D22-D24 surface): 14 flat junctions over their limit |
 | Goldens | `g3xs` re-recorded (encoding 7 bodies); new `g3j` (junction + furniture sections of both fixtures), `g3d` (carved L0 + class tiles over 4 fixture L0 tiles on the synthetic DEM); Windows = Linux | — |
 
 ---
@@ -1275,7 +1304,10 @@ Each test is listed with its negative control or sabotage, which must make it fa
    - LS cross-slope error percentiles;
    - max road-to-blend step;
    - number of blends over 1:1.5;
-   - max junction gradient against the steepest approach grade + crossfall;
+   - max junction gradient against the steepest approach grade + crossfall (as
+     measured after D42: per junction against B, F_paved, F_all and the approaches'
+     own slope at their trims, interior ≥ 2 m from the trims and near zone separately,
+     drivable rings asserted, outer ring reported - 4.3 property 6);
    - deck clearance violations.
 4. **Cost and size:**
    - CPU-s/km² of `terrain.carved` and `terrain.class` L0 (release, 1 and 10 workers)
@@ -1977,7 +2009,7 @@ rejected.
   (offset polygon, union with the caps): exact too, but needs polygon offsetting and boolean union per line; the rectangle
   maximum gives the same continuity with plain arithmetic. (b) and (c) rejected.
 
-**D41. The junction gradient is measured, not bounded; T12's other owner switches are reported.**
+**D41. The junction gradient is measured, not bounded; T12's other owner switches are reported.** (Gradient part superseded by D42.)
 - 12.3 lists "max junction gradient against the steepest approach grade + crossfall" and 4.3 suggests the Shepard surface stays
   within its approaches' slopes. It does not: the surface is a convex combination of the approach surfaces (no overshoot, 4.3.3
   holds), but its gradient is not bounded by theirs - where two trim segments are close (gore corners, short arms) it turns from
@@ -2008,6 +2040,91 @@ rejected.
   other test suites saturated the CPU measured 0.48-3.9 s mean / 2.5-9.7 s worst - an upper bound, not a figure for the
   layer. `terrain.height` L0 is a copy. No budget exists (12.4); the blend loop in `CarveModel::evaluate` evaluates every
   candidate in the bucket, so a distance pruning bound there is the obvious follow-up if the cost matters.
+
+### Decisions made after slice 9 (junction gradient)
+
+**D42. The junction blend mixes the approach bases; each approach's cross-section relief fades out from its trim line.**
+- Diagnosis (busy tiles, D22-D24 surface, gradient on a 0.25 m lattice of the core points each junction owns): 71 flat and 20
+  tilted junction rows, all above B + 0.02 (B = steepest approach grade + crossfall at the trims). Two separate causes:
+  - **The approach surfaces disagree at the ring, by data.** The forced gradient F (max |ẑ_i(P) − ẑ_j(Q)| / |PQ| over trim
+    points of two approaches) exceeds B + 0.02 at 69 of 71 flat junctions when verge points count (up to 2.95), and over
+    the paved points alone at 30. At ring corners one approach's outer verge edge sits centimetres from another approach's
+    paved edge (F_all 1-2.6 at 3-approach junctions of the A66); trims 3-10 m apart carry crowns of 8-12 cm (F_paved
+    0.04-0.08 on flat terrain). The worst case, node 507507 (A66 1822/21685, 1.10), has two trim segments that CROSS
+    (approaches 2 and 3 near (466676, 5551487), heights 0.33 m apart): F = 2.95, a ring defect, not a surface one.
+  - **The blend carried that relief into the interior.** D22-D24 evaluates ẑ_i at every point of the ring, so far from
+    approach i laterally it reads approach i's crown fall and verge drop (a verge slope of 0.24 at a road-bed point of
+    node 256327242 whose forced gradient is 0.012). By distance to the nearest trim, flat DEM: < 0.5 m max 1.10, 0.5-1 m
+    0.39, 1-2 m 0.24, 2-4 m 0.23, > 4 m 0.20 (7100 of 160930 points over B + 0.02). The worst point of a junction lies a
+    median 0.27 m from a trim. The weight shape (∇w times the spread of the ẑ_i) dominates at 36 of 71 flat junctions.
+    Tilted DEM: the profiles were fitted along each centre line, so the bases b_i themselves disagree across the ring, by
+    up to F_paved 0.70 (node 561158).
+- Alternatives considered:
+  - Alt A: compactly supported Shepard weights with a minimum transition length. Pro: a direct handle on the weight slope.
+    Con: the transition cannot be longer than the distance between two trims (centimetres at a ring corner), so the
+    gradient stays Δ/L of the data; it does not touch the relief carried into the interior, which was the larger part;
+    a support shorter than a trim gap breaks exactness. Rejected.
+  - Alt B: a membrane on a junction-local grid with the trim lines as boundary data (Laplace, or thin plate for C1).
+    Pro: Laplace has a maximum principle (no overshoot) and minimises the Dirichlet energy. Con: neither bounds the
+    maximum gradient - where the boundary data jump by Δ over r it is Δ/r like any surface; C1 contact with the
+    approach slopes needs the biharmonic, which overshoots; an iterative solve per junction (thousands of cells ×
+    iterations) with a fixed iteration count for determinism, solved identically by every tile the junction touches.
+    Several times the cost for the same data-bound result. Rejected.
+  - Alt C: a least-squares plane per junction, blended into each approach over a bounded distance. Pro: a flat interior.
+    Con: the crown relief still has to dissolve between the trim and the plane within the available distance (the same
+    F); a plane cannot follow approaches of different grades on tilted terrain, so the blend zones carry that mismatch;
+    it is PLAN 6.3 step 5, rejected in D6 for exactly that. Rejected.
+  - Alt D: the Lipschitz-minimal (McShane-Whitney) extension min_j (ẑ_j + F·d_j). Pro: reaches F exactly, the best any
+    surface can. Con: only Lipschitz - creases inside the junction and a slope jump on every trim line (no C1, 4.3
+    property 2), which a car feels. Rejected.
+  - Alt E (chosen): keep the product weights (exact, C1, convex, + − * / and det::sqrt only, no allocation) and blend
+    v_i = b_i + φ_i (p_i − b_i) + ψ_i (ẑ_i − p_i) instead of ẑ_i (4.2): the paved relief fades over
+    l_i = clamp(2·relief_i / 0.010, 3 m, 15 m) (the fade itself is never steeper than 1 %), the verge term over 1.5 m.
+    Pro: on the trim line v_i = ẑ_i with zero slope of φ and ψ, so exactness, C1 and the trim-line mismatch are
+    unchanged; inside, the weights mix the bases, which agree at the node on P1 profiles; the cost is the same; the
+    surface stays a convex combination of approach heights (ψ ≤ φ). Con: within ~2 m of the trims little changes (that
+    zone is set by F and C1); the product weights' factor 2 over F remains; on tilted terrain the bases' own
+    disagreement remains.
+- Verge fade: a version without the verge split (one fade for the whole cross-section) left the flat numbers unchanged,
+  because the verge drop sits inside the relief and dominates the near interior; the split is what moved them. Fade
+  parameter variants (slope 5-20 per mille, max 10-20 m, verge 0.75-1.5 m) changed the binned maxima by little.
+- What the test asserts and why not B everywhere: 4.3 property 6.
+- Results (busy tiles, 0.25 m lattice; "drivable" = road bed and paved rings, "interior" = drivable ≥ 2 m from every trim):
+
+  | Fixture, DEM | junctions | drivable max D22-D24 → D42 | interior max | interior over B + 0.02 | drivable over B + 0.02 |
+  |---|---|---|---|---|---|
+  | A frankfurt_hoechst, flat | 38 | 0.222 → 0.180 | 0.185 → 0.068 | 30 → 2 | 38 → 16 |
+  | B hoechst_a66, flat | 33 | 1.102 → 1.102 | 0.199 → 0.047 | 21 → 1 | 33 → 25 |
+  | A, tilted | 11 | 0.536 → 0.501 | 0.236 → 0.236 | 3 → 2 | 8 → 7 |
+  | B, tilted | 9 | 0.855 → 0.855 | 0.166 → 0.166 | 4 → 3 | 8 → 9 |
+
+  By distance to the nearest trim, all core points, flat: 1-2 m 0.242 → 0.185, 2-4 m 0.232 → 0.070, > 4 m 0.202 → 0.038
+  (7100 → 0 of 161011 points over B + 0.02). Tilted: 2-4 m 0.299 → 0.250, > 4 m 0.218 → 0.153. With the outer ring every
+  junction still exceeds B + 0.02 somewhere (the verge corners); that ring is reported, not asserted. The flat interiors
+  still over B + 0.02 have F_paved 0.029-0.064 (633794, an 8-approach ring, 0.068; 1456043917, 0.065; one A66 gore). B's
+  tilted drivable count rises by one junction: node 507103 (two approaches, 17-20 m trims), road-bed maximum 0.062 → 0.068
+  against B + 0.02 = 0.068, in the near zone where the large crown relief of its two approaches (0.20 and 0.29 m) mixes.
+- Junctions where B is impossible for any surface (F_paved > B + 0.02), printed by the test: 30 flat (F_paved 0.045-2.95;
+  above 0.1 at 507147 0.157, 561158 0.126, 10590111146 0.722, 507507 2.95) and 8 tilted (F_paved 0.137-0.702: 561158,
+  256327875, 60682035, 60682037, 6977164078, 2650976157, 32241802, 32243447). A further 40 flat / 10 tilted are possible
+  in principle (F_paved ≤ B + 0.02) but not for a C1 blend with factor 2. Only a different ring (trims further apart, the
+  crossing trims of 507507 repaired) or profiles that follow the DEM's cross slope can move those.
+- Cost (release, Windows, idle machine, both builds measured back to back): per L0 tile mean 115-175 ms on 1 worker and
+  42-64 ms on 10 workers with D42 against 131-178 / 46-64 ms for the D22-D24 build - no measurable change (the slice 9
+  figures of 201-445 / 97-172 ms were taken under other load).
+- D41's ownership switches, re-measured with D42 (worst owner switches diag): blend↔blend 3.44 m, core↔core 2.20 m, ring
+  overlap 0.29 m, trim ≤ 5.04 mm - unchanged; the junction surface is not involved in any of them. What fixing them takes:
+  blend↔blend - replace the max-weight owner rule of 6.3 by a weighted mix of every overlapping blend (Σ w_k z_k / Σ w_k
+  over the bucket's candidates in a fixed order; the loop already visits them all); core↔core - a soft transition between
+  overlapping cores of roads at different heights, which in practice means the merge/diverge gore becomes a junction (the
+  cluster review); ring overlap - clip a junction ring at its own approach's trim line in the ring builder (a roads.geom
+  change: g3j/g3xs re-recorded). Each is a 6.3 or ring-construction design change of its own.
+- Data: `junction_fade` block in `carve_default.json` (SHA-256 `db0a26a3…dc4020`), `JunctionFadeParams`,
+  `CarveOptions::junction_relief_fade` (false = D22-D24, the sabotage). The config text gains `junction=D42`, so the
+  carved layer's config hash and every release id that includes the carved layer change. g3d re-recorded: the heights of
+  all four tiles change, the owner counters do not (`all 346681 396d4efad6d22338`). g3j and g3xs do not change (roads.geom
+  carries no junction heights).
+
 ---
 
 
