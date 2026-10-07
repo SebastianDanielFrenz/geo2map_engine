@@ -35,6 +35,12 @@
 //     else is written, tiles_partial additionally counting a tile with SOME
 //     (not all) NoData samples.
 //
+//  6. Two sources (2026-10-07, DemSources): a km square may come from the Hessen
+//     catalog, the Baden-Wuerttemberg catalog (decode/dgm1_bw.h, -9999 where its
+//     cropped file lists no sample) or both. Both -> merged per sample in
+//     decode_km: a sample BW lists takes the BW height, the rest the Hessen height
+//     (never averaged), with the seam counters in the report. One -> as before.
+//
 // Determinism (PLAN.md's own "output bytes independent of --jobs/cache
 // size"): the SEQUENCE of sink.put() calls a run produces is a pure
 // function of (region, catalog) - ordered_parallel.h's own contract
@@ -54,6 +60,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <future>
 #include <list>
@@ -111,14 +118,29 @@ Result<void> check_tfw(const Catalog& catalog, const CopyRef& ref, int e_km, int
     return {};
 }
 
-Result<std::shared_ptr<const KmEntry>> decode_km(const Catalog& catalog, int e_km, int n_km, DemImportReport& report,
-                                                  std::mutex& report_mutex) {
-    const std::vector<CopyRef> refs = catalog.copies(e_km, n_km);
-    auto entry = std::make_shared<KmEntry>();
-    if (refs.empty()) {
-        entry->covered = false;
-        return std::shared_ptr<const KmEntry>(std::move(entry));
+Result<std::vector<std::int32_t>> quantise_km(const std::vector<float>& raw, const std::string& what) {
+    std::vector<std::int32_t> quantised(raw.size());
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        const float v = raw[i];
+        if (v == -9999.0f) {
+            quantised[i] = kHeightNoData;
+            continue;
+        }
+        const std::optional<std::int32_t> q = quantise_height_half_even(static_cast<double>(v));
+        if (!q) return make_error(ErrorCode::Malformed, "dem: " + what + ": sample out of quantisable range");
+        quantised[i] = *q;
     }
+    return quantised;
+}
+
+using MaybeKm = std::optional<std::vector<std::int32_t>>;
+
+// Hessen side of one km square: nullopt if the catalog has no copy; else the
+// quantised samples of copies()[0], every other copy compared and counted.
+Result<MaybeKm> decode_km_hessen(const Catalog& catalog, int e_km, int n_km, DemImportReport& report,
+                                 std::mutex& report_mutex) {
+    const std::vector<CopyRef> refs = catalog.copies(e_km, n_km);
+    if (refs.empty()) return MaybeKm{};
 
     if (Result<void> ok = check_tfw(catalog, refs.front(), e_km, n_km); !ok) return ok.error();
     Result<std::vector<float>> first = catalog.decode(refs.front());
@@ -127,21 +149,8 @@ Result<std::shared_ptr<const KmEntry>> decode_km(const Catalog& catalog, int e_k
         return make_error(ErrorCode::Malformed,
                           "dem: " + catalog.describe(refs.front()) + ": unexpected sample count");
     }
-
-    std::vector<std::int32_t> quantised(first->size());
-    for (std::size_t i = 0; i < first->size(); ++i) {
-        const float v = (*first)[i];
-        if (v == -9999.0f) {
-            quantised[i] = kHeightNoData;
-            continue;
-        }
-        const std::optional<std::int32_t> q = quantise_height_half_even(static_cast<double>(v));
-        if (!q) {
-            return make_error(ErrorCode::Malformed,
-                              "dem: " + catalog.describe(refs.front()) + ": sample out of quantisable range");
-        }
-        quantised[i] = *q;
-    }
+    Result<std::vector<std::int32_t>> quantised = quantise_km(*first, catalog.describe(refs.front()));
+    if (!quantised) return quantised.error();
 
     if (refs.size() > 1) {
         bool any_differing = false;
@@ -166,9 +175,79 @@ Result<std::shared_ptr<const KmEntry>> decode_km(const Catalog& catalog, int e_k
             ++report.dup_identical;
         }
     }
+    return MaybeKm(std::move(*quantised));
+}
 
+// BW side: copies()[0]'s samples (a 2 km zip never overlaps another, so a
+// second copy of a key would be a delivery error - counted, copies()[0] wins).
+Result<MaybeKm> decode_km_bw(const g2m::decode::dgm1_bw::Catalog& catalog, int e_km, int n_km,
+                             DemImportReport& report, std::mutex& report_mutex) {
+    const auto refs = catalog.copies(e_km, n_km);
+    if (refs.empty()) return MaybeKm{};
+    Result<std::vector<float>> raw = catalog.decode(refs.front());
+    if (!raw) return raw.error();
+    Result<std::vector<std::int32_t>> quantised = quantise_km(*raw, catalog.describe(refs.front()));
+    if (!quantised) return quantised.error();
+    if (refs.size() > 1) {
+        std::lock_guard<std::mutex> lock(report_mutex);
+        ++report.bw_dup_keys;
+    }
+    return MaybeKm(std::move(*quantised));
+}
+
+Result<std::shared_ptr<const KmEntry>> decode_km(const DemSources& sources, int e_km, int n_km,
+                                                  DemImportReport& report, std::mutex& report_mutex) {
+    auto entry = std::make_shared<KmEntry>();
+    MaybeKm hessen;
+    MaybeKm bw;
+    if (sources.hessen != nullptr) {
+        Result<MaybeKm> r = decode_km_hessen(*sources.hessen, e_km, n_km, report, report_mutex);
+        if (!r) return r.error();
+        hessen = std::move(*r);
+    }
+    if (sources.bw != nullptr) {
+        Result<MaybeKm> r = decode_km_bw(*sources.bw, e_km, n_km, report, report_mutex);
+        if (!r) return r.error();
+        bw = std::move(*r);
+    }
+    if (!hessen && !bw) {
+        entry->covered = false;
+        return std::shared_ptr<const KmEntry>(std::move(entry));
+    }
     entry->covered = true;
-    entry->heights = std::move(quantised);
+    if (hessen && bw) {
+        // Per-sample border rule (dem.h, DemSources): a sample BW lists lies inside BW and takes the
+        // BW height, every other sample the Hessen height. Never averaged.
+        std::uint64_t both = 0, differing = 0;
+        std::int64_t max_diff = 0;
+        for (std::size_t i = 0; i < bw->size(); ++i) {
+            const std::int32_t b = (*bw)[i];
+            if (b == kHeightNoData) continue;
+            const std::int32_t h = (*hessen)[i];
+            if (h != kHeightNoData) {
+                ++both;
+                if (h != b) {
+                    ++differing;
+                    max_diff = std::max<std::int64_t>(max_diff, std::llabs(static_cast<std::int64_t>(b) - h));
+                }
+            }
+            (*hessen)[i] = b;
+        }
+        std::lock_guard<std::mutex> lock(report_mutex);
+        ++report.km_merged;
+        report.border_samples_both += both;
+        report.border_samples_differing += differing;
+        report.border_max_abs_diff_units = std::max(report.border_max_abs_diff_units, max_diff);
+        entry->heights = std::move(*hessen);
+    } else if (bw) {
+        {
+            std::lock_guard<std::mutex> lock(report_mutex);
+            ++report.km_bw_only;
+        }
+        entry->heights = std::move(*bw);
+    } else {
+        entry->heights = std::move(*hessen);
+    }
     return std::shared_ptr<const KmEntry>(std::move(entry));
 }
 
@@ -180,8 +259,8 @@ Result<std::shared_ptr<const KmEntry>> decode_km(const Catalog& catalog, int e_k
 // map access.
 class KmCache {
 public:
-    KmCache(const Catalog& catalog, std::size_t capacity, DemImportReport& report, std::mutex& report_mutex)
-        : catalog_(catalog), capacity_(std::max<std::size_t>(1, capacity)), report_(report),
+    KmCache(const DemSources& sources, std::size_t capacity, DemImportReport& report, std::mutex& report_mutex)
+        : sources_(sources), capacity_(std::max<std::size_t>(1, capacity)), report_(report),
           report_mutex_(report_mutex) {}
 
     Result<std::shared_ptr<const KmEntry>> get(int e_km, int n_km) {
@@ -216,7 +295,7 @@ public:
                 std::lock_guard<std::mutex> rl(report_mutex_);
                 ++report_.km_decoded;
             }
-            promise->set_value(decode_km(catalog_, e_km, n_km, report_, report_mutex_));
+            promise->set_value(decode_km(sources_, e_km, n_km, report_, report_mutex_));
         } else {
             std::lock_guard<std::mutex> rl(report_mutex_);
             ++report_.km_cache_hits;
@@ -235,7 +314,7 @@ private:
         std::list<std::uint64_t>::iterator lru_it;
     };
 
-    const Catalog& catalog_;
+    const DemSources sources_;
     std::size_t capacity_;
     DemImportReport& report_;
     std::mutex& report_mutex_;
@@ -261,6 +340,16 @@ KmSpan dgm1_km_span(std::int64_t min_m, std::int64_t extent_m) {
 
 Result<DemImportReport> import_dem(const ResolvedRegion& region, const Catalog& catalog, ITileSink& sink,
                                     std::string_view scope, const DemImportOptions& options) {
+    DemSources sources;
+    sources.hessen = &catalog;
+    return import_dem(region, sources, sink, scope, options);
+}
+
+Result<DemImportReport> import_dem(const ResolvedRegion& region, const DemSources& sources, ITileSink& sink,
+                                    std::string_view scope, const DemImportOptions& options) {
+    if (sources.hessen == nullptr && sources.bw == nullptr) {
+        return make_error(ErrorCode::InvalidArgument, "dem: import_dem needs at least one elevation source");
+    }
     (void)scope; // informational only - see dem.h's own doc comment
     const auto t0 = std::chrono::steady_clock::now();
 
@@ -272,7 +361,7 @@ Result<DemImportReport> import_dem(const ResolvedRegion& region, const Catalog& 
     if (jobs == 0) jobs = std::max(1u, std::thread::hardware_concurrency());
 
     std::mutex report_mutex;
-    KmCache cache(catalog, options.km_cache_tiles, report, report_mutex);
+    KmCache cache(sources, options.km_cache_tiles, report, report_mutex);
 
     const auto produce = [&](std::size_t idx) -> TileOutcome {
         const TileKey& key = keys[idx];

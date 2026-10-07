@@ -49,7 +49,21 @@ struct UtmBboxPart {
     friend bool operator==(const UtmBboxPart&, const UtmBboxPart&) = default;
 };
 
-using RegionPart = std::variant<OsmAdminPart, UtmBboxPart>;
+// A corridor around a UTM polyline (a motorway strip): every point within
+// `half_width_m` of the polyline, plus a square cap of the same size beyond
+// each end (so consecutive segments overlap at a bend instead of leaving a
+// notch). `points` are whole metres in the enclosing RegionSpec's `scheme`
+// zone, (easting, northing), at least two, consecutive points distinct.
+// Resolved as one rectangle per segment (g2m::geom has no polygon union), the
+// tile footprint being the union of the rectangles' own tile sets.
+struct UtmCorridorPart {
+    std::int64_t half_width_m = 0;
+    std::vector<std::pair<std::int64_t, std::int64_t>> points;
+
+    friend bool operator==(const UtmCorridorPart&, const UtmCorridorPart&) = default;
+};
+
+using RegionPart = std::variant<OsmAdminPart, UtmBboxPart, UtmCorridorPart>;
 
 // One named region, as authored by a human (regions.json). `scheme`
 // ("utm32n", ...) is the UTM zone every UtmBboxPart's metres - and every
@@ -90,6 +104,7 @@ Result<std::pair<std::string, std::string>> split_selector(std::string_view sele
 enum class ResolvedPartKind : std::uint8_t {
     OsmAdmin = 0,
     UtmBbox = 1,
+    UtmCorridor = 2,
 };
 
 // One resolved region part: the assembled ring geometry (`rings`,

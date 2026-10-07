@@ -60,6 +60,19 @@ Rules:
 - `parts`: at least one. Each part is one of:
   - `{"kind": "utm_bbox", "west", "south", "east", "north"}` - whole
     metres in `scheme`'s zone. Requires `west < east` and `south < north`.
+  - `{"kind": "utm_corridor", "half_width_m", "points": [[e, n], ...]}` - a
+    strip around a polyline (a motorway): every point within `half_width_m`
+    (1..20000) of the polyline, plus a square cap of the same size beyond
+    each end. `points` are whole metres in `scheme`'s zone, at least two,
+    consecutive points distinct. Resolved as ONE RECTANGLE PER SEGMENT
+    (`g2m::geom` has no polygon union): a segment's rectangle spans the
+    segment, `half_width_m` beyond each end and `half_width_m` to each side, so
+    consecutive segments overlap at a bend with no notch. The tile footprint is the
+    union of the rectangles' own `tiles_near` sets; the persisted
+    `vertices` is `4 * segments` and `geometry_hash` covers the rectangles'
+    rings (millimetre-rounded corners, `sqrt` is the only non-`+ - * /`
+    operation and is correctly rounded under IEEE 754). A corridor part
+    carries no `osm` dependency, so it resolves identically against any PBF.
   - `{"kind": "osm_admin", "relation", "expect_name"?, "expect_admin_level"?}`
     - `relation` is the OSM relation id (a positive integer). If given,
     `expect_name`/`expect_admin_level` are checked against the resolved
@@ -147,6 +160,7 @@ silently accept a typo).
   "halo_m": 2000,
   "parts": [
     {"kind": "utm_bbox", "id": 0, "name": "", "vertices": 4, "geometry_hash": "<16 hex>", "role_mismatches": 0},
+    {"kind": "utm_corridor", "id": 0, "name": "", "vertices": 8, "geometry_hash": "<16 hex>", "role_mismatches": 0},
     {"kind": "osm_admin", "id": 62650, "name": "Frankfurt am Main", "admin_level": 6,
      "vertices": 1842, "geometry_hash": "<16 hex>", "role_mismatches": 0}
   ],
@@ -160,6 +174,15 @@ silently accept a typo).
 
 Rules:
 
+- `pbf_name` / `pbf_sha256` with several PBFs (`g2m_tiler resolve|import ... --pbf A --pbf B`,
+  `resolve_region(spec, vector<string>)`): the names joined with `+` in the
+  given order, and the SHA-256 of the files' own 32-byte digests concatenated
+  in that order (for ONE file it is that file's own digest, so every
+  single-file artefact is unchanged). Each `osm_admin` part resolves against
+  the FIRST file that holds its relation complete (an extract clips a relation
+  at its own border, so a file that lacks a member way is skipped); the
+  error of the last file is reported when none does. Parts of kind
+  `utm_bbox`/`utm_corridor` never read a PBF.
 - `level` is always 2 today (the tiling grid every source layer uses),
   carried explicitly rather than assumed.
 - Each part's assembled ring geometry (`g2m::geom::RingSet`) is NOT part of

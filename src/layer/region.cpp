@@ -21,7 +21,14 @@ bool valid_region_name(std::string_view name) {
                        [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'; });
 }
 
-const char* resolved_kind_name(ResolvedPartKind k) { return k == ResolvedPartKind::OsmAdmin ? "osm_admin" : "utm_bbox"; }
+const char* resolved_kind_name(ResolvedPartKind k) {
+    switch (k) {
+    case ResolvedPartKind::OsmAdmin: return "osm_admin";
+    case ResolvedPartKind::UtmBbox: return "utm_bbox";
+    case ResolvedPartKind::UtmCorridor: return "utm_corridor";
+    }
+    return "utm_bbox";
+}
 
 // ---- strict JSON reader: UNKNOWN KEYS ARE REJECTED (region.h's own
 // contract - the opposite of release.cpp's Reader, which ignores them for
@@ -185,7 +192,7 @@ Result<std::vector<RegionSpec>> parse_regions(std::string_view text) {
         }
         for (const json& pj : *parts) {
             if (!rd.no_unknown_keys(pj, {"kind", "relation", "expect_name", "expect_admin_level", "west", "south",
-                                          "east", "north"})) {
+                                          "east", "north", "half_width_m", "points"})) {
                 return fail();
             }
             std::string kind;
@@ -211,6 +218,35 @@ Result<std::vector<RegionSpec>> parse_regions(std::string_view text) {
                 if (!(p.west < p.east && p.south < p.north)) {
                     return make_error(ErrorCode::InvalidArgument,
                                        "regions: region '" + spec.name + "': utm_bbox needs west < east, south < north");
+                }
+                spec.parts.push_back(std::move(p));
+            } else if (kind == "utm_corridor") {
+                constexpr std::int64_t kLim = std::int64_t{1} << 33;
+                UtmCorridorPart p;
+                if (!rd.integer(pj, "half_width_m", 1, 20000, p.half_width_m)) return fail();
+                const json* pts = rd.array(pj, "points");
+                if (!pts) return fail();
+                if (pts->size() < 2) {
+                    return make_error(ErrorCode::InvalidArgument, "regions: region '" + spec.name +
+                                                                        "': utm_corridor needs at least 2 points");
+                }
+                for (const json& pt : *pts) {
+                    if (!pt.is_array() || pt.size() != 2 || !pt[0].is_number_integer() || !pt[1].is_number_integer()) {
+                        return make_error(ErrorCode::InvalidArgument,
+                                           "regions: region '" + spec.name +
+                                               "': utm_corridor points must be [easting, northing] integer pairs");
+                    }
+                    const std::int64_t e = pt[0].get<std::int64_t>(), n = pt[1].get<std::int64_t>();
+                    if (e < -kLim || e > kLim || n < -kLim || n > kLim) {
+                        return make_error(ErrorCode::InvalidArgument, "regions: region '" + spec.name +
+                                                                            "': utm_corridor point out of range");
+                    }
+                    if (!p.points.empty() && p.points.back() == std::make_pair(e, n)) {
+                        return make_error(ErrorCode::InvalidArgument,
+                                           "regions: region '" + spec.name +
+                                               "': utm_corridor has two equal consecutive points");
+                    }
+                    p.points.emplace_back(e, n);
                 }
                 spec.parts.push_back(std::move(p));
             } else {
@@ -323,6 +359,8 @@ Result<ResolvedRegion> parse_resolved_region(std::string_view text) {
             p.kind = ResolvedPartKind::OsmAdmin;
         } else if (kind == "utm_bbox") {
             p.kind = ResolvedPartKind::UtmBbox;
+        } else if (kind == "utm_corridor") {
+            p.kind = ResolvedPartKind::UtmCorridor;
         } else {
             return make_error(ErrorCode::InvalidArgument, "resolved region: part kind '" + kind + "'");
         }

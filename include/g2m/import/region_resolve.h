@@ -33,6 +33,17 @@ namespace g2m::import {
 // a RegionSpec that came from parse_regions).
 Result<ResolvedRegion> resolve_region(const RegionSpec& spec, const std::string& pbf_path);
 
+// Several PBF extracts (e.g. Hessen + Regierungsbezirk Karlsruhe, which meet
+// at the Hessen/Baden-Wuerttemberg border). Each osm_admin part is resolved
+// against the FIRST file (in the given order) that holds its relation with
+// every member way and node; a file that lacks the relation, or holds it
+// only in part (an extract clips relations at its border), is skipped, and
+// the error of the LAST file is reported if none resolves it. `pbf_name` is
+// the file names joined by '+' and `pbf_sha256` is the SHA-256 of the files'
+// own 32-byte digests concatenated in the given order (for exactly one file
+// that is the file's own digest, so the one-file overload is unchanged).
+Result<ResolvedRegion> resolve_region(const RegionSpec& spec, const std::vector<std::string>& pbf_paths);
+
 // One administrative-boundary relation candidate (`find_admin` below).
 struct AdminCandidate {
     std::int64_t relation_id = 0;

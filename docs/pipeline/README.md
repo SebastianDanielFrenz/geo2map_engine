@@ -72,7 +72,7 @@ Each stage has: inputs, code, output, versioning, tiling, tests and consumers. D
 
 | | |
 |---|---|
-| Inputs | A region definition (`g2m.regions/1` JSON, for the home area `racing_game/data/world/regions.json#home`), the OSM PBF to cut admin boundaries, the DGM1 ZIPs, the OSM PBF, the WorldCover GeoTIFFs. |
+| Inputs | A region definition (`g2m.regions/1` JSON, for the home area `racing_game/data/world/regions.json#home`; parts `osm_admin`, `utm_bbox`, `utm_corridor`), one or more OSM PBFs (`--pbf` repeatable), the Hessen DGM1 ZIPs (`--dem-data`) and optionally the Baden-Wuerttemberg DGM1 ZIPs (`--bw-data`), the WorldCover GeoTIFFs. |
 | Code | `apps/g2m_tiler/main.cpp` (subcommands `find-admin`, `resolve`, `import-dem`, `import-osm`, `import-landcover`, `import`); `include/g2m/import/{dem,osm,landcover}.h`; decoders in `include/g2m/decode/`. |
 | Output | Three raw layers, level 2, in the **source store** (`tiles.sqlite3` + `tiles_blobs/`), scope e.g. `home-2026-09r1`. An `import_report_<scope>.json` is written next to the store. |
 | Encodings | `g2m.src.elev.dgm1` body encoding 1 ([src_elev.md](../formats/src_elev.md)); `g2m.src.landcover` encoding 2 ([src_landcover.md](../formats/src_landcover.md)); `g2m.src.osm` encoding 3 ([src_osm.md](../formats/src_osm.md)). |
@@ -261,6 +261,8 @@ Files are under `S:\claude_code\geo2map_data\downloads\` (not in git). The full 
 | Dataset | Provider | Licence | Attribution duty | Local path | Stage | Status |
 |---|---|---|---|---|---|---|
 | DGM1, 1 m terrain heights | HVBG Hessen | dl-de/zero-2.0 | Optional (we keep it) | `downloads/dgm1/PKT_*.zip` (8 files, 8.5 GB) | `import-dem` -> `g2m.src.elev.dgm1` | **Used** |
+| DGM1, 1 m terrain heights (Mannheim/Viernheim strip) | LGL Baden-Wuerttemberg | dl-de/by-2.0 | **Required**: "Datenquelle: LGL, www.lgl-bw.de" | `downloads/lgl_bw_dgm1/dgm1_32_*_2_bw.zip` (59 files) | `import-dem --bw-data` -> `g2m.src.elev.dgm1` (merged with Hessen at the border) | **Used** (corridor region) |
+| OSM Regierungsbezirk Karlsruhe extract | Geofabrik / OpenStreetMap | ODbL 1.0 | **Required** | `downloads/karlsruhe-regbez-latest.osm.pbf` | `import-osm` (second `--pbf`), merged with the Hessen extract | **Used** (corridor region) |
 | OSM Hessen extract | Geofabrik / OpenStreetMap | ODbL 1.0 | **Required**: (c) OpenStreetMap contributors; share-alike for derived databases (affects served packs, G7) | `downloads/hessen-latest.osm.pbf` | `import-osm` -> `g2m.src.osm`; roads, grip, colours | **Used** |
 | ESA WorldCover 2021 v200 | ESA | CC BY 4.0 | **Required** | `downloads/ESA_WorldCover_10m_2021_v200_N48E006_Map.tif` | `import-landcover` -> `g2m.src.landcover` | **Used** |
 | Copernicus GLO-30 DEM tiles N49 and N50 | Copernicus / ESA | Copernicus DEM licence | **Required** (DLR, Airbus, EU, ESA text in SOURCES.md) | `downloads/Copernicus_DSM_COG_10_N49_00_E008_00_DEM.tif`, `..._N50_...` | Planned fallback for DGM1 gaps | Downloaded, not used |
@@ -378,7 +380,7 @@ g2m_tiler stats --store STORE_DIR --scope SCOPE
 g2m_tiler index-hash --store STORE_DIR --scope SCOPE
 ```
 
-`import` runs resolve + `import-dem` + `import-osm` + `import-landcover` and writes `import_report_<scope>.json`. The individual `import-*` subcommands take `--resolved` instead of the region argument. `diff-scopes` compares two stores tile by tile. `check-dem-nodata` reports DEM tiles with no data. The real home import (scope `home-2026-09r1`) took 131 s and wrote 3170 tiles (807 MB) per its report.
+`import` runs resolve + `import-dem` + `import-osm` + `import-landcover` and writes `import_report_<scope>.json`. `--pbf` may be given several times and `--bw-data DIR` adds the Baden-Wuerttemberg DEM (see [raw_layers.md](raw_layers.md) "Two DEM sources"); `--dem-data` becomes optional when `--bw-data` is given. The individual `import-*` subcommands take `--resolved` instead of the region argument. `diff-scopes` compares two stores tile by tile. `check-dem-nodata` reports DEM tiles with no data. The real home import (scope `home-2026-09r1`) took 131 s and wrote 3170 tiles (807 MB) per its report.
 
 ### 7.3 Bake derived layers
 

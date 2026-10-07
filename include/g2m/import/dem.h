@@ -10,6 +10,7 @@
 
 #include "g2m/core/result.h"
 #include "g2m/decode/dgm1.h"
+#include "g2m/decode/dgm1_bw.h"
 #include "g2m/import/sink.h"
 #include "g2m/layer/region.h"
 #include "g2m/layer/src_elev.h"
@@ -74,8 +75,32 @@ struct DemImportReport {
     std::uint64_t km_decoded = 0;    // dgm1::Catalog::decode() calls actually made
     std::uint64_t km_cache_hits = 0; // km lookups served without a fresh decode (in cache or in flight)
 
+    // Baden-Wuerttemberg source (DemSources::bw). Scheduling-dependent like
+    // the dup_* counters above (a smaller cache can re-decode a square):
+    std::uint64_t km_bw_only = 0;          // decoded squares covered by BW alone
+    std::uint64_t km_merged = 0;           // decoded squares covered by BOTH sources (border squares)
+    std::uint64_t bw_dup_keys = 0;         // BW squares with more than one copy (copies()[0] wins)
+    std::uint64_t border_samples_both = 0; // samples valid in both sources of a merged square (BW wins)
+    std::uint64_t border_samples_differing = 0; // ... of which the two heights differ after quantisation
+    std::int64_t border_max_abs_diff_units = 0; // largest |BW - Hessen| among those, in kHeightUnitsPerMetre units
+
     double wall_ms = 0.0;
 };
+
+// The elevation sources an import draws on. Either pointer may be null; at
+// least one must be set. A 1 km square present in both is MERGED per sample
+// (never averaged): a sample the BW file lists lies inside Baden-Wuerttemberg
+// (BW tiles are cropped at the state border, see decode/dgm1_bw.h) and takes
+// the BW height; every other sample takes the Hessen height. A square in one
+// source only is used as is. Both deliveries are DHHN2016 normal heights, so
+// no datum shift exists; border_max_abs_diff_units reports the seam step.
+struct DemSources {
+    const g2m::decode::dgm1::Catalog* hessen = nullptr;
+    const g2m::decode::dgm1_bw::Catalog* bw = nullptr;
+};
+
+Result<DemImportReport> import_dem(const ResolvedRegion& region, const DemSources& sources, ITileSink& sink,
+                                    std::string_view scope, const DemImportOptions& options = {});
 
 // Imports every level-2 tile in `region.tiles` (region.h's tile_keys())
 // from `catalog` into `sink` as layer g2m.src.elev.dgm1. `scope` names the

@@ -48,6 +48,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
@@ -411,6 +413,147 @@ Result<osm::OsmData> extract_region_set(const std::string& pbf, const ResolvedRe
     } catch (const std::exception& e) {
         return make_error(ErrorCode::Io, std::string("osm: extract_region_set: ") + e.what());
     }
+}
+
+namespace {
+
+osm::OsmBuilder::TagList tag_list(const osm::OsmData& d, std::span<const osm::Tag> tags) {
+    osm::OsmBuilder::TagList out;
+    out.reserve(tags.size());
+    for (const osm::Tag& t : tags) out.emplace_back(std::string(d.str(t.key)), std::string(d.str(t.value)));
+    return out;
+}
+
+std::vector<osm::OsmBuilder::MemberIn> member_list(const osm::OsmData& d, std::span<const osm::Member> members) {
+    std::vector<osm::OsmBuilder::MemberIn> out;
+    out.reserve(members.size());
+    for (const osm::Member& m : members) {
+        out.push_back(osm::OsmBuilder::MemberIn{m.type, m.ref, std::string(d.str(m.role))});
+    }
+    return out;
+}
+
+bool same_tags(const osm::OsmData& a, std::span<const osm::Tag> ta, const osm::OsmData& b,
+               std::span<const osm::Tag> tb) {
+    if (ta.size() != tb.size()) return false;
+    for (std::size_t i = 0; i < ta.size(); ++i) {
+        if (a.str(ta[i].key) != b.str(tb[i].key) || a.str(ta[i].value) != b.str(tb[i].value)) return false;
+    }
+    return true;
+}
+
+bool same_members(const osm::OsmData& a, std::span<const osm::Member> ma, const osm::OsmData& b,
+                  std::span<const osm::Member> mb) {
+    if (ma.size() != mb.size()) return false;
+    for (std::size_t i = 0; i < ma.size(); ++i) {
+        if (ma[i].type != mb[i].type || ma[i].ref != mb[i].ref || a.str(ma[i].role) != b.str(mb[i].role)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+Result<osm::OsmData> merge_osm_data(const osm::OsmData& first, const osm::OsmData& second,
+                                     OsmMergeReport* report_out) {
+    OsmMergeReport local;
+    OsmMergeReport& report = report_out != nullptr ? *report_out : local;
+    osm::OsmBuilder builder;
+
+    for (const osm::Node& n : first.nodes) builder.add_node(n.id, n.lat, n.lon, tag_list(first, first.tags_of(n)));
+    for (const osm::Node& n : second.nodes) {
+        const osm::Node* other = first.find_node(n.id);
+        if (other == nullptr) {
+            builder.add_node(n.id, n.lat, n.lon, tag_list(second, second.tags_of(n)));
+            continue;
+        }
+        ++report.nodes_both;
+        if (other->lat != n.lat || other->lon != n.lon ||
+            !same_tags(first, first.tags_of(*other), second, second.tags_of(n))) {
+            ++report.nodes_conflicting;
+        }
+    }
+
+    for (const osm::Way& w : first.ways) {
+        const auto refs = first.refs_of(w);
+        builder.add_way(w.id, std::vector<std::int64_t>(refs.begin(), refs.end()), tag_list(first, first.tags_of(w)));
+    }
+    for (const osm::Way& w : second.ways) {
+        const osm::Way* other = first.find_way(w.id);
+        const auto rb = second.refs_of(w);
+        if (other == nullptr) {
+            builder.add_way(w.id, std::vector<std::int64_t>(rb.begin(), rb.end()), tag_list(second, second.tags_of(w)));
+            continue;
+        }
+        ++report.ways_both;
+        const auto ra = first.refs_of(*other);
+        if (!std::equal(ra.begin(), ra.end(), rb.begin(), rb.end()) ||
+            !same_tags(first, first.tags_of(*other), second, second.tags_of(w))) {
+            ++report.ways_conflicting;
+        }
+    }
+
+    for (const osm::Relation& r : first.relations) {
+        const osm::Relation* other = second.find_relation(r.id);
+        // The longer member list wins; a tie keeps the first set's copy.
+        if (other != nullptr && other->members_count > r.members_count) continue; // added from `second` below
+        builder.add_relation(r.id, member_list(first, first.members_of(r)), tag_list(first, first.tags_of(r)));
+    }
+    for (const osm::Relation& r : second.relations) {
+        const osm::Relation* other = first.find_relation(r.id);
+        if (other == nullptr || r.members_count > other->members_count) {
+            builder.add_relation(r.id, member_list(second, second.members_of(r)), tag_list(second, second.tags_of(r)));
+        }
+        if (other != nullptr) {
+            ++report.relations_both;
+            if (!same_members(first, first.members_of(*other), second, second.members_of(r)) ||
+                !same_tags(first, first.tags_of(*other), second, second.tags_of(r))) {
+                ++report.relations_conflicting;
+            }
+        }
+    }
+    return builder.build();
+}
+
+Result<osm::OsmData> extract_region_set(const std::vector<std::string>& pbfs, const ResolvedRegion& region,
+                                         OsmExtractReport* report_out, OsmMergeReport* merge_report_out) {
+    if (pbfs.empty()) return make_error(ErrorCode::InvalidArgument, "osm: extract_region_set: no PBF given");
+    OsmExtractReport total;
+    OsmMergeReport merge_total;
+    std::optional<osm::OsmData> merged;
+    for (const std::string& pbf : pbfs) {
+        OsmExtractReport one;
+        Result<osm::OsmData> set = extract_region_set(pbf, region, &one);
+        if (!set) return set.error();
+        total.nodes_total += one.nodes_total;
+        total.nodes_in += one.nodes_in;
+        total.ways_in += one.ways_in;
+        total.ways_incomplete += one.ways_incomplete;
+        total.relations_in += one.relations_in;
+        total.index_bytes = std::max(total.index_bytes, one.index_bytes);
+        total.n1_ms += one.n1_ms;
+        total.w_ms += one.w_ms;
+        total.r_ms += one.r_ms;
+        total.n2_ms += one.n2_ms;
+        if (!merged) {
+            merged = std::move(*set);
+            continue;
+        }
+        OsmMergeReport m;
+        Result<osm::OsmData> next = merge_osm_data(*merged, *set, &m);
+        if (!next) return next.error();
+        merge_total.nodes_both += m.nodes_both;
+        merge_total.nodes_conflicting += m.nodes_conflicting;
+        merge_total.ways_both += m.ways_both;
+        merge_total.ways_conflicting += m.ways_conflicting;
+        merge_total.relations_both += m.relations_both;
+        merge_total.relations_conflicting += m.relations_conflicting;
+        merged = std::move(*next);
+    }
+    if (report_out != nullptr) *report_out = total;
+    if (merge_report_out != nullptr) *merge_report_out = merge_total;
+    return std::move(*merged);
 }
 
 Result<OsmImportReport> import_osm(const ResolvedRegion& region, const osm::OsmData& region_set, ITileSink& sink,

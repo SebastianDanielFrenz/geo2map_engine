@@ -22,6 +22,7 @@ add_executable(g2m_unit_tests
   test_ordered_parallel.cpp
   test_decode_nested_zip.cpp
   test_import_dem.cpp
+  test_corridor_import.cpp
   test_dem_km_span.cpp
   test_osm_clip_index.cpp
   test_import_osm.cpp

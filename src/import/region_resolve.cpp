@@ -10,6 +10,7 @@
 #include "g2m/layer/release.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -285,50 +286,120 @@ Result<ResolvedPart> resolve_osm_admin_part(const OsmAdminPart& part, const std:
 
 } // namespace
 
-Result<ResolvedRegion> resolve_region(const RegionSpec& spec, const std::string& pbf_path) {
+namespace {
+
+// One rectangle per corridor segment (UtmCorridorPart): the segment's own
+// rectangle widened by half_width on both sides and extended by half_width
+// past each end (square caps). Corner coordinates are rounded to whole mm;
+// the only non-+-*/ operation is sqrt (correctly rounded under IEEE 754, so
+// identical on every platform).
+std::vector<geom::RingSet> corridor_rects(const UtmCorridorPart& c) {
+    std::vector<geom::RingSet> out;
+    const double w = static_cast<double>(c.half_width_m) * 1000.0; // mm
+    const auto to_mm = [](double v) { return static_cast<std::int64_t>(std::floor(v + 0.5)); };
+    for (std::size_t i = 0; i + 1 < c.points.size(); ++i) {
+        const double x0 = static_cast<double>(c.points[i].first) * 1000.0;
+        const double y0 = static_cast<double>(c.points[i].second) * 1000.0;
+        const double x1 = static_cast<double>(c.points[i + 1].first) * 1000.0;
+        const double y1 = static_cast<double>(c.points[i + 1].second) * 1000.0;
+        const double dx = x1 - x0, dy = y1 - y0;
+        const double len = std::sqrt(dx * dx + dy * dy);
+        const double ux = dx / len, uy = dy / len; // along
+        const double nx = -uy, ny = ux;            // left normal
+        const double ax = x0 - ux * w, ay = y0 - uy * w; // start cap
+        const double bx = x1 + ux * w, by = y1 + uy * w; // end cap
+        geom::Ring ring{
+            geom::PointMm{to_mm(ax + nx * w), to_mm(ay + ny * w)},
+            geom::PointMm{to_mm(ax - nx * w), to_mm(ay - ny * w)},
+            geom::PointMm{to_mm(bx - nx * w), to_mm(by - ny * w)},
+            geom::PointMm{to_mm(bx + nx * w), to_mm(by + ny * w)},
+        };
+        // Wind counter-clockwise like every assembled outer ring.
+        const geom::PointMm& p0 = ring[0];
+        const geom::PointMm& p1 = ring[1];
+        const geom::PointMm& p2 = ring[2];
+        const std::int64_t cross = (p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+        if (cross < 0) std::reverse(ring.begin(), ring.end());
+        geom::RingSet rs;
+        rs.outers.push_back(std::move(ring));
+        rs.bbox = geom::bounding_box(rs);
+        out.push_back(std::move(rs));
+    }
+    return out;
+}
+
+// Both CLI overloads end up here with the resolved file list.
+Result<ResolvedRegion> resolve_region_impl(const RegionSpec& spec, const std::vector<std::string>& pbf_paths) {
     const std::optional<geo::UtmZone> zone_opt = geo::parse_utm_scheme(spec.scheme);
     if (!zone_opt) return make_error(ErrorCode::InvalidArgument, "region: scheme '" + spec.scheme + "'");
     const geo::UtmZone zone = *zone_opt;
     const geo::Utm utm;
+    if (pbf_paths.empty()) return make_error(ErrorCode::InvalidArgument, "region: no PBF file given");
 
     ResolvedRegion out;
     out.name = spec.name;
     out.scheme = spec.scheme;
     out.level = 2;
     out.halo_m = spec.halo_m;
-    out.pbf_name = std::filesystem::path(pbf_path).filename().string();
-    try {
-        out.pbf_sha256 = sha256_of_file(pbf_path);
-    } catch (const DecodeError& e) {
-        return make_error(ErrorCode::Io, std::string("region: ") + e.what());
+    std::vector<ContentHash> digests;
+    for (const std::string& path : pbf_paths) {
+        if (!out.pbf_name.empty()) out.pbf_name += "+";
+        out.pbf_name += std::filesystem::path(path).filename().string();
+        try {
+            digests.push_back(sha256_of_file(path));
+        } catch (const DecodeError& e) {
+            return make_error(ErrorCode::Io, std::string("region: ") + e.what());
+        }
+    }
+    if (digests.size() == 1) {
+        out.pbf_sha256 = digests.front();
+    } else {
+        Sha256 sha;
+        for (const ContentHash& d : digests) sha.update(d.data(), d.size());
+        out.pbf_sha256 = sha.finish();
     }
 
     std::vector<TileKey> footprint_keys;
     std::vector<TileKey> interior_keys;
-    for (const RegionPart& part : spec.parts) {
-        ResolvedPart rp;
-        geom::RingSet rings;
-        if (const auto* bbox = std::get_if<UtmBboxPart>(&part)) {
-            rings = ring_set_for_bbox(*bbox);
-            rp.kind = ResolvedPartKind::UtmBbox;
-            rp.id = 0;
-            rp.name.clear();
-            rp.admin_level.reset();
-            rp.rings = rings;
-            rp.vertices = rings.outers.empty() ? 0 : rings.outers.front().size();
-            rp.geometry_hash = geometry_hash_of(rings);
-        } else {
-            const auto& admin = std::get<OsmAdminPart>(part);
-            Result<ResolvedPart> resolved = resolve_osm_admin_part(admin, pbf_path, utm, zone);
-            if (!resolved) return resolved.error();
-            rp = std::move(resolved.value());
-            rings = rp.rings;
-        }
-
+    const auto add_tiles = [&](const geom::RingSet& rings) {
         const auto relations = geom::tiles_near(rings, zone, /*level=*/2, spec.halo_m);
         for (const auto& [key, relation] : relations) {
             footprint_keys.push_back(key);
             if (relation == geom::TileRelation::Interior) interior_keys.push_back(key);
+        }
+    };
+    for (const RegionPart& part : spec.parts) {
+        ResolvedPart rp;
+        if (const auto* bbox = std::get_if<UtmBboxPart>(&part)) {
+            const geom::RingSet rings = ring_set_for_bbox(*bbox);
+            rp.kind = ResolvedPartKind::UtmBbox;
+            rp.rings = rings;
+            rp.vertices = rings.outers.empty() ? 0 : rings.outers.front().size();
+            rp.geometry_hash = geometry_hash_of(rings);
+            add_tiles(rings);
+        } else if (const auto* corridor = std::get_if<UtmCorridorPart>(&part)) {
+            const std::vector<geom::RingSet> rects = corridor_rects(*corridor);
+            rp.kind = ResolvedPartKind::UtmCorridor;
+            // `rings` of a corridor is every rectangle's ring in segment order (they overlap, so they are
+            // NOT an even-odd area - only the hash and the vertex count are persisted; tiles come from the
+            // rectangles one by one).
+            for (const geom::RingSet& r : rects) {
+                rp.rings.outers.push_back(r.outers.front());
+                add_tiles(r);
+            }
+            rp.rings.bbox = geom::bounding_box(rp.rings);
+            rp.vertices = rp.rings.outers.size() * 4;
+            rp.geometry_hash = geometry_hash_of(rp.rings);
+        } else {
+            const auto& admin = std::get<OsmAdminPart>(part);
+            std::optional<Result<ResolvedPart>> resolved;
+            for (const std::string& path : pbf_paths) {
+                resolved = resolve_osm_admin_part(admin, path, utm, zone);
+                if (*resolved) break;
+            }
+            if (!*resolved) return resolved->error();
+            rp = std::move(resolved->value());
+            add_tiles(rp.rings);
         }
         out.parts.push_back(std::move(rp));
     }
@@ -343,6 +414,16 @@ Result<ResolvedRegion> resolve_region(const RegionSpec& spec, const std::string&
     out.tile_count = tile_count;
 
     return out;
+}
+
+} // namespace
+
+Result<ResolvedRegion> resolve_region(const RegionSpec& spec, const std::string& pbf_path) {
+    return resolve_region_impl(spec, std::vector<std::string>{pbf_path});
+}
+
+Result<ResolvedRegion> resolve_region(const RegionSpec& spec, const std::vector<std::string>& pbf_paths) {
+    return resolve_region_impl(spec, pbf_paths);
 }
 
 std::vector<AdminCandidate> find_admin(const std::string& pbf_path, std::optional<std::string_view> name_contains,

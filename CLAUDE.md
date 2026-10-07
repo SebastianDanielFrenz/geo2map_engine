@@ -255,6 +255,9 @@ geo2map_engine/
     tiff/tfw.h                        World-file (.tfw) parser; rejects rotation/non-north-up
     dgm1.h                            Hessen DGM1: enumerate_tiles/decode_tile over nested PKT_*.zip deliveries -
                                       see this file's own header comment for the real filename convention (G2M-003)
+    dgm1_bw.h                         Baden-Wuerttemberg DGM1 (LGL, 2 km zips of 1 km ASCII .xyz tiles, cell-centre samples placed
+                                      by their own coordinates, border tiles cropped -> unlisted sample = -9999 "not BW");
+                                      Catalog::open/copies/decode, parse_xyz_tile (2026-10-07 corridor import)
     osm/pbf_reader.h                  PbfHandler (virtual-dispatch seam, no osmium type in this header),
                                       BoundingBox, read_pbf (libosmium+protozero+zlib-ng, single-threaded,
                                       streamed in file order, bbox prefilter)
@@ -279,7 +282,9 @@ geo2map_engine/
                                        than calling clip_osm() (osm_clip.cpp, unchanged, kept as the byte-for-byte oracle)
   include/g2m/import/                  public API of g2m_import (milestone G1c I2-I6); importers stay free of
                                        server/decode/thread dependencies (layers-only + g2m_decode's readers)
-    region_resolve.h                  resolve_region(spec, pbf_path): RegionSpec -> ResolvedRegion via ring assembly
+    region_resolve.h                  resolve_region(spec, pbf_path): RegionSpec -> ResolvedRegion via ring assembly;
+                                       overload over several PBFs (first file holding a relation wins, joined name, combined
+                                       sha); part kind utm_corridor = one rectangle per polyline segment
     sink.h                            ITileSink, StoreSink(TileStore&, scope, pin=false) (G1c I7: --pin plumbed from
                                        g2m_tiler), MemorySink (std::map<{layer,key},Entry>, no SQLite needed for tests)
     report.h                          ImportReport{layer, tiles_written, tiles_skipped, warnings, wall_seconds, messages}
@@ -291,9 +296,13 @@ geo2map_engine/
                                        span up to THREE DGM1 1 km squares per axis (km-remainder 977..999), not two -
                                        the importer visits the full [lo,hi]x[lo,hi] rectangle (up to 3x3=9 squares),
                                        not just a 2x2 box's 4 corners (the old code's bug - see PLAN.md's "G2.0
-                                       correction" addendum)
+                                       correction" addendum); DemSources{hessen, bw} + import_dem overload: a square in both
+                                       is merged per sample (a sample BW lists wins, else Hessen, never averaged), report
+                                       km_bw_only/km_merged/border_samples_*/border_max_abs_diff_units
     osm.h                             PBF -> g2m.src.osm (I4): two-stage extract (own sorted-SoA node-location index,
                                        D13) + per-tile clip (OsmClipIndex), OsmExtractReport (nodes/ways/ways_incomplete)
+                                       merge_osm_data/extract_region_set(vector<pbf>): ids in both extracts kept once (nodes/ways:
+                                       first file, relations: longer member list), OsmMergeReport
     landcover.h                       ESA WorldCover COG -> g2m.src.landcover (I5)
   src/import/                          g2m_import implementation (mirrors include/g2m/import/); CMakeLists.txt
                                        defines g2m_import (STATIC)

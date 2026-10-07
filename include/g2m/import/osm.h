@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace g2m::import {
 
@@ -54,6 +55,36 @@ struct OsmExtractReport {
 // per-pass algorithm.
 Result<osm::OsmData> extract_region_set(const std::string& pbf, const ResolvedRegion& region,
                                          OsmExtractReport* report = nullptr);
+
+// What merge_osm_data decided. All counts are deterministic.
+struct OsmMergeReport {
+    std::uint64_t nodes_both = 0;        // node ids present in both sets
+    std::uint64_t nodes_conflicting = 0; // ... of which position or tags differ (the first set's wins)
+    std::uint64_t ways_both = 0;
+    std::uint64_t ways_conflicting = 0;  // refs or tags differ (the first set's wins)
+    std::uint64_t relations_both = 0;
+    std::uint64_t relations_conflicting = 0; // members or tags differ (the longer member list wins, a tie the first)
+};
+
+// Merges two region sets cut from different extracts of (nominally) the same
+// planet - e.g. Hessen and Regierungsbezirk Karlsruhe, which overlap where a
+// way crosses the state border. OSM ids are global, so an id present in both
+// is the SAME object: it is kept once. When the two copies differ (the
+// extracts are cut at different times, or an extract clipped a relation's
+// member list at its border) the rule is: nodes and ways - the first set's;
+// relations - the one with more members, a tie the first set's. The result is
+// canonical (every way complete: a way's refs are all in the merged node set,
+// because each set was complete on its own).
+Result<osm::OsmData> merge_osm_data(const osm::OsmData& first, const osm::OsmData& second,
+                                     OsmMergeReport* report = nullptr);
+
+// Several extracts: every file is extracted on its own (extract_region_set),
+// then merged left to right with merge_osm_data (earlier files win ties).
+// `report`, if given, receives the SUM of the per-file reports; `merge_report`
+// the SUM of the merge steps'.
+Result<osm::OsmData> extract_region_set(const std::vector<std::string>& pbfs, const ResolvedRegion& region,
+                                         OsmExtractReport* report = nullptr,
+                                         OsmMergeReport* merge_report = nullptr);
 
 struct OsmImportOptions {
     // 0 = std::thread::hardware_concurrency() (at least 1) - ordered_for's

@@ -58,6 +58,7 @@
 #include "rss.h"
 
 #include "g2m/decode/dgm1.h"
+#include "g2m/decode/dgm1_bw.h"
 #include "g2m/import/bake.h"
 #include "g2m/import/dem.h"
 #include "g2m/import/landcover.h"
@@ -153,19 +154,88 @@ std::string json_escape(const std::string& s) {
     return out;
 }
 
+// Every value of a repeatable flag, in argv order.
+std::vector<std::string> flag_values(const Args& args, const std::string& key) {
+    std::vector<std::string> out;
+    for (const auto& [k, v] : args.flags) {
+        if (k == key) out.push_back(v);
+    }
+    return out;
+}
+
+// Lists the regular files of `dir` whose lower-cased name starts with
+// `prefix` and ends with ".zip", sorted by full path (reproducible).
+bool list_zips(const std::string& dir, const std::string& prefix, std::vector<std::filesystem::path>& out) {
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file()) continue;
+        std::string lower = entry.path().filename().string();
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower.size() > 4 && lower.compare(0, prefix.size(), prefix) == 0 &&
+            lower.compare(lower.size() - 4, 4, ".zip") == 0) {
+            out.push_back(entry.path());
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return !ec;
+}
+
+// The elevation inputs of import-dem / import: Hessen PKT_*.zip (--pkt PATH
+// repeatable, or a directory flag) and Baden-Wuerttemberg dgm1_*_bw.zip
+// (--bw PATH repeatable, or --bw-data DIR). At least one set is required.
+bool collect_dem_inputs(const Args& args, const char* who, const char* hessen_dir_flag,
+                         std::vector<std::filesystem::path>& pkt_zips, std::vector<std::filesystem::path>& bw_zips) {
+    for (const std::string& v : flag_values(args, "pkt")) pkt_zips.emplace_back(v);
+    if (pkt_zips.empty()) {
+        if (const auto dir = args.get(hessen_dir_flag)) {
+            if (!list_zips(*dir, "pkt", pkt_zips)) {
+                std::cerr << "g2m_tiler " << who << ": cannot list " << *dir << "\n";
+                return false;
+            }
+        }
+    }
+    std::sort(pkt_zips.begin(), pkt_zips.end());
+    for (const std::string& v : flag_values(args, "bw")) bw_zips.emplace_back(v);
+    if (bw_zips.empty()) {
+        if (const auto dir = args.get("bw-data")) {
+            if (!list_zips(*dir, "dgm1_", bw_zips)) {
+                std::cerr << "g2m_tiler " << who << ": cannot list " << *dir << "\n";
+                return false;
+            }
+        }
+    }
+    std::sort(bw_zips.begin(), bw_zips.end());
+    if (pkt_zips.empty() && bw_zips.empty()) {
+        std::cerr << "g2m_tiler " << who << ": need Hessen DEM (--pkt PATH repeatable or --" << hessen_dir_flag
+                  << " DIR containing PKT_*.zip) and/or Baden-Wuerttemberg DEM (--bw PATH repeatable or --bw-data "
+                     "DIR containing dgm1_*.zip)\n";
+        return false;
+    }
+    return true;
+}
+
+std::string dem_report_line(const g2m::import::DemImportReport& r) {
+    std::ostringstream o;
+    o << "km_bw_only=" << r.km_bw_only << " km_merged=" << r.km_merged << " border_samples_both="
+      << r.border_samples_both << " border_samples_differing=" << r.border_samples_differing
+      << " border_max_abs_diff_m=" << (static_cast<double>(r.border_max_abs_diff_units) / g2m::kHeightUnitsPerMetre);
+    return o.str();
+}
+
 int usage() {
     std::cerr << "usage: g2m_tiler <command> [options]\n"
                  "commands:\n"
                  "  find-admin --pbf PATH [--name-contains STR] [--admin-level N]\n"
-                 "  resolve PATH#NAME --pbf PATH --out PATH\n"
+                 "  resolve PATH#NAME --pbf PATH [--pbf PATH ...] --out PATH\n"
                  "  import-dem --resolved PATH --store DIR --scope SCOPE\n"
-                 "             (--pkt PATH [--pkt PATH ...] | --data DIR)\n"
+                 "             (--pkt PATH [--pkt PATH ...] | --data DIR) and/or (--bw PATH [--bw ...] | --bw-data DIR)\n"
                  "             [--jobs N] [--km-cache N] [--pin]\n"
-                 "  import-osm --pbf PATH --resolved PATH --store DIR --scope SCOPE [--jobs N] [--pin]\n"
+                 "  import-osm --pbf PATH [--pbf PATH ...] --resolved PATH --store DIR --scope SCOPE [--jobs N] [--pin]\n"
                  "  import-landcover --resolved PATH --store DIR --scope SCOPE\n"
                  "                   (--tif PATH [--tif ...] | --data DIR) [--jobs N] [--pin]\n"
-                 "  import PATH#NAME --pbf PATH --store DIR --scope SCOPE\n"
-                 "         (--pkt PATH [--pkt ...] | --dem-data DIR)\n"
+                 "  import PATH#NAME --pbf PATH [--pbf PATH ...] --store DIR --scope SCOPE\n"
+                 "         (--pkt PATH [--pkt ...] | --dem-data DIR) and/or (--bw PATH [--bw ...] | --bw-data DIR)\n"
                  "         (--tif PATH [--tif ...] | --wc-data DIR)\n"
                  "         [--jobs N] [--km-cache N] [--pin]\n"
                  "  stats --store DIR [--scope SCOPE]\n"
@@ -249,7 +319,7 @@ int cmd_resolve(const Args& args) {
     }
 
     const auto t0 = std::chrono::steady_clock::now();
-    const auto resolved = g2m::import::resolve_region(*spec, *pbf);
+    const auto resolved = g2m::import::resolve_region(*spec, flag_values(args, "pbf"));
     const auto t1 = std::chrono::steady_clock::now();
     if (!resolved) {
         std::cerr << "g2m_tiler resolve: " << resolved.error().message << "\n";
@@ -277,35 +347,8 @@ int cmd_import_dem(const Args& args) {
         return 1;
     }
 
-    std::vector<std::filesystem::path> pkt_zips;
-    for (const auto& [k, v] : args.flags) {
-        if (k == "pkt") pkt_zips.emplace_back(v);
-    }
-    if (pkt_zips.empty()) {
-        const auto data_dir = args.get("data");
-        if (!data_dir) {
-            std::cerr << "g2m_tiler import-dem: need --pkt PATH (repeatable) or --data DIR (containing PKT_*.zip)\n";
-            return 1;
-        }
-        std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator(*data_dir, ec)) {
-            if (!entry.is_regular_file()) continue;
-            std::string lower = entry.path().filename().string();
-            std::transform(lower.begin(), lower.end(), lower.begin(),
-                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (lower.size() > 4 && lower.compare(0, 3, "pkt") == 0 && lower.compare(lower.size() - 4, 4, ".zip") == 0) {
-                pkt_zips.push_back(entry.path());
-            }
-        }
-        if (ec) {
-            std::cerr << "g2m_tiler import-dem: cannot list " << *data_dir << ": " << ec.message() << "\n";
-            return 1;
-        }
-        if (pkt_zips.empty()) {
-            std::cerr << "g2m_tiler import-dem: no PKT_*.zip found under " << *data_dir << "\n";
-            return 1;
-        }
-    }
+    std::vector<std::filesystem::path> pkt_zips, bw_zips;
+    if (!collect_dem_inputs(args, "import-dem", "data", pkt_zips, bw_zips)) return 1;
 
     const auto resolved_text = read_file(*resolved_path);
     if (!resolved_text) {
@@ -319,11 +362,27 @@ int cmd_import_dem(const Args& args) {
     }
 
     const auto t0 = std::chrono::steady_clock::now();
-    auto catalog = g2m::decode::dgm1::Catalog::open(pkt_zips);
-    if (!catalog) {
-        std::cerr << "g2m_tiler import-dem: " << catalog.error().message << "\n";
-        return 1;
+    std::optional<g2m::decode::dgm1::Catalog> catalog;
+    std::optional<g2m::decode::dgm1_bw::Catalog> bw_catalog;
+    if (!pkt_zips.empty()) {
+        auto c = g2m::decode::dgm1::Catalog::open(pkt_zips);
+        if (!c) {
+            std::cerr << "g2m_tiler import-dem: " << c.error().message << "\n";
+            return 1;
+        }
+        catalog.emplace(std::move(*c));
     }
+    if (!bw_zips.empty()) {
+        auto c = g2m::decode::dgm1_bw::Catalog::open(bw_zips);
+        if (!c) {
+            std::cerr << "g2m_tiler import-dem: " << c.error().message << "\n";
+            return 1;
+        }
+        bw_catalog.emplace(std::move(*c));
+    }
+    g2m::import::DemSources dem_sources;
+    if (catalog) dem_sources.hessen = &*catalog;
+    if (bw_catalog) dem_sources.bw = &*bw_catalog;
     const auto t_catalog = std::chrono::steady_clock::now();
 
     g2m::TileStoreConfig config;
@@ -353,17 +412,25 @@ int cmd_import_dem(const Args& args) {
         }
     }
 
-    const auto report = g2m::import::import_dem(*resolved, *catalog, sink, *scope, options);
+    const auto report = g2m::import::import_dem(*resolved, dem_sources, sink, *scope, options);
     if (!report) {
         std::cerr << "g2m_tiler import-dem: " << report.error().message << "\n";
         return 1;
     }
     const auto t1 = std::chrono::steady_clock::now();
-    const auto stats = catalog->stats();
-    std::cerr << "g2m_tiler import-dem: catalog outer=" << stats.outer << " inner=" << stats.inner
-              << " copies=" << stats.copies << " unique_keys=" << stats.unique_keys
-              << " duplicated_keys=" << stats.duplicated_keys << " (open "
-              << std::chrono::duration<double>(t_catalog - t0).count() << "s)\n";
+    if (catalog) {
+        const auto stats = catalog->stats();
+        std::cerr << "g2m_tiler import-dem: catalog outer=" << stats.outer << " inner=" << stats.inner
+                  << " copies=" << stats.copies << " unique_keys=" << stats.unique_keys
+                  << " duplicated_keys=" << stats.duplicated_keys << " (open "
+                  << std::chrono::duration<double>(t_catalog - t0).count() << "s)\n";
+    }
+    if (bw_catalog) {
+        const auto stats = bw_catalog->stats();
+        std::cerr << "g2m_tiler import-dem: bw catalog zips=" << stats.zips << " copies=" << stats.copies
+                  << " unique_keys=" << stats.unique_keys << " duplicated_keys=" << stats.duplicated_keys << " | "
+                  << dem_report_line(*report) << "\n";
+    }
     std::cerr << "g2m_tiler import-dem: tiles_written=" << report->tiles_written
               << " tiles_partial=" << report->tiles_partial << " tiles_skipped_nocov=" << report->tiles_skipped_nocov
               << " tiles_skipped_allnodata=" << report->tiles_skipped_allnodata << " dup_keys=" << report->dup_keys
@@ -399,7 +466,9 @@ int cmd_import_osm(const Args& args) {
 
     const auto t0 = std::chrono::steady_clock::now();
     g2m::import::OsmExtractReport extract_report;
-    const auto region_set = g2m::import::extract_region_set(*pbf, *resolved, &extract_report);
+    g2m::import::OsmMergeReport merge_report;
+    const auto region_set =
+        g2m::import::extract_region_set(flag_values(args, "pbf"), *resolved, &extract_report, &merge_report);
     if (!region_set) {
         std::cerr << "g2m_tiler import-osm: " << region_set.error().message << "\n";
         return 1;
@@ -439,6 +508,13 @@ int cmd_import_osm(const Args& args) {
               << " (n1=" << extract_report.n1_ms << "ms w=" << extract_report.w_ms << "ms r=" << extract_report.r_ms
               << "ms n2=" << extract_report.n2_ms << "ms, extract "
               << std::chrono::duration<double>(t_extract - t0).count() << "s)\n";
+    if (flag_values(args, "pbf").size() > 1) {
+        std::cerr << "g2m_tiler import-osm: merge nodes_both=" << merge_report.nodes_both
+                  << " nodes_conflicting=" << merge_report.nodes_conflicting << " ways_both=" << merge_report.ways_both
+                  << " ways_conflicting=" << merge_report.ways_conflicting
+                  << " relations_both=" << merge_report.relations_both
+                  << " relations_conflicting=" << merge_report.relations_conflicting << "\n";
+    }
     std::cerr << "g2m_tiler import-osm: tiles_written=" << report->tiles_written
               << " tiles_empty=" << report->tiles_empty << " wall=" << (report->wall_ms / 1000.0)
               << "s total=" << std::chrono::duration<double>(t1 - t0).count() << "s peak RSS "
@@ -562,37 +638,8 @@ int cmd_import(const Args& args) {
         return 1;
     }
 
-    std::vector<std::filesystem::path> pkt_zips;
-    for (const auto& [k, v] : args.flags) {
-        if (k == "pkt") pkt_zips.emplace_back(v);
-    }
-    if (pkt_zips.empty()) {
-        const auto dem_data_dir = args.get("dem-data");
-        if (!dem_data_dir) {
-            std::cerr << "g2m_tiler import: need --pkt PATH (repeatable) or --dem-data DIR (containing "
-                          "PKT_*.zip)\n";
-            return 1;
-        }
-        std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator(*dem_data_dir, ec)) {
-            if (!entry.is_regular_file()) continue;
-            std::string lower = entry.path().filename().string();
-            std::transform(lower.begin(), lower.end(), lower.begin(),
-                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (lower.size() > 4 && lower.compare(0, 3, "pkt") == 0 && lower.compare(lower.size() - 4, 4, ".zip") == 0) {
-                pkt_zips.push_back(entry.path());
-            }
-        }
-        if (ec) {
-            std::cerr << "g2m_tiler import: cannot list " << *dem_data_dir << ": " << ec.message() << "\n";
-            return 1;
-        }
-        if (pkt_zips.empty()) {
-            std::cerr << "g2m_tiler import: no PKT_*.zip found under " << *dem_data_dir << "\n";
-            return 1;
-        }
-    }
-    std::sort(pkt_zips.begin(), pkt_zips.end());
+    std::vector<std::filesystem::path> pkt_zips, bw_zips;
+    if (!collect_dem_inputs(args, "import", "dem-data", pkt_zips, bw_zips)) return 1;
 
     std::vector<std::filesystem::path> tifs;
     for (const auto& [k, v] : args.flags) {
@@ -644,7 +691,7 @@ int cmd_import(const Args& args) {
     const auto t_start = std::chrono::steady_clock::now();
 
     const auto t_resolve0 = std::chrono::steady_clock::now();
-    const auto resolved = g2m::import::resolve_region(*spec, *pbf);
+    const auto resolved = g2m::import::resolve_region(*spec, flag_values(args, "pbf"));
     const auto t_resolve1 = std::chrono::steady_clock::now();
     if (!resolved) {
         std::cerr << "g2m_tiler import: resolve: " << resolved.error().message << "\n";
@@ -694,12 +741,28 @@ int cmd_import(const Args& args) {
     }
 
     const auto t_dem0 = std::chrono::steady_clock::now();
-    auto catalog = g2m::decode::dgm1::Catalog::open(pkt_zips);
-    if (!catalog) {
-        std::cerr << "g2m_tiler import: dem: " << catalog.error().message << "\n";
-        return 1;
+    std::optional<g2m::decode::dgm1::Catalog> catalog;
+    std::optional<g2m::decode::dgm1_bw::Catalog> bw_catalog;
+    if (!pkt_zips.empty()) {
+        auto c = g2m::decode::dgm1::Catalog::open(pkt_zips);
+        if (!c) {
+            std::cerr << "g2m_tiler import: dem: " << c.error().message << "\n";
+            return 1;
+        }
+        catalog.emplace(std::move(*c));
     }
-    const auto dem_report = g2m::import::import_dem(*resolved, *catalog, sink, *scope, dem_options);
+    if (!bw_zips.empty()) {
+        auto c = g2m::decode::dgm1_bw::Catalog::open(bw_zips);
+        if (!c) {
+            std::cerr << "g2m_tiler import: dem: " << c.error().message << "\n";
+            return 1;
+        }
+        bw_catalog.emplace(std::move(*c));
+    }
+    g2m::import::DemSources dem_sources;
+    if (catalog) dem_sources.hessen = &*catalog;
+    if (bw_catalog) dem_sources.bw = &*bw_catalog;
+    const auto dem_report = g2m::import::import_dem(*resolved, dem_sources, sink, *scope, dem_options);
     const auto t_dem1 = std::chrono::steady_clock::now();
     if (!dem_report) {
         std::cerr << "g2m_tiler import: dem: " << dem_report.error().message << "\n";
@@ -708,7 +771,9 @@ int cmd_import(const Args& args) {
 
     const auto t_osm0 = std::chrono::steady_clock::now();
     g2m::import::OsmExtractReport extract_report;
-    const auto region_set = g2m::import::extract_region_set(*pbf, *resolved, &extract_report);
+    g2m::import::OsmMergeReport merge_report;
+    const auto region_set =
+        g2m::import::extract_region_set(flag_values(args, "pbf"), *resolved, &extract_report, &merge_report);
     if (!region_set) {
         std::cerr << "g2m_tiler import: osm: " << region_set.error().message << "\n";
         return 1;
@@ -748,9 +813,19 @@ int cmd_import(const Args& args) {
            << ",\"tiles_partial\":" << dem_report->tiles_partial
            << ",\"tiles_skipped_nocov\":" << dem_report->tiles_skipped_nocov
            << ",\"tiles_skipped_allnodata\":" << dem_report->tiles_skipped_allnodata
+           << ",\"km_bw_only\":" << dem_report->km_bw_only << ",\"km_merged\":" << dem_report->km_merged
+           << ",\"border_samples_both\":" << dem_report->border_samples_both
+           << ",\"border_samples_differing\":" << dem_report->border_samples_differing
+           << ",\"border_max_abs_diff_units\":" << dem_report->border_max_abs_diff_units
            << ",\"wall_s\":" << seconds(t_dem0, t_dem1) << "},"
            << "\"osm\":{\"tiles_written\":" << osm_report->tiles_written
-           << ",\"tiles_empty\":" << osm_report->tiles_empty << ",\"wall_s\":" << seconds(t_osm0, t_osm1) << "},"
+           << ",\"tiles_empty\":" << osm_report->tiles_empty << ",\"pbf_files\":" << flag_values(args, "pbf").size()
+           << ",\"merge_nodes_both\":" << merge_report.nodes_both
+           << ",\"merge_ways_both\":" << merge_report.ways_both
+           << ",\"merge_ways_conflicting\":" << merge_report.ways_conflicting
+           << ",\"merge_relations_both\":" << merge_report.relations_both
+           << ",\"merge_relations_conflicting\":" << merge_report.relations_conflicting
+           << ",\"wall_s\":" << seconds(t_osm0, t_osm1) << "},"
            << "\"landcover\":{\"tiles_written\":" << lc_report->tiles_written
            << ",\"tiles_skipped_allzero\":" << lc_report->tiles_skipped_allzero
            << ",\"wall_s\":" << seconds(t_lc0, t_lc1) << "},"
