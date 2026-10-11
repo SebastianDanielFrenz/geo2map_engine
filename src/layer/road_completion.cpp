@@ -125,7 +125,14 @@ RoadBridgeAnchor Walk::anchor(std::int64_t node) {
     return anchors_[node] = result;
 }
 
+// D43: the largest |end grade - chord| the ease accepts. The deck-edge misread it exists for is a few per cent (the A 648
+// underpass: 0.021); the bumpy test terrain's genuine departures start near 0.10 (G3-D, design 6.6).
+constexpr double kGroundEaseMismatch = 0.05;
 bool contains(const std::string& text, const char* part) { return text.find(part) != std::string::npos; }
+// fit_vertical_profile's two declines that only the fixed end values cause (heights and grades at both ends).
+bool boundary_infeasible(const std::string& message) {
+    return contains(message, "endpoint curvature infeasible") || contains(message, "fixed boundary constraints infeasible");
+}
 double project(const RoadJunctionPlane& plane, double heading) {
     return plane.grade_x * det::cos(heading) + plane.grade_y * det::sin(heading);
 }
@@ -255,7 +262,26 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         }
         if (!complete) { fail(); continue; }
         samples.push_back({ref->length_m, b->height / 256.0});
-        auto vertical = fit_vertical_profile(samples, fit); if (!vertical) { fail(); continue; }
+        auto vertical = fit_vertical_profile(samples, fit);
+        // D43: end planes that contradict the stretch's own measured rise (a node at the edge of a deck, where the bare
+        // earth is interpolated and catches up within metres; a short way split between two such reads) leave no cubic
+        // under the curvature bound. The end heights stay measured; both end grades are eased toward the chord by the
+        // same fraction k/8, the smallest k that fits (k = 8 is the chord itself, as the bridge step's fallback above).
+        // Only a local misread is eased: an end plane further than kGroundEaseMismatch from the chord is terrain that
+        // really departs from the stretch (a road forced onto the chord there rides off it), so it stays declined.
+        if (!vertical && boundary_infeasible(vertical.error().message)) {
+            const double chord = static_cast<double>(b->height - a->height) / 256.0 / ref->length_m;
+            const double g0 = fit.start_grade, g1 = fit.end_grade;
+            const bool local = std::fabs(chord) <= fit.max_grade && std::fabs(g0 - chord) <= kGroundEaseMismatch && std::fabs(g1 - chord) <= kGroundEaseMismatch;
+            for (int k = 1; local && k <= 8; ++k) {
+                const double t = static_cast<double>(k) / 8.0;
+                fit.start_grade = g0 + t * (chord - g0); fit.end_grade = g1 + t * (chord - g1);
+                vertical = fit_vertical_profile(samples, fit);
+                if (vertical) { ++stats->ground_grades_eased; break; }
+                if (!boundary_infeasible(vertical.error().message)) break;
+            }
+        }
+        if (!vertical) { fail(); continue; }
         RoadProfile p; p.stretch = entry.stretch; p.attributes = *attrs; p.reference = std::move(*ref); p.vertical = std::move(*vertical);
         p.start_anchor_inferred = bridge_first; p.end_anchor_inferred = bridge_last;
         entry.profile = std::move(p); mark(i, ProfileProvenance::GroundCompleted);

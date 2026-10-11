@@ -17,7 +17,7 @@ flowchart TD
   PROF["vertical_profile + road_profile: constrained cubics on DEM, bridge spans, junction planes"]
   FEAT["road_features: traffic_calming nodes to carved profile features, street fidelity P1 slice 7"]
   GEOM["g2m.roads.geom L2 encoding 7: profile or decline per stretch + cross-section record + features + junctions, furniture, provenance (P2 slice 8)"]
-  COMPL["profile completion tier: retry, bridge spans, relaxed ground; with provenance flags (P2 slice 6), served since slice 8"]
+  COMPL["profile completion tier: retry, bridge spans, relaxed ground (end grades within 0.05 of the chord eased toward it when they contradict the rise, D43); with provenance flags (P2 slice 6), served since slice 8"]
   JUNC["junctions: offset-intersect-trim rings, trims, trim-overlap clusters, Shepard junction heights and raised tables (P2 slices 3-5); rings and trims served in roads.geom section 5, heights a library function for the carver"]
   FURN["furniture: crossings, stop and give-way lines, signals; with declines (P2 slice 7), served in roads.geom section 6"]
   GEOM7["roads.geom encoding 7: sections 5 junctions (owner tile only), 6 furniture, 7 provenance - implemented, P2 slice 8"]

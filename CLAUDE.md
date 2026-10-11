@@ -874,7 +874,7 @@ the deriver passes `served_road_completion_options()`. Validation of design 9.2 
 sort orders, ring simplicity and nesting within 2 mm, trims, flags, furniture lane spans, reserved bit 3 rejected, D33).
 D34: offset rings that do not nest or exceed 1024 vertices take the all-layer hull, else Degenerate. Config text gains
 `enc=7 junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/60 completion-ground=40/32
-strict-anchor=1 ring-nesting=2mm bridge-far-end=1` (`road_geom_config_text()`). Tests: `test_road_geom_enc7.cpp` (T8: one rejection per
+strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05` (`road_geom_config_text()`). Tests: `test_road_geom_enc7.cpp` (T8: one rejection per
 rule with its own malformed body, round trip, truncation; T7: ownership and cross-tile identity with the tile-graph
 negative control), `test_road_geom_xs.cpp` (encoding 6/7, pinned config text), `tests/support/road_junction_scene.h`
 (standalone scene also used by the fuzz seeds), fuzz seeds for encodings 6 and 7. Goldens: `g3xs` re-recorded (served

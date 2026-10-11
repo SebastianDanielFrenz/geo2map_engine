@@ -892,6 +892,9 @@ opt-in through `RoadCompletionOptions::enabled` (default off, so no served bytes
 60 m / 63 m reads) and D26 (strict ground profiles are not refitted at bridge nodes). Step order retry, bridge, ground, each
 and the result is independent of the entry order (a reversed entry list gives the same profiles, tested). Tunnels are counted
 (`tunnel_skipped`) and left declined. The validator relaxes the vertical bounds per provenance and checks the origins.
+D43: a step-3 fit that fails only on its fixed end values (endpoint curvature or boundary constraints) is retried with both
+end grades moved toward the stretch chord in eighths (counted in `ground_grades_eased`), only while each end grade lies
+within 0.05 of the chord (a local misread, not terrain that departs from the stretch).
 
 ---
 
@@ -2124,6 +2127,46 @@ rejected.
   carved layer's config hash and every release id that includes the carved layer change. g3d re-recorded: the heights of
   all four tiles change, the owner counters do not (`all 346681 396d4efad6d22338`). g3j and g3xs do not change (roads.geom
   carries no junction heights).
+
+**D43. Ground completion eases contradicting end grades toward the chord.**
+- Diagnosis (owner report, racing_game rhein_main_hessen, UTM32 E 469992 N 5552460, "no street under the bridge, terrain
+  where the road should be"): the A 648 eastbound carriageway under the Westerbachstrasse bridge is a 27.6 m motorway way
+  (608415202, tag split at the bridge edges). DGM1 interpolates under the deck and catches up ~0.5 m in the last 8 m at the
+  deck's south edge, so the 3 m junction plane at the end node reads -5.36 % against a chord of -2.43 %. With both end
+  heights and grades fixed and R 500, the minimum descent the fit can make is 0.81 m, the measured one 0.67 m: strict and
+  step 3 both decline "endpoint curvature infeasible", the way gets no profile, no ribbon and no carve, and the game's
+  round end cap of the bridge approach (raised to deck height) spreads over the uncarved carriageway.
+- Decision: a step-3 fit that fails only on its fixed end values ("endpoint curvature infeasible" or "fixed boundary
+  constraints infeasible") is retried with both end grades moved toward the chord, g_i + t (chord - g_i), t = k/8 for
+  k = 1..8, the first success wins; only while |chord| <= the relaxed max grade and |g_i - chord| <= 0.05 at both ends
+  (`kGroundEaseMismatch`); any other decline stops the ladder. End heights stay the plane heights. Counted in
+  `RoadCompletionStats::ground_grades_eased`; provenance stays GroundCompleted.
+- The mismatch cap. Uncapped, the ladder eased 36 / 156 ground stretches of the tilted bumpy fixture DEM (frankfurt_hoechst
+  / hoechst_a66), 402 of 423 distinct ones with an end plane steeper than the +-0.10 clamp and most at k = 7-8: terrain
+  that really departs from the chord, which the road then leaves. G3-D failed: 138 junctions instead of 91, max core
+  gradient 3.079 (frankfurt_hoechst 1856/21718 tilted, node 2648065689: an eased flat approach whose trim corner sits 22 cm
+  from a strict approach climbing at 10 %, 1.5 m higher), 1:1.5 blend stations 549 of 37661 (1.46 %, bound 1 %). Max
+  core gradient over the four tilted busy tiles vs cap: 0.03 / 0.05 0.919, 0.06 / 0.08 1.045, 0.10 3.079. 0.05 is 2.4x
+  the deck-edge misread that motivated D43 (0.021) and half the cap where the failure returns.
+- Alternatives. (a) Clamp the end grades harder (e.g. +-4 %): loses real end grades on every steep stretch, and still fails
+  where the plane contradicts the rise at a lower grade. (b) Free the end grades (fit them): a grade kink at the node for
+  every completed stretch, not only for the ones that need it. (c) Widen the junction plane (5-10 m) at deck-edge nodes:
+  a strict-pass change that moves every profile at such nodes and served bytes far beyond the declined stretches.
+  (d) Fix it in the game only: the server path (G3-D) would keep the decline. The ladder changes only stretches that
+  declined and keeps the smallest kink that fits.
+- Effect: the strict pass is unchanged, so g3xs and g3j (flat fixture DEM: no stretch reaches the ladder) do not change.
+  On the tilted bumpy DEM (tier counters, an entry once per tile that holds it) step 3 fails 24 instead of 49 ground
+  candidates (frankfurt_hoechst) and 77 instead of 202 (hoechst_a66); 25 / 125 were eased. G3-D: 96 junctions (was 91),
+  max core gradient 1.102 (unchanged, a flat-DEM junction), steep blend stations 74 of 30325 (was 74 of 29963). g3d is
+  re-recorded (`all 347863 458d2268bdc0ebf2`, carved cells 346681 -> 347863). The config text gains
+  ` ground-ease=8/0.05`, so the roads.geom config hash and every release id containing roads.geom move.
+- Tests: `test_road_completion.cpp` "[D43]" (a 27.6 m motorway between two long ones on a DEM with a 12 cm tanh step at the
+  end node: strict and the frozen game reference decline, the tier completes it eased, end heights are the plane heights,
+  t = k/8 is the first step that fits; fails on the pre-D43 code at the missing profile), and the same scene with a 0.34 m
+  catch-up (end plane -0.089 against a chord of -0.031) stays declined with nothing eased (fails without the cap). G3-D
+  (`test_terrain_carve.cpp`) fails without the cap.
+- racing_game still runs its own `complete_road_profiles` on the served geometry (road_structures.cpp); the fixed
+  rhein_main_hessen store needs a re-derive with this build before the game sees the profile.
 
 ---
 

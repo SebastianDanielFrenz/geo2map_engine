@@ -75,6 +75,7 @@ struct RoadCompletionStats {
     std::size_t bridge_candidates = 0, bridge_completed = 0, bridge_no_support = 0, bridge_fit_failed = 0;
     std::size_t ground_candidates = 0, ground_completed = 0, ground_failed = 0;
     std::size_t ground_bridge_anchored = 0;  // completed stretches with at least one end on a bridge abutment plane
+    std::size_t ground_grades_eased = 0;     // completed only after easing both end grades toward the chord (D43)
     std::size_t tunnel_skipped = 0;
     std::size_t strict_anchors = 0;          // bridging end nodes that took the strict pass's anchor (D30), once per node
 };

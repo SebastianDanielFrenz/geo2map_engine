@@ -347,6 +347,84 @@ TEST_CASE("completion: a completed bridge stretch meets the strict profiles at i
     }
 }
 
+TEST_CASE("completion: a short ground stretch whose end planes contradict its measured rise is completed with end grades eased toward the chord (D43)", "[layer][roads][completion][D43]") {
+    // racing_game report 2026-10-07 (rhein_main_hessen, A 648 under the Westerbachstrasse bridge, UTM32 E 469992 N 5552459):
+    // way 608415202 is a 27.6 m motorway split (maxheight under the deck) between two degree-2 nodes. The bare-earth DEM is
+    // interpolated under the deck and catches up 0.5 m right at its edge, so the 3 m DEM plane at the far node reads -5.4 %
+    // while the stretch descends -2.4 % end to end. With those end grades no |z''| <= 1/500 m cubic can descend only
+    // 0.67 m: strict, retry and the ground fit all declined, the lower road was neither carved nor drawn. Scene: a
+    // motorway 1 -> 2 -> 3 -> 4 split at 2 and 3 (way 11 = the 27.6 m stretch), -2.5 % with a 0.12 m tanh catch-up at 3.
+    const auto world = world_of({{1, -300, 0}, {2, 0, 0}, {3, 27.6, 0}, {4, 300, 0}},
+        {{10, {1, 2}, {{"highway", "motorway"}}}, {11, {2, 3}, {{"highway", "motorway"}}}, {12, {3, 4}, {{"highway", "motorway"}}}});
+    const Fn catch_up = [](double e, double) { const double x = e - kOriginE; return 100.0 - 0.025 * x - 0.06 * std::tanh((x - 27.6) / 2.0); };
+    const auto env = make_env(world, kTile, catch_up);
+    const auto strict = build(*env, false);
+    const auto mid = index_of(strict, 11, 0);
+    REQUIRE_FALSE(strict.entries[mid].profile);
+    std::printf("D43 scene strict decline: %s\n", strict.entries[mid].decline->message.c_str());
+    // The end planes and the chord the tier sees (completion anchors: no bridge here, so the DEM plane at the node).
+    const auto node_at = [&](std::int64_t id) {
+        return std::lower_bound(env->context.nodes.begin(), env->context.nodes.end(), id, [](const auto& n, auto v) { return n.osm_id < v; })->position;
+    };
+    const auto p2 = env->dem->junction_plane(zone, node_at(2)); REQUIRE(p2);
+    const auto p3 = env->dem->junction_plane(zone, node_at(3)); REQUIRE(p3);
+    // Way 11 runs due east: the plane grade along it is grade_x.
+    const double length = 27.6, chord = (p3->height - p2->height) / 256.0 / length;
+    std::printf("D43 scene: plane grades %.4f / %.4f, chord %.4f\n", p2->grade_x, p3->grade_x, chord);
+    REQUIRE(p3->grade_x < chord - 0.02);   // the scene does contradict its rise
+    // The game's own completion (frozen reference) declines it too: the lower road stays uncarved in racing_game.
+    auto game = strict; g2m_test::game_reference::complete_road_profiles(game, *env->dem);
+    CHECK_FALSE(game.entries[mid].profile);
+    RoadCompletionStats stats; const auto lib = build(*env, true, &stats);
+    REQUIRE(lib.entries[mid].profile);
+    CHECK(lib.origins[mid].provenance == ProfileProvenance::GroundCompleted);
+    CHECK(stats.ground_grades_eased >= 1);
+    const auto& p = *lib.entries[mid].profile;
+    REQUIRE(std::fabs(p.reference.length_m - length) < 1e-6);
+    const auto& first = p.vertical.segments.front(); const auto& last = p.vertical.segments.back();
+    // Endpoint heights win: the measured plane heights at both nodes, untouched.
+    CHECK(first.height0_m == p2->height / 256.0); CHECK(last.height1_m == p3->height / 256.0);
+    // End grades moved toward the chord by the same fraction t = k/8 at both ends, the smallest k that fits.
+    const double chord_ref = (last.height1_m - first.height0_m) / p.reference.length_m;
+    const double t = (last.grade1 - p3->grade_x) / (chord_ref - p3->grade_x);
+    std::printf("D43 completed: end grades %.4f / %.4f (eased by t = %.3f), kink at node 3 %.4f instead of a decline\n",
+        first.grade0, last.grade1, t, std::fabs(last.grade1 - p3->grade_x));
+    CHECK(t > 0); CHECK(t <= 1);
+    CHECK(std::fabs(t * 8 - std::round(t * 8)) < 1e-9);
+    CHECK(std::fabs(first.grade0 - (p2->grade_x + t * (chord_ref - p2->grade_x))) < 1e-12);
+    {   // The previous step (k - 1)/8 does not fit: the ease is minimal on the ladder.
+        const double tp = t - 0.125;
+        const std::array<VerticalSample, 2> samples{{{0, first.height0_m}, {p.reference.length_m, last.height1_m}}};
+        VerticalFitLimits fit; fit.max_grade = 0.12; fit.min_radius_m = 500; fit.max_iterations = 16384;
+        fit.start_grade = p2->grade_x + tp * (chord_ref - p2->grade_x); fit.end_grade = p3->grade_x + tp * (chord_ref - p3->grade_x);
+        CHECK_FALSE(fit_vertical_profile(samples, fit));
+    }
+    REQUIRE(validate_road_geom_tile(lib));
+}
+
+TEST_CASE("completion: an end plane far from the chord is terrain, not a misread: the ground stretch stays declined (D43)", "[layer][roads][completion][D43]") {
+    // The D43 scene with a 0.34 m catch-up at node 3: the plane there departs from the chord by more than
+    // kGroundEaseMismatch (0.05), so the ease does not run. On the bumpy G3-D terrain such stretches eased to the chord
+    // rode off the ground (junction gradient 3.08 between an eased approach and its climbing neighbour).
+    const auto world = world_of({{1, -300, 0}, {2, 0, 0}, {3, 27.6, 0}, {4, 300, 0}},
+        {{10, {1, 2}, {{"highway", "motorway"}}}, {11, {2, 3}, {{"highway", "motorway"}}}, {12, {3, 4}, {{"highway", "motorway"}}}});
+    const Fn catch_up = [](double e, double) { const double x = e - kOriginE; return 100.0 - 0.025 * x - 0.17 * std::tanh((x - 27.6) / 2.0); };
+    const auto env = make_env(world, kTile, catch_up);
+    const auto node_at = [&](std::int64_t id) {
+        return std::lower_bound(env->context.nodes.begin(), env->context.nodes.end(), id, [](const auto& n, auto v) { return n.osm_id < v; })->position;
+    };
+    const auto p2 = env->dem->junction_plane(zone, node_at(2)); REQUIRE(p2);
+    const auto p3 = env->dem->junction_plane(zone, node_at(3)); REQUIRE(p3);
+    const double chord = (p3->height - p2->height) / 256.0 / 27.6;
+    std::printf("D43 far scene: plane grades %.4f / %.4f, chord %.4f\n", p2->grade_x, p3->grade_x, chord);
+    REQUIRE(std::fabs(p3->grade_x) < 0.10);            // in range: the ground step's clamp does not hide the mismatch
+    REQUIRE(std::fabs(p3->grade_x - chord) > 0.05);
+    RoadCompletionStats stats; const auto lib = build(*env, true, &stats);
+    const auto mid = index_of(lib, 11, 0);
+    CHECK_FALSE(lib.entries[mid].profile);
+    CHECK(stats.ground_grades_eased == 0);
+}
+
 // ---- tile invariance (D25) ----
 
 namespace {
@@ -569,9 +647,9 @@ TEST_CASE("completion: fixtures, completed stretches by kind before and after, t
             for (const auto& [s, c] : b) std::printf(" %s=%d;", s.c_str(), c);
             std::printf("\n  after: ");
             for (const auto& [s, c] : a) std::printf(" %s=%d;", s.c_str(), c);
-            std::printf("\n  tier counters over all tiles (an entry counts once per tile that holds it): retry %zu/%zu accepted; bridge %zu candidates, %zu completed, %zu without support, %zu fit failed; ground %zu candidates, %zu completed (%zu bridge-anchored), %zu failed; tunnels skipped %zu; strict anchors taken %zu (D30)\n",
+            std::printf("\n  tier counters over all tiles (an entry counts once per tile that holds it): retry %zu/%zu accepted; bridge %zu candidates, %zu completed, %zu without support, %zu fit failed; ground %zu candidates, %zu completed (%zu bridge-anchored, %zu with eased end grades, D43), %zu failed; tunnels skipped %zu; strict anchors taken %zu (D30)\n",
                 stats.retry_accepted, stats.retry_candidates, stats.bridge_candidates, stats.bridge_completed, stats.bridge_no_support, stats.bridge_fit_failed,
-                stats.ground_candidates, stats.ground_completed, stats.ground_bridge_anchored, stats.ground_failed, stats.tunnel_skipped, stats.strict_anchors);
+                stats.ground_candidates, stats.ground_completed, stats.ground_bridge_anchored, stats.ground_grades_eased, stats.ground_failed, stats.tunnel_skipped, stats.strict_anchors);
             std::printf("  tile invariance: %zu repeated entries compared across tiles, %zu differ\n", compared, mismatches);
             CHECK(mismatches == 0);
             CHECK(compared > 0);
