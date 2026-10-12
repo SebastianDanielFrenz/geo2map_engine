@@ -20,8 +20,11 @@
 //
 // Thread safety: every public method may be called concurrently. The
 // stores are thread-safe (tile_store.h); derivers and upstreams must be
-// (their headers say so). Two threads resolving the same missing tile may
-// both derive it; both write identical bytes.
+// (their headers say so). Resolution is deduplicated per (release, layer,
+// key): while one thread resolves a tile, any other thread asking for the
+// same tile waits for that result, so a tile is derived at most once at a
+// time (the derived store then serves it). A waiter only ever waits on a
+// thread that is running the resolution, never on queued work.
 #pragma once
 
 #include "g2m/core/result.h"

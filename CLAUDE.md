@@ -167,7 +167,22 @@ geo2map_engine/
     surface_id_table.h               g2m::classes::SurfaceIdTable (SurfaceKind + LandClass -> consumer
                                       id; road cell with a known kind -> kind id, else land class id;
                                       to_road_value_lut)
-  src/world/                          g2m_world implementation: tile_fetch.cpp, height_sampler.cpp,
+    ticket.h                         Priority (Gate, Physics, Prefetch, Render, Warm), TileState
+                                      (Pending/Ready/Absent/Failed/Cancelled), Ticket<T> (state()/value()
+                                      lock-free reads, wait_for for tools, cancel = drop of the last copy)
+    products.h                       Outcome<T>, RoadSegmentsTile, RawTile, phase-3 payload placeholders
+                                      (StructureSet, RoadRibbonTile, BuildingSet)
+    terrain_service.h                TerrainService (terrain migration phase 2): open (stores, layer opt-ins,
+                                      release, in-process server, ONE worker pool), async height/road_geom/
+                                      road_segments/source_osm/raw_tile/structures/road_ribbons/buildings ->
+                                      Ticket<T>, peek_* (never start work), surface_height_exact/bilinear on
+                                      resident tiles, warm() -> WarmJob, physics_fetch() -> PhysicsFetch
+                                      (IHeightTileFetch; blocks on the caller, which is a loader thread),
+                                      product<T>(kind, key, ...) + ProductContext for caller producers
+  src/world/                          g2m_world implementation: terrain_service.cpp, job_scheduler.{h,cpp}
+                                      (internal: priority queue, per-job registry, interest counting, nested
+                                      join / inline run), tile_cache.h (internal: byte-weighted LRU of
+                                      decoded tiles), tile_fetch.cpp, height_sampler.cpp,
                                       chunk_road_classes.cpp
   bridges/physics_sim/                 g2m_ps_bridge (PLAN.md R2.2 section 1b, G5/G6): the seam between
                                       g2m_phys's ps-free physics-tile data and physics_sim's own
@@ -426,6 +441,17 @@ end of `CMakeLists.txt`):
   extraction in `tests/world/refgen/`, not built by default), ported game
   cases, `sample_height_exact` against `build_chunk`'s triangles and (bridge
   leg, `test_render_vs_jolt.cpp`) against a Jolt ray cast.
+  Phase 2 (`TerrainService`): links `g2m_server` too and PRIVATE
+  `Threads::Threads`. Tests `test_terrain_service.cpp` (tag `[terrain_service]`;
+  synthetic 5 x 5 DEM + service-road world): one derivation for concurrent
+  requests, priority order (equal priority = request order, a re-request of a
+  queued tile raises it), cancel/drop/shutdown without leak or deadlock,
+  bit-identity of every byte with the plain serial server, warm fills the
+  derived store, nested producers on a pool of one. The server resolver now
+  deduplicates per (release, layer, key) (`server.h`; test
+  `test_server.cpp` "concurrent cold requests derive each tile exactly once").
+  `g2m_terrain_service_bench` (tests/world/bench_terrain_service.cpp, not a
+  CTest test): cold-store throughput, serial server vs pool vs warm.
 - `g2m_ps_bridge` (STATIC, `bridges/physics_sim/`, PLAN.md R2.2 section 1b,
   G5/G6): `src/version.cpp`, `src/g2m_terrain_source.cpp`; PUBLIC `ps_core`
   (physics_sim's own target, embedded via `G2M_PS_SOURCE_DIR` - see "CMake

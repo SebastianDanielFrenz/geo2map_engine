@@ -10,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 
@@ -66,6 +67,7 @@ public:
     }
     Result<DeriveResult> derive(const DeriveRequest& req) const override {
         calls++;
+        if (delay_ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
         TileBody b;
         b.encoding = desc_.encoding;
         b.encoding_version = 1;
@@ -85,6 +87,7 @@ public:
         return r;
     }
     mutable std::atomic<int> calls{0};
+    int delay_ms = 0; // simulates a slow derivation (dedup tests)
 
 private:
     LayerDesc desc_;
@@ -699,4 +702,43 @@ TEST_CASE("server: concurrent requests", "[server]") {
     for (auto& th : threads) th.join();
     CHECK(bad == 0);
     CHECK(w.sum.calls == 3);
+}
+
+// A tile is derived at most once at a time: threads asking for the same cold tile at the same moment
+// wait for the one resolution in flight instead of deriving it again (resolver per-tile dedup).
+TEST_CASE("server: concurrent cold requests derive each tile exactly once", "[server][dedup]") {
+    World w;
+    w.sum.delay_ms = 40;
+    LocalSourceUpstream local(*w.sources);
+    ServerConfig c;
+    c.derived_store = w.derived.get();
+    c.upstreams = {&local};
+    c.derivers = {&w.sum};
+    Server s(c);
+    REQUIRE(s.add_release(w.release, "snap1"));
+
+    constexpr int kThreads = 8;
+    std::atomic<int> ready{0};
+    std::atomic<bool> go{false};
+    std::atomic<int> not_ok{0};
+    std::vector<std::vector<std::uint8_t>> got(kThreads);
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t] {
+            ready++;
+            while (!go) std::this_thread::yield();
+            // Two distinct tiles, every thread asks for both.
+            const TileResponse a = get_tile(s, w.release.rid, kSum, home_tile(0, 0));
+            const TileResponse b = get_tile(s, w.release.rid, kSum, home_tile(1, 0));
+            if (a.meta.status != Status::Ok || b.meta.status != Status::Ok) not_ok++;
+            got[static_cast<std::size_t>(t)] = a.container;
+            got[static_cast<std::size_t>(t)].insert(got[static_cast<std::size_t>(t)].end(), b.container.begin(), b.container.end());
+        });
+    }
+    while (ready < kThreads) std::this_thread::yield();
+    go = true;
+    for (auto& th : threads) th.join();
+    CHECK(not_ok == 0);
+    CHECK(w.sum.calls == 2);
+    for (int t = 1; t < kThreads; ++t) CHECK(got[static_cast<std::size_t>(t)] == got[0]);
 }

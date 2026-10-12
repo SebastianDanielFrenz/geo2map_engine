@@ -3,10 +3,13 @@
 #include "g2m/server/server.h"
 
 #include <algorithm>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <set>
 #include <shared_mutex>
+#include <thread>
+#include <tuple>
 
 namespace g2m {
 
@@ -131,7 +134,63 @@ struct Server::Impl {
         (void)cfg.derived_store->put(TileAddress{rel.rid_hex, r.header.layer, r.header.key}, r.header, r.body);
     }
 
+    // One resolution of (release, layer, key) in progress. The thread that registered it (the leader) runs the policy
+    // chain; every other thread resolving the same tile meanwhile waits for the leader's result instead of deriving
+    // the tile again.
+    struct Flight {
+        std::condition_variable cv;
+        bool done = false;
+        std::thread::id leader;
+        Resolved result;
+    };
+    using FlightKey = std::tuple<std::string, std::string, std::uint64_t>;
+    std::mutex flight_mu; // guards `flights` and every Flight's done/result
+    std::map<FlightKey, std::shared_ptr<Flight>> flights;
+
+    // Per-tile deduplication. Deadlock freedom: a thread waits only on a flight whose leader is a running thread
+    // (a flight exists only while its leader is inside resolve_chain), and the derivation graph is acyclic (a layer's
+    // inputs are other layers or other tiles of strictly lower derivation depth), so the wait-for relation between
+    // threads has no cycle. A thread that would wait on its OWN flight (a cyclic layer graph) gets an error instead.
     Resolved resolve(const LiveRelease& rel, const ReleaseLayer& layer, const TileKey& key, int depth) {
+        FlightKey fk{rel.rid_hex, layer.desc.id.name, key.packed()};
+        std::shared_ptr<Flight> flight;
+        {
+            std::unique_lock lock(flight_mu);
+            const auto it = flights.find(fk);
+            if (it != flights.end()) {
+                flight = it->second;
+                if (flight->leader == std::this_thread::get_id()) {
+                    Resolved cyc;
+                    cyc.kind = Resolved::Kind::Error;
+                    cyc.message = "derivation cycle (cyclic layer inputs?)";
+                    return cyc;
+                }
+                flight->cv.wait(lock, [&] { return flight->done; });
+                return flight->result;
+            }
+            flight = std::make_shared<Flight>();
+            flight->leader = std::this_thread::get_id();
+            flights.emplace(fk, flight);
+        }
+        Resolved r;
+        try {
+            r = resolve_chain(rel, layer, key, depth);
+        } catch (...) { // never leave followers waiting (library code does not throw; bad_alloc only)
+            r = Resolved{};
+            r.kind = Resolved::Kind::Error;
+            r.message = "resolver exception";
+        }
+        {
+            std::lock_guard lock(flight_mu);
+            flight->result = r;
+            flight->done = true;
+            flights.erase(fk);
+        }
+        flight->cv.notify_all();
+        return r;
+    }
+
+    Resolved resolve_chain(const LiveRelease& rel, const ReleaseLayer& layer, const TileKey& key, int depth) {
         Resolved out;
         if (depth > kMaxDeriveDepth) {
             out.kind = Resolved::Kind::Error;
