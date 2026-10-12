@@ -153,8 +153,8 @@ else()
   target_compile_options(g2m_warnings INTERFACE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-# g2m_options: /arch:AVX2, /fp:precise, FMA contraction OFF, no fast-math
-# (PLAN.md 2.4). Per compiler:
+# g2m_options: /arch:AVX2 (x86-64 targets only), /fp:precise, FMA contraction
+# OFF, no fast-math (PLAN.md 2.4). Per compiler:
 #  - cl:       /fp:precise does not contract a*b+c into an FMA (VS 2022 needs
 #              an explicit /fp:contract for that), so nothing more is needed.
 #  - clang-cl: clang defaults to -ffp-contract=on; clang-cl's own option
@@ -162,13 +162,36 @@ endif()
 #              /clang:.
 #  - clang:    -ffp-contract=off directly.
 add_library(g2m_options INTERFACE)
+
+# x86-64 target check. Uses the TARGET architecture, so it also holds under a
+# cross toolchain (CMAKE_SYSTEM_PROCESSOR is the toolchain file's value, not
+# the host's). aarch64/arm64 (Linux ARM64 for the Steam Frame, Windows ARM64)
+# and anything else take the "not x86-64" branch: no AVX2/FMA flags.
+set(_g2m_arch "${CMAKE_SYSTEM_PROCESSOR}")
+if(_g2m_arch STREQUAL "" AND MSVC)
+  set(_g2m_arch "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}")
+endif()
+if(_g2m_arch MATCHES "^([xX]86_64|[aA][mM][dD]64|[xX]64)$")
+  set(G2M_TARGET_X86_64 TRUE)
+else()
+  set(G2M_TARGET_X86_64 FALSE)
+endif()
+message(STATUS "g2m: target processor '${_g2m_arch}' -> x86-64 SIMD flags ${G2M_TARGET_X86_64}")
+
 if(MSVC)
-  target_compile_options(g2m_options INTERFACE /arch:AVX2 /fp:precise /EHsc)
+  # /fp:precise and /EHsc on every architecture; only the AVX2 switch is x86.
+  target_compile_options(g2m_options INTERFACE /fp:precise /EHsc)
+  if(G2M_TARGET_X86_64)
+    target_compile_options(g2m_options INTERFACE /arch:AVX2)
+  endif()
   if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(g2m_options INTERFACE /clang:-ffp-contract=off)
   endif()
 else()
-  target_compile_options(g2m_options INTERFACE -mavx2 -mfma -ffp-contract=off)
+  target_compile_options(g2m_options INTERFACE -ffp-contract=off)
+  if(G2M_TARGET_X86_64)
+    target_compile_options(g2m_options INTERFACE -mavx2 -mfma)
+  endif()
 endif()
 
 # Always-defined G2M_SANITIZER_BUILD=0/1 compile definition (mirrors
