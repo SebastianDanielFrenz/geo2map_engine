@@ -40,7 +40,10 @@ inline Error make_error(ErrorCode code, std::string message) { return Error{code
 template <class T>
 class [[nodiscard]] Result {
 public:
-    Result(T value) : v_(std::in_place_index<0>, std::move(value)) {}  // NOLINT: implicit by design
+    // By const reference / rvalue reference, not by value: a by-value T parameter is a full extra copy of T in the
+    // caller's frame under MSVC, which for a large T (a 256 KiB HeightTile) overflows a 1 MiB stack.
+    Result(const T& value) : v_(std::in_place_index<0>, value) {}  // NOLINT: implicit by design
+    Result(T&& value) : v_(std::in_place_index<0>, std::move(value)) {}  // NOLINT: implicit by design
     Result(Error error) : v_(std::in_place_index<1>, std::move(error)) {}  // NOLINT
 
     bool ok() const { return v_.index() == 0; }

@@ -800,14 +800,17 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
 
 // ---- the tile ----
 
-Result<HeightTile> carve_terrain_tile(const TileKey& key, std::span<const HeightTile* const> dem,
+namespace {
+// Carves into the caller's tile (a HeightTile is 256 KiB: callers keep it on the heap, never as a stack local or a
+// by-value Result, or several of them overflow a 1 MiB stack under MSVC).
+Result<void> carve_terrain_tile_into(HeightTile& out, const TileKey& key, std::span<const HeightTile* const> dem,
     std::span<const CarveGeomInput> roads, const CarveParams& params, const CarveOptions& options, unsigned workers, CarveStats* stats) {
     auto terrain = CarveTerrain::make(key, dem, params.smoothing);
     if (!terrain) return terrain.error();
     CarveStats local;
     auto model = CarveModel::build(roads, params, *terrain, options, builtin_road_rules_de(), &local);
     if (!model) return model.error();
-    HeightTile out; out.key = key;
+    out.key = key;
     if (workers < 1) workers = 1;
     if (workers > 64) workers = 64;
     std::vector<CarveStats> part(workers);
@@ -848,7 +851,15 @@ Result<HeightTile> carve_terrain_tile(const TileKey& key, std::span<const Height
     }
     out.has_nodata = local.cells_nodata > 0;
     if (stats) *stats = local;
-    return out;
+    return {};
+}
+} // namespace
+
+Result<HeightTile> carve_terrain_tile(const TileKey& key, std::span<const HeightTile* const> dem,
+    std::span<const CarveGeomInput> roads, const CarveParams& params, const CarveOptions& options, unsigned workers, CarveStats* stats) {
+    auto out = std::make_unique<HeightTile>();
+    if (auto ok = carve_terrain_tile_into(*out, key, dem, roads, params, options, workers, stats); !ok) return ok.error();
+    return std::move(*out);
 }
 
 // ---- layer and deriver ----
@@ -933,7 +944,7 @@ Result<DeriveResult> TerrainCarvedDeriver::derive(const DeriveRequest& request) 
             if (auto ok = decode_height_tile(*body, in.ref.key, children[i]); !ok) return ok.error();
             ptrs[i] = &children[i];
         }
-        HeightTile tile; tile.key = target;
+        auto tile_p = std::make_unique<HeightTile>(); HeightTile& tile = *tile_p; tile.key = target;
         downsample_2x2(ptrs[0], ptrs[1], ptrs[2], ptrs[3], tile);
         auto encoded = encode_height_tile(tile); if (!encoded) return encoded.error();
         auto bytes = encode_body(*encoded); if (!bytes) return bytes.error();
@@ -981,8 +992,8 @@ Result<DeriveResult> TerrainCarvedDeriver::derive(const DeriveRequest& request) 
             return make_error(ErrorCode::Malformed, "terrain.carved: roads.geom datum differs from the DEM");
     std::vector<CarveGeomInput> geom;
     for (std::size_t i = 0; i < roads.size(); ++i) geom.push_back({road_keys[i], &roads[i]});
-    auto tile = carve_terrain_tile(target, window, geom, builtin_carve_default());
-    if (!tile) return tile.error();
+    auto tile = std::make_unique<HeightTile>();
+    if (auto ok = carve_terrain_tile_into(*tile, target, window, geom, builtin_carve_default(), {}, 1, nullptr); !ok) return ok.error();
     auto encoded = encode_height_tile(*tile); if (!encoded) return encoded.error();
     auto body = encode_body(*encoded); if (!body) return body.error();
     return DeriveResult{std::move(*body), *datum, 0};
