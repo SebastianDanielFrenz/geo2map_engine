@@ -27,6 +27,7 @@
 #include "g2m/mesh/terrain_chunk.h"
 #include "g2m/phys/height_tile_loader.h"
 #include "g2m/ps_bridge/g2m_terrain_source.h"
+#include "g2m/world/height_sampler.h"
 
 #include "ps/world/world.h"
 
@@ -39,6 +40,7 @@
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -189,6 +191,12 @@ struct Comparison {
     double mean_err = 0.0;
     double wrong_max = 0.0;
     double wrong_mean = 0.0;
+    // g2m::world::sample_height_exact (the physics-exact sampler) against the
+    // same Jolt ray hit.
+    int exact_misses = 0;
+    double exact_max_err = 0.0;
+    double exact_p99_err = 0.0;
+    double bilinear_max_diff = 0.0; // |sample_height_bilinear - Jolt|: the render-only sampler is NOT the physics surface
 };
 
 // 4096 LCG points in L0 quads whose four vertices are samples in the
@@ -206,7 +214,15 @@ Comparison compare(ps::World& world, const ResidentHeightSet& resident, const Ph
 
     Lcg lcg(seed);
     std::vector<double> errs;
+    std::vector<double> exact_errs;
     errs.reserve(4096);
+    exact_errs.reserve(4096);
+    const g2m::world::L0TileLookupFn lookup = [&resident](const TileKey& key) -> const g2m::HeightTile* {
+        const g2m::HeightTile* tile = nullptr;
+        resident.find(key, &tile);
+        return tile;
+    };
+    const g2m::geo::UtmZone zone = grid.frame().zone();
     Comparison out;
     double wrong_sum = 0.0;
     for (int n = 0; n < 4096; ++n) {
@@ -229,6 +245,17 @@ Comparison compare(ps::World& world, const ResidentHeightSet& resident, const Ph
         }
         const double err = std::abs(hit.point.z - s.z_render);
         const double wrong = std::abs(hit.point.z - s.z_wrong_diag);
+        const std::optional<double> exact = g2m::world::sample_height_exact(lookup, zone, kE0, kN0, x, y);
+        if (!exact) {
+            ++out.exact_misses;
+        } else {
+            const double exact_err = std::abs(hit.point.z - *exact);
+            exact_errs.push_back(exact_err);
+            out.exact_max_err = std::max(out.exact_max_err, exact_err);
+        }
+        if (const std::optional<double> bil = g2m::world::sample_height_bilinear(lookup, zone, kE0, kN0, x, y)) {
+            out.bilinear_max_diff = std::max(out.bilinear_max_diff, std::abs(hit.point.z - *bil));
+        }
         errs.push_back(err);
         out.max_err = std::max(out.max_err, err);
         out.mean_err += err;
@@ -242,10 +269,17 @@ Comparison compare(ps::World& world, const ResidentHeightSet& resident, const Ph
         std::sort(errs.begin(), errs.end());
         out.p99_err = errs[static_cast<std::size_t>(std::floor(0.99 * static_cast<double>(errs.size() - 1)))];
     }
+    if (!exact_errs.empty()) {
+        std::sort(exact_errs.begin(), exact_errs.end());
+        out.exact_p99_err =
+            exact_errs[static_cast<std::size_t>(std::floor(0.99 * static_cast<double>(exact_errs.size() - 1)))];
+    }
     std::printf("render-vs-jolt: %d points (%zu chunks), ray misses %d, render misses %d, max %.4f mm, p99 %.4f mm, "
                 "mean %.4f mm; other diagonal: max %.1f mm, mean %.1f mm\n",
                 out.points, sampler.chunk_count(), out.ray_misses, out.render_misses, out.max_err * 1e3, out.p99_err * 1e3,
                 out.mean_err * 1e3, out.wrong_max * 1e3, out.wrong_mean * 1e3);
+    std::printf("sample_height_exact vs Jolt: misses %d, max %.4f mm, p99 %.4f mm; sample_height_bilinear vs Jolt: max %.1f mm\n",
+                out.exact_misses, out.exact_max_err * 1e3, out.exact_p99_err * 1e3, out.bilinear_max_diff * 1e3);
     return out;
 }
 
@@ -288,6 +322,11 @@ TEST_CASE("render vs Jolt: checkerboard saddle - L0 mesh and Jolt tiles are one 
     // centre and ~0.13 m on average - far outside the 2 mm tolerance.
     CHECK(c.wrong_max >= 0.1);
     CHECK(c.wrong_mean >= 0.05);
+    // The physics-exact sampler is that same Jolt surface (same tolerance);
+    // the bilinear one is not - on a checkerboard it is ~0.1 m off.
+    CHECK(c.exact_misses == 0);
+    CHECK(c.exact_max_err <= 0.002);
+    CHECK(c.bilinear_max_diff >= 0.05);
 }
 
 TEST_CASE("render vs Jolt: PKT DGM1 fixture - max <= 5 mm, p99 <= 2 mm", "[bridge][terrain][render][fixture]") {
@@ -340,4 +379,7 @@ TEST_CASE("render vs Jolt: PKT DGM1 fixture - max <= 5 mm, p99 <= 2 mm", "[bridg
     CHECK(c.points == 4096);
     CHECK(c.max_err <= 0.005);
     CHECK(c.p99_err <= 0.002);
+    CHECK(c.exact_misses == 0);
+    CHECK(c.exact_max_err <= 0.005);
+    CHECK(c.exact_p99_err <= 0.002);
 }

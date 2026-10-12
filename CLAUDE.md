@@ -149,6 +149,26 @@ geo2map_engine/
                                       (retry_failed()); gate_keys()/keep_keys() accessors
   src/phys/                           g2m_phys implementation: physics_grid.cpp, resident_heights.cpp,
                                       height_tile_loader.cpp, physics_streamer.cpp
+  include/g2m/world/                  public API of g2m_world (terrain migration phase 1, vault G2M-020): the
+                                      engine-neutral helpers the game's WorldTerrain/route_check/road_classes
+                                      hold, ported bit for bit - no physics_sim/Jolt/Godot type
+    tile_fetch.h                     decode_height_tile_container (parse_container, layer/key check,
+                                      height_offset in int64, reject <= kHeightNoData or > INT32_MAX),
+                                      fetch_height_tile (one transport fetch), fetch_height_tile_cached
+                                      (double-checked insert, fn outside the lock, failures not cached);
+                                      RoadFetchStatus Ok/Absent("outside coverage")/Failed,
+                                      decode_road_segments_response, fetch_road_segments(_cached)
+    height_sampler.h                 sample_height_exact (Jolt/build_chunk triangulation: NW-SE diagonal,
+                                      a triangle solid only if its 3 corners are valid) and
+                                      sample_height_bilinear (render only), L0TileLookupFn; session-local
+                                      metres, lattice (c - e0 + 0.5)
+    chunk_road_classes.h             ClassLookup/RoadSegmentsFn, road_class_lattice,
+                                      src_osm_tiles_for_chunk, rasterize_chunk_road_classes (owner rule)
+    surface_id_table.h               g2m::classes::SurfaceIdTable (SurfaceKind + LandClass -> consumer
+                                      id; road cell with a known kind -> kind id, else land class id;
+                                      to_road_value_lut)
+  src/world/                          g2m_world implementation: tile_fetch.cpp, height_sampler.cpp,
+                                      chunk_road_classes.cpp
   bridges/physics_sim/                 g2m_ps_bridge (PLAN.md R2.2 section 1b, G5/G6): the seam between
                                       g2m_phys's ps-free physics-tile data and physics_sim's own
                                       ps::terrain::ITerrainSource - the only place the two projects meet.
@@ -397,6 +417,15 @@ end of `CMakeLists.txt`):
   Built UNCONDITIONALLY, not gated by `G2M_BUILD_IMPORT` - every CI leg,
   including the sanitizer legs, exercises it. No physics_sim/Jolt/Godot type
   anywhere in `include/g2m/phys/`, and it never links physics_sim.
+- `g2m_world` (STATIC, `src/world/*.cpp`, terrain migration phase 1): PUBLIC
+  `g2m_client` + `g2m_mesh` + `g2m_phys`, PRIVATE `g2m_warnings`/`g2m_options`.
+  Built unconditionally. No physics_sim/Jolt/Godot type; never links
+  physics_sim. Tests `g2m_world_tests` (tests/world: test_tile_fetch,
+  test_height_sampler, test_chunk_road_classes, test_surface_id_table; tag
+  `[world]`): values pinned from racing_game a8a1b13's own code (verbatim
+  extraction in `tests/world/refgen/`, not built by default), ported game
+  cases, `sample_height_exact` against `build_chunk`'s triangles and (bridge
+  leg, `test_render_vs_jolt.cpp`) against a Jolt ray cast.
 - `g2m_ps_bridge` (STATIC, `bridges/physics_sim/`, PLAN.md R2.2 section 1b,
   G5/G6): `src/version.cpp`, `src/g2m_terrain_source.cpp`; PUBLIC `ps_core`
   (physics_sim's own target, embedded via `G2M_PS_SOURCE_DIR` - see "CMake

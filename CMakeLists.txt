@@ -199,6 +199,10 @@ add_subdirectory(src/mesh)
 # it - see src/phys/CMakeLists.txt.
 add_subdirectory(src/phys)
 
+# Terrain migration plan (vault G2M-020): g2m_world, the engine-neutral terrain
+# service pieces moved from racing_game (links g2m_client/g2m_mesh/g2m_phys).
+add_subdirectory(src/world)
+
 add_subdirectory(third_party/musl_math)
 add_subdirectory(src)
 
@@ -226,6 +230,7 @@ if(G2M_BUILD_TESTS)
   add_subdirectory(tests/unit)
   add_subdirectory(tests/mesh)
   add_subdirectory(tests/phys)
+  add_subdirectory(tests/world)
   add_subdirectory(tests/golden)
   add_subdirectory(tests/fuzz)
 endif()
