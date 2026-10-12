@@ -655,10 +655,10 @@ Result<RoadGeomTile> decode_road_geom(const TileBody& body) {
                 j.absorbed.push_back(static_cast<std::size_t>(entry));
             }
             for (auto& ring : j.rings) {
-                const auto count = jr.varint();
-                if (!jr.ok() || count > kMaxRingVertices || count > jr.remaining() / 2 || (ring_vertices += count) > kMaxTileRingVertices) return invalid("junction ring count");
+                const auto ring_count = jr.varint();
+                if (!jr.ok() || ring_count > kMaxRingVertices || ring_count > jr.remaining() / 2 || (ring_vertices += ring_count) > kMaxTileRingVertices) return invalid("junction ring count");
                 geom::PointMm p{};
-                for (std::uint64_t v = 0; v < count; ++v) {
+                for (std::uint64_t v = 0; v < ring_count; ++v) {
                     const auto dx = jr.svarint(), dy = jr.svarint();
                     if (!jr.ok() || !coordinate(dx) || !coordinate(dy)) return invalid("junction ring vertex");
                     p = v == 0 ? geom::PointMm{dx, dy} : geom::PointMm{p.x + dx, p.y + dy};
@@ -674,19 +674,19 @@ Result<RoadGeomTile> decode_road_geom(const TileBody& body) {
         ByteReader ur(body.sections[5].data);
         const auto furniture_count = ur.varint(); if (!ur.ok() || furniture_count > kMaxFurniture || furniture_count > ur.remaining() / 20) return invalid("furniture count");
         for (std::uint64_t i = 0; i < furniture_count; ++i) {
-            RoadFurniture r; const auto kind = ur.u8(); const auto decline = ur.u16();
-            r.node_id = ur.svarint(); const auto entry = ur.varint(), junction = ur.varint();
-            r.station_m = number(ur); const auto travel = ur.u8();
+            RoadFurniture furn; const auto kind = ur.u8(); const auto decline = ur.u16();
+            furn.node_id = ur.svarint(); const auto entry = ur.varint(), junction = ur.varint();
+            furn.station_m = number(ur); const auto travel = ur.u8();
             const auto t_from = ur.svarint(), t_to = ur.svarint(); const auto length = ur.varint();
-            const auto pattern = ur.u8(); r.flags = ur.u8();
+            const auto pattern = ur.u8(); furn.flags = ur.u8();
             if (!ur.ok() || kind > 3 || decline >= kFurnitureDeclineCount || entry >= tile.entries.size() || junction > tile.junctions.size() ||
                 travel > 1 || pattern >= kCrossingPatternCount || t_from < -200000 || t_from > 200000 || t_to < -200000 || t_to > 200000 || length > 100000)
                 return invalid("furniture record");
-            r.kind = static_cast<FurnitureKind>(kind); r.decline = static_cast<FurnitureDecline>(decline);
-            r.entry_index = static_cast<std::size_t>(entry); r.junction_index = static_cast<std::uint32_t>(junction);
-            r.travel = static_cast<LaneDirection>(travel); r.pattern = static_cast<CrossingPattern>(pattern);
-            r.t_from = static_cast<double>(t_from) / 1000.0; r.t_to = static_cast<double>(t_to) / 1000.0; r.length_m = static_cast<double>(length) / 1000.0;
-            tile.furniture.push_back(r);
+            furn.kind = static_cast<FurnitureKind>(kind); furn.decline = static_cast<FurnitureDecline>(decline);
+            furn.entry_index = static_cast<std::size_t>(entry); furn.junction_index = static_cast<std::uint32_t>(junction);
+            furn.travel = static_cast<LaneDirection>(travel); furn.pattern = static_cast<CrossingPattern>(pattern);
+            furn.t_from = static_cast<double>(t_from) / 1000.0; furn.t_to = static_cast<double>(t_to) / 1000.0; furn.length_m = static_cast<double>(length) / 1000.0;
+            tile.furniture.push_back(furn);
         }
         if (!ur.at_end()) return invalid("truncated or trailing furniture bytes");
         ByteReader pr(body.sections[6].data);

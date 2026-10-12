@@ -272,8 +272,8 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         if (!vertical && boundary_infeasible(vertical.error().message)) {
             const double chord = static_cast<double>(b->height - a->height) / 256.0 / ref->length_m;
             const double g0 = fit.start_grade, g1 = fit.end_grade;
-            const bool local = std::fabs(chord) <= fit.max_grade && std::fabs(g0 - chord) <= kGroundEaseMismatch && std::fabs(g1 - chord) <= kGroundEaseMismatch;
-            for (int k = 1; local && k <= 8; ++k) {
+            const bool near_chord = std::fabs(chord) <= fit.max_grade && std::fabs(g0 - chord) <= kGroundEaseMismatch && std::fabs(g1 - chord) <= kGroundEaseMismatch;
+            for (int k = 1; near_chord && k <= 8; ++k) {
                 const double t = static_cast<double>(k) / 8.0;
                 fit.start_grade = g0 + t * (chord - g0); fit.end_grade = g1 + t * (chord - g1);
                 vertical = fit_vertical_profile(samples, fit);

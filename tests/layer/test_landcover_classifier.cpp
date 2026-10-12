@@ -56,7 +56,7 @@ TEST_CASE("The ESA WorldCover table maps the 11 classes", "[layer][classifier]")
         CHECK(table.surface(facts("esa_worldcover_v200", row.code)) == row.surface);
     }
     // No-data (0), a code outside the legend and a foreign scheme all classify as Unknown.
-    for (const std::uint8_t code : {0, 1, 11, 255}) {
+    for (const std::uint8_t code : {std::uint8_t{0}, std::uint8_t{1}, std::uint8_t{11}, std::uint8_t{255}}) {
         CHECK(table.land_class(facts("esa_worldcover_v200", code)) == LandClass::Unknown);
         CHECK(table.surface(facts("esa_worldcover_v200", code)) == SurfaceKind::Unknown);
     }

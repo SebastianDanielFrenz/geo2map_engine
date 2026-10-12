@@ -1115,8 +1115,8 @@ std::vector<ProfileFeature> JunctionFeatureAdjustment::core_features() const {
 
 JunctionFeatureAdjustment adjust_features_for_junctions(const RoadGeomTile& tile, std::span<const RoadJunction> junctions) {
     JunctionFeatureAdjustment out;
-    constexpr double kNone = -1.0;
-    std::vector<double> trim_start(tile.entries.size(), kNone), trim_end(tile.entries.size(), kNone);
+    constexpr double kNoTrim = -1.0;
+    std::vector<double> trim_start(tile.entries.size(), kNoTrim), trim_end(tile.entries.size(), kNoTrim);
     for (const auto& j : junctions) {
         if (j.decline != JunctionDecline::None) continue;
         for (const auto& a : j.approaches) {

@@ -303,7 +303,7 @@ std::unique_ptr<Scene> x_scene(const Tags& centre = {}, const std::vector<N>& ex
 }
 double trim_of(const Scene& s, std::size_t entry, bool at_end) {
     for (const auto& j : s.junctions) for (const auto& a : j.approaches) if (a.entry_index == entry && a.at_end == at_end) return a.trim_m;
-    FAIL("no such approach"); return 0;
+    FAIL("no such approach");
 }
 }
 
