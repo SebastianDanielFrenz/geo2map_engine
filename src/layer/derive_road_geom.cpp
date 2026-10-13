@@ -95,7 +95,8 @@ std::string road_geom_config_text() {
         " completion-abutment=" + option_value(c.abutment_ground_m) + "/" + option_value(c.abutment_path_m) +
         " completion-ground=" + option_value(c.ground_spacing_m) + "/" + option_value(c.ground_ramp_m) + " strict-anchor=1 ring-nesting=2mm"
         " bridge-far-end=1"    // D35: two discovery stages, the DEM and graph tiles of every incident bridge's far end
-        " ground-ease=8/0.05"; // D43: ground completion eases contradicting end grades toward the chord in eighths, mismatch <= 0.05
+        " ground-ease=8/0.05"  // D43: ground completion eases contradicting end grades toward the chord in eighths, mismatch <= 0.05
+        " corner-fillet=1";    // D44: kerb returns on block corners (radii from the rules), per-corner fallback to sharp
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {

@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "186e11c4570010a1795af09d946fa75c37ca72e8d8715265838b2502358ba435");
+    CHECK(to_hex(digest) == "1677d98b26f4647ed25fd904f4079d516c1885abcffb8b1e6c1c501efb84fc27");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 

@@ -61,8 +61,12 @@ std::unique_ptr<Scene> y_scene(double degrees) {
     const double a = degrees * kPi / 180.0;
     return make_scene({{1, 0, 0}, {2, -300, 0}, {3, 300, 0}, {4, 300 * std::cos(a), 300 * std::sin(a)}}, {{10, {2, 1, 3}}, {11, {1, 4}}});
 }
-RoadJunction junction_of(const Scene& scene, std::int64_t node, const RoadRules& rules = builtin_road_rules_de(), JunctionBuildStats* stats = nullptr) {
-    auto j = build_node_junction(scene.tile, *scene.builder, node, rules, stats);
+// The offset-intersect-trim tests (T2, the bow-tie repair) check the SHARP corners of design 3.3-3.5; the corner
+// fillets (kerb returns) on top of them have their own tests in test_junction_fillets.cpp.
+JunctionBuildOptions sharp_corners() { JunctionBuildOptions o; o.corner_fillets = false; return o; }
+RoadJunction junction_of(const Scene& scene, std::int64_t node, const RoadRules& rules = builtin_road_rules_de(), JunctionBuildStats* stats = nullptr,
+    const JunctionBuildOptions& options = sharp_corners()) {
+    auto j = build_node_junction(scene.tile, *scene.builder, node, rules, stats, options);
     REQUIRE(j);
     return std::move(*j);
 }
@@ -323,7 +327,7 @@ TEST_CASE("T3: a repairable bow-tie is repaired by trim extension; without the r
     REQUIRE(home);
     auto g = g2m_test::geometry_in_tile(*world, *home); REQUIRE(g);
     JunctionBuildStats stats;
-    const auto repaired = build_node_junction(*g, *builder, kNode, builtin_road_rules_de(), &stats); REQUIRE(repaired);
+    const auto repaired = build_node_junction(*g, *builder, kNode, builtin_road_rules_de(), &stats, sharp_corners()); REQUIRE(repaired);
     CHECK(repaired->decline == JunctionDecline::None);
     CHECK_FALSE(has(*repaired, JunctionFlags::HullFallback));
     CHECK(stats.bowtie_rounds == 1); CHECK(stats.bowtie_repaired == 1);
@@ -331,11 +335,16 @@ TEST_CASE("T3: a repairable bow-tie is repaired by trim extension; without the r
     // Sabotage in the test: with the repair disabled (0 rounds) the same junction takes the hull for its non-simple layer.
     auto no_repair = builtin_road_rules_de(); no_repair.junction.bowtie_rounds = 0;
     JunctionBuildStats stats0;
-    const auto hull = build_node_junction(*g, *builder, kNode, no_repair, &stats0); REQUIRE(hull);
+    const auto hull = build_node_junction(*g, *builder, kNode, no_repair, &stats0, sharp_corners()); REQUIRE(hull);
     CHECK(has(*hull, JunctionFlags::HullFallback));
     CHECK(stats0.bowtie_rounds == 0); CHECK(stats0.hull_fallbacks == 1);
     for (const auto& ring : hull->rings) CHECK(junction_ring_valid(ring));
     CHECK_FALSE(*hull == *repaired);
+    // With the corner fillets the kerb returns push these trims out far enough that the first ring is already simple.
+    JunctionBuildStats filleted;
+    const auto rounded = build_node_junction(*g, *builder, kNode, builtin_road_rules_de(), &filleted); REQUIRE(rounded);
+    CHECK(rounded->decline == JunctionDecline::None); CHECK_FALSE(has(*rounded, JunctionFlags::HullFallback));
+    CHECK(filleted.fillets > 0); CHECK(filleted.bowtie_rounds == 0);
     // The extension is exactly what changed: the repaired trims are the unrepaired ones plus whole metres.
     for (std::size_t i = 0; i < repaired->approaches.size(); ++i) {
         const double extra = repaired->approaches[i].trim_m - hull->approaches[i].trim_m;
@@ -460,7 +469,7 @@ TEST_CASE("build_node_junctions: degrees from the context, incomplete nodes skip
     // Bit-identical on a second build and equal to the single-node call.
     const auto again = build_node_junctions(scene->tile, *scene->builder); REQUIRE(again);
     CHECK(*all == *again);
-    CHECK(all->front() == junction_of(*scene, 1));
+    CHECK(all->front() == junction_of(*scene, 1, builtin_road_rules_de(), nullptr, JunctionBuildOptions{}));
     // A node of degree 2 or 1 is not a junction.
     CHECK_FALSE(build_node_junction(scene->tile, *scene->builder, 2));
     CHECK_FALSE(build_node_junction(scene->tile, *scene->builder, 999));

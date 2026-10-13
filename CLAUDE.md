@@ -962,3 +962,13 @@ phi over l_i = clamp(2 relief_i / slope, min, max) and psi over the verge fade (
 the busy tiles, flat and tilted DEM, gradient <= max(B, 2 F_paved) + 0.02 at >= 2 m from every trim and
 <= max(B, own, 2 F_all) + 0.02 nearer (B steepest approach grade + crossfall, F forced gradient between trim points); the
 sabotage case expects >= 10 flat junctions over; `[.][diag]` cases print per-junction tables, distance bins and a probe.
+
+Kerb returns (design D44): `fillet_corner` in `src/layer/road_junction.cpp` rounds every stub-stub block corner of the
+junction rings with a circular arc (rational quadratic Bezier), radius per highway class from `de.json`
+(`JunctionRules::corner_radius_mm`, `corner_radius_for`, `corner_min_wedge_deg`, `corner_tangent_max_percent`,
+`corner_oneway_pair_*`), concentric over the three layers; trims extend past the tangent points. A fillet that breaks
+simplicity, 2 mm nesting or the vertex budget is dropped per corner (full, half radius, then sharp).
+`JunctionBuildOptions::corner_fillets`, stats `fillets`/`filleted_junctions`/`fillet_fallbacks`. Config text
+` corner-fillet=1`; de.json SHA `1677d98b...fc27`. Tests `tests/layer/test_junction_fillets.cpp` ([fillet]); hidden
+`[.][diag][junction_dump]` (`tests/layer/test_junction_dump.cpp`, env G2M_JUNCTION_DUMP) + `tools/junction_view/render.py`
+draw rings and approach edges as PNGs.

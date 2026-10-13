@@ -13,6 +13,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace g2m {
@@ -43,6 +44,16 @@ struct JunctionRules {
     std::int32_t reach_max_m = 0;              // farthest ring vertex from the nearest cluster node
     std::int32_t bowtie_rounds = 0;            // trim-extension rounds before the hull fallback
     std::int32_t bowtie_step_mm = 0;           // trim extension per round
+    // Corner fillets (kerb returns): each block corner of a junction ring is rounded with the radius of the lower of
+    // its two approaches' classes (the road bed edge; the paved and outer edges follow concentrically).
+    std::int32_t corner_radius_default_mm = 0;
+    std::vector<std::pair<std::string, std::int32_t>> corner_radius_mm;   // highway -> radius, ascending; 0 = sharp
+    std::int32_t corner_min_wedge_deg = 0;      // narrower wedges (gores, shallow merges) keep their sharp corner
+    std::int32_t corner_tangent_max_percent = 0;// tangent length cap, in percent of the radius (acute wedges)
+    std::int32_t corner_oneway_pair_radius_mm = 0;      // nose radius between two one-way approaches ...
+    std::int32_t corner_oneway_pair_max_wedge_deg = 0;  // ... whose wedge is narrower than this (carriageway splits)
+    // The corner radius of a highway class (the default for a class without its own entry).
+    std::int32_t corner_radius_for(std::string_view highway) const;
     friend bool operator==(const JunctionRules&, const JunctionRules&) = default;
 };
 // Painted pattern of a crossing (design 2). The values are the encoded pattern byte of roads.geom section 6.
