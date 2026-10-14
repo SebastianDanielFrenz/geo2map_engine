@@ -2197,6 +2197,16 @@ rejected.
   `tools/junction_view/render.py`. The config text gains ` corner-fillet=1`; with the de.json change the roads.geom
   config hash and every release id containing roads.geom move; g3xs, g3j, g3d re-recorded (Linux; Windows to confirm).
 
+**D45 (withdrawn). Keep the convex hull for a broken single-node ring; do not replace it with the union of the strips.**
+- Tried: the boundary of the union of the approach strips and the node core (polar upper envelope about the node), so
+  the hull would not pave the wedge between diverging approaches.
+- Measured on every single-node hull of both fixtures and on synthetic 3-arm wedges (motorway/primary/residential
+  one-ways at 3-20 degrees): the hull paves at most 38.8 m^2 outside the union (fixtures; under 8 m^2 synthetic),
+  because the trims of a broken ring are short. The union instead shows steps where strips of different widths meet,
+  and the before/after renders looked worse with it. It also moved the G3-D T12 trim-line bound from 10 to 15 mm.
+- Decision: the hull stays; revisit only if real data shows a hull paving a large wedge (the measurement: hull area
+  outside the union on a 0.5 m grid).
+
 ---
 
 
