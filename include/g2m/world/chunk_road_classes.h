@@ -8,7 +8,8 @@
 // cell-centre lattice (the same lattice a TerrainChunkMesh's vertices sit on,
 // see mesh/terrain_chunk.h's vertex-placement formula) and writes the
 // LandClass per vertex into a mesh::ClassWindow. The level policy is
-// raster_params_for_render_level (osm_roads.h; level >= 4 has no road classes).
+// raster_params_for_render_level (osm_roads.h; level >= 4 has no road classes by
+// default), or the caller's RenderRoadLod through ClassLookup::lod.
 //
 // Render path only: grip / physics surface ids are filled elsewhere
 // (phys/fill_physics_surfaces.h) from the same segments and rasteriser.
@@ -34,6 +35,11 @@ using RoadSegmentsFn = std::shared_ptr<const std::vector<RoadSegment>> (*)(void*
 struct ClassLookup {
     RoadSegmentsFn fn = nullptr;
     void* ctx = nullptr;
+    // The render road LOD policy (osm_roads.h RenderRoadLod, the game's
+    // settings); null = default_render_road_lod(). Not owned; must outlive
+    // the call. A caller caching chunk classes keys them with
+    // render_road_lod_key(policy, chunk level).
+    const RenderRoadLod* lod = nullptr;
 };
 
 // The Lattice matching render chunk `key`'s 65x65 vertex grid: vertex (i, j)

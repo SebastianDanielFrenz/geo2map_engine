@@ -372,4 +372,28 @@ RoadBlockStats rasterize_road_blocks(const Lattice& lattice, int block_level, ge
 // std::nullopt - no road classes at all at that level.
 std::optional<RasterParams> raster_params_for_render_level(int level);
 
+// The same render LOD policy as caller data (owner rule, G4 slice 5: LOD
+// detail is an in-game setting the game passes in). levels[k] is the policy
+// of chunk level k; a level past the end, or one with `enabled == false`,
+// gets no road classes. default_render_road_lod() reproduces the compiled
+// policy above exactly (L0-L1 rank 0; L2 tertiary; L3 primary, 6000 mm
+// half-width floor = 3/4 of the 8 m spacing; none from L4).
+struct RenderRoadLodLevel {
+    bool enabled = true;
+    int min_rank = 0;
+    std::int64_t min_half_width_mm = 0;
+    friend bool operator==(const RenderRoadLodLevel&, const RenderRoadLodLevel&) = default;
+};
+struct RenderRoadLod {
+    std::vector<RenderRoadLodLevel> levels;
+    friend bool operator==(const RenderRoadLod&, const RenderRoadLod&) = default;
+};
+const RenderRoadLod& default_render_road_lod();
+std::optional<RasterParams> raster_params_for_render_level(int level, const RenderRoadLod& lod);
+// Deterministic cache key of the policy AT ONE LEVEL (FNV-1a of the effective
+// RasterParams or "none"): a render chunk's road classes depend only on its
+// key and this value, so a settings change rebuilds only the chunk levels
+// whose key changed.
+std::uint64_t render_road_lod_key(const RenderRoadLod& lod, int level);
+
 } // namespace g2m

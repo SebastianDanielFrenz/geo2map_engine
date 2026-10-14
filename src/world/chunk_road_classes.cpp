@@ -65,7 +65,8 @@ void rasterize_chunk_road_classes(const mesh::ChunkKey& key, const ClassLookup& 
     if (lookup.fn == nullptr) {
         return;
     }
-    const std::optional<RasterParams> params = raster_params_for_render_level(key.level);
+    const std::optional<RasterParams> params =
+        raster_params_for_render_level(key.level, lookup.lod != nullptr ? *lookup.lod : default_render_road_lod());
     if (!params.has_value()) {
         return;
     }
