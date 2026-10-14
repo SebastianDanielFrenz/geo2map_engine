@@ -70,7 +70,9 @@ geo2map_engine/
     osm_roads.h                        client-side OSM road raster (PLAN.md 6.5, roads_plan.md): RoadStyle (data-table
                                       highway->LandClass/rank/width, surface->SurfaceKind), extract_road_segments,
                                       Lattice/RasterParams, rasterize_road_segments (exact integer inside test, round
-                                      end caps via clamped projection)
+                                      end caps via clamped projection); render road LOD as caller data: RenderRoadLod
+                                      (per chunk level enabled/min_rank/min_half_width_mm), default_render_road_lod
+                                      (== the compiled raster_params_for_render_level), render_road_lod_key(policy, level)
     release.h                         ReleaseInputs -> compute_release_id, Coverage, ReleaseManifest + to_json/from_json,
                                       to_hex / content_hash_from_hex
     pack.h                            PackDirectory/PackEntry/PackTileState, pack_of/pack_tile, encode/decode_pack
@@ -163,7 +165,8 @@ geo2map_engine/
                                       sample_height_bilinear (render only), L0TileLookupFn; session-local
                                       metres, lattice (c - e0 + 0.5)
     chunk_road_classes.h             ClassLookup/RoadSegmentsFn, road_class_lattice,
-                                      src_osm_tiles_for_chunk, rasterize_chunk_road_classes (owner rule)
+                                      src_osm_tiles_for_chunk, rasterize_chunk_road_classes (owner rule;
+                                      ClassLookup::lod = the caller's RenderRoadLod, null = default)
     surface_id_table.h               g2m::classes::SurfaceIdTable (SurfaceKind + LandClass -> consumer
                                       id; road cell with a known kind -> kind id, else land class id;
                                       to_road_value_lut)
@@ -184,6 +187,42 @@ geo2map_engine/
                                       join / inline run), tile_cache.h (internal: byte-weighted LRU of
                                       decoded tiles), tile_fetch.cpp, height_sampler.cpp,
                                       chunk_road_classes.cpp
+  include/g2m/route/                  public API of g2m_route (G4 routing, docs/routing_design.md): engine-neutral,
+                                      Result<T>, integer mm / ms costs; links g2m_layers only
+    turn_restriction.h               TurnRestriction (No/Only, from way, via node or via ways, to way), RestrictionSet
+                                      (counts: not_for_cars, conditional_only, unknown_value, malformed),
+                                      extract_turn_restrictions(osm::OsmData) (restriction:motorcar > restriction, except,
+                                      no_entry/no_exit expanded per pair)
+    routing_graph.h                  RouteConfig/default_route_config (class speeds, zone speeds, blocked access, implied
+                                      oneway, turn-cost angle classes, limits), RoutingGraph (decision nodes, shape nodes
+                                      collapsed, arcs = edge directions keyed (way, seg_first..seg_last), CSR out-arcs,
+                                      via-node rules per node; successors() = restrictions + dead-end-only U-turn;
+                                      edge shapes; snap(point, SnapOptions) -> RoutePoint with per-direction candidates),
+                                      build_routing_graph(RoadGraph, restrictions, config), RouteBuildStats
+    route_search.h                   RouteLandmarks (ALT: farthest-point landmarks, [node][landmark] uint32 tables,
+                                      bound(v, t)), RouteSearcher (reusable edge-based A* workspace, generation stamps,
+                                      heuristic = max(chord at max_speed, ALT), reopening, ties by (f, g, arc), stop when
+                                      min f >= best goal; find(RouteQuery) node to node, find(RoutePoint, RoutePoint)
+                                      with partial first/last arcs), Route (start/end offsets), RouteSearchStats
+    region_graph.h                   merge_region_graphs (one copy per OSM id, conflicts Malformed, order-independent,
+                                      no per-tile limits), assemble_region_graph(keys, RoadGraphTileFetch),
+                                      merge_turn_restrictions, build_region_routing (heap-held graph + landmarks)
+    route_guidance.h                 build_guidance(graph, roads, route, GuidanceConfig) -> Maneuver list (G4 slice 4:
+                                      depart/arrive, continue on a new name/ref, slight/turn/sharp by the cost angle
+                                      classes, keep left/right forks within fork_max_deg, U-turn, roundabout enter with
+                                      exit number, ramp off/on, merge; name/ref/destination of the road entered;
+                                      distances in mm), to_string(ManeuverKind)
+    route_map.h                      client map geometry (G4 slice 5): build_map_tile(key, MapLod detail L2 / mid L4 /
+                                      far L6, level-2 roads.graph tiles, MapConfig) -> MapTile (lines over the owned edges,
+                                      runs merged per way, Douglas-Peucker 1 / 8 / 40 m, int32 dm points from the SW corner,
+                                      rank, flags, name/ref string indices, label anchor, (way, segment range));
+                                      simplify_polyline, route_polyline (driven line cut at the snapped ends); every LOD
+                                      parameter is caller data (levels, ranks, tolerances, switch distances, detail_scale):
+                                      validate_map_config, effective_lod, select_map_lod, map_lod_key (per-LOD content key,
+                                      MapTile::params_key), MapTileCache (set_config drops only LODs whose key changed)
+  src/route/                          g2m_route implementation: turn_restriction.cpp, routing_graph.cpp (incl. snapping:
+                                      sorted cell index, heading-aware snap, point_at, partial_cost_ms), route_search.cpp,
+                                      region_graph.cpp, route_guidance.cpp, route_map.cpp
   bridges/physics_sim/                 g2m_ps_bridge (PLAN.md R2.2 section 1b, G5/G6): the seam between
                                       g2m_phys's ps-free physics-tile data and physics_sim's own
                                       ps::terrain::ITerrainSource - the only place the two projects meet.
@@ -377,6 +416,20 @@ geo2map_engine/
     unit/                             g2m_unit_tests: test_det_math, test_tm_reference, test_geo_frames,
                                       test_tile_raster_hash, test_decode_zip, test_decode_tiff, test_decode_osm,
                                       test_decode_real_data (gated on env var G2M_DATA_DIR, SKIP when unset)
+    route/                            g2m_route_tests (G4): test_turn_restrictions, test_route_search (synthetic cross/oneway/
+                                      restriction/U-turn/limit cases, A* == Dijkstra on random restricted grids, hidden
+                                      [.][bench] 90k-node grid timing incl. a test-only ALT experiment),
+                                      test_route_fixture (both OSM fixtures with their restriction relations: 400 random
+                                      pairs each A* == Dijkstra, restriction negative control), test_route_slice2 (snapping,
+                                      point routes, ALT == Dijkstra on random grids and on fixture point queries, region
+                                      graph from roads.graph tiles == whole-world graph), test_route_guidance (a scene per
+                                      manoeuvre kind, invariants on 148 fixture routes, a pinned 21-manoeuvre
+                                      hoechst_a66 route), test_route_map (simplification bounds, ownership/LOD/flag scene,
+                                      route_polyline, every fixture LOD tiled with coverage, accuracy, size/time print);
+                                      route_fixture_io.h = read_route_fixture (OSM fixture with
+                                      relations); route_reference.h = the test-only
+                                      Dijkstra (node and point), route validators and GraphBuilder; route_scenes.h = the
+                                      synthetic cross and random restricted grids
     golden/                           golden.h/.cpp + golden_g1.cpp + golden_g1c.cpp (g2m_golden, milestone G1c I6),
                                       dump_main.cpp (g2m_golden_dump [g0|g1|g1c]), test_golden.cpp (g2m_golden_tests)
     fuzz/                             libFuzzer targets for g2m_decode (fuzz_zip, fuzz_tiff, fuzz_pbf) over a
@@ -962,3 +1015,21 @@ phi over l_i = clamp(2 relief_i / slope, min, max) and psi over the verge fade (
 the busy tiles, flat and tilted DEM, gradient <= max(B, 2 F_paved) + 0.02 at >= 2 m from every trim and
 <= max(B, own, 2 F_all) + 0.02 nearer (B steepest approach grade + crossfall, F forced gradient between trim points); the
 sabotage case expects >= 10 flat junctions over; `[.][diag]` cases print per-junction tables, distance bins and a probe.
+
+## G4 routing, slice 1 (2026-10-14)
+
+Design, owner questions and the slice plan: `docs/routing_design.md`. `g2m_route` (`include/g2m/route/`, `src/route/`)
+builds an in-memory routable car graph from a complete `RoadGraph` (`merge_road_graphs` of roads.graph tiles, or
+`build_road_graph` of OSM) plus `extract_turn_restrictions` of canonical OSM (src.osm keeps restriction relations;
+roads.graph does not carry them yet, planned as encoding 6 in slice 3). Edge-based A* with via-node restrictions,
+oneway, access and integer ms costs; via-way rules are counted, not applied. Tests `tests/route/`
+(`g2m_route_tests "[route]"`; timing: `g2m_route_tests "[bench]" -s`). Plain A* misses 10 ms at 30 km on the
+90k-node stand-in grid (about 30 ms); ALT landmarks are slice 2.
+Slice 2 (2026-10-14): ALT landmarks (`RouteLandmarks`, 16 by default; 30 km on the stand-in grid: 1.2 ms mean,
+1,695 settled vs 78,464 plain), heading-aware snapping and point-to-point routes, region graph assembly from
+roads.graph tiles (`region_graph.h`). Defaults settled: tracks routable at 15 km/h, time restrictions ignored.
+Slice 4 (2026-10-14): guidance manoeuvre list (`route_guidance.h`, `g2m_route_tests "[guidance]"`). Slice 5
+(2026-10-14): client map tiles at three LODs from level-2 roads.graph tiles (`route_map.h`, `"[map]"`; fixture
+tiles <= 22 KiB, < 5 ms). Owner rules from PR #2: turn costs final at the defaults; every map and render-road LOD
+parameter is a runtime setting the game passes in, with per-LOD/per-level cache keys (docs/routing_design.md 6.1,
+tests `"[lod_settings]"`). Next: slice 3 (restrictions in roads.graph, via-way rules), batched with a release-id bump.
