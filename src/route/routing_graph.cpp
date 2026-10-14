@@ -84,7 +84,16 @@ struct Edge {
     std::uint32_t seg_first, seg_last;
     std::uint64_t length_mm;
     std::int64_t first_dx, first_dy, last_dx, last_dy;
+    std::uint32_t shape_first, shape_count;
 };
+
+std::int64_t floor_div(std::int64_t a, std::int64_t b) {
+    const std::int64_t q = a / b;
+    return (a % b != 0 && ((a < 0) != (b < 0))) ? q - 1 : q;
+}
+std::uint64_t cell_key(std::int64_t cx, std::int64_t cy) {
+    return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(cx)) << 32) | static_cast<std::uint32_t>(cy);
+}
 
 } // namespace
 
@@ -96,7 +105,7 @@ const RouteConfig& default_route_config() {
             {"trunk_link", 50, true},     {"primary", 70, true},       {"primary_link", 40, true},
             {"secondary", 60, true},      {"secondary_link", 40, true}, {"tertiary", 50, true},
             {"tertiary_link", 30, true},  {"unclassified", 40, true},  {"residential", 30, true},
-            {"living_street", 7, true},   {"service", 15, true},       {"track", 10, false},
+            {"living_street", 7, true},   {"service", 15, true},       {"track", 15, true},
         };
         c.zone_speeds = {{"DE:urban", 50}, {"DE:rural", 100}, {"DE:living_street", 7}, {"DE:zone30", 30},
                          {"DE:zone:30", 30}, {"DE:bicycle_road", 30}, {"walk", 7}};
@@ -165,6 +174,106 @@ void RoutingGraph::successors(std::uint32_t arc_index, std::vector<Transition>& 
     // U-turn back along the same edge: only where nothing else may leave (dead end).
     if (out.empty() && in.reverse != kNoArc && allowed_onto(in.way_id, true))
         out.push_back({in.reverse, config_.u_turn_ms});
+}
+
+std::uint64_t RoutingGraph::partial_cost_ms(std::uint32_t arc, std::uint32_t a, std::uint32_t b) const {
+    const RouteArc& r = arcs_[arc];
+    if (r.length_mm == 0 || b <= a) return 0;
+    const std::uint64_t num = std::uint64_t{r.cost_ms} * (b - a);
+    return (num + r.length_mm - 1) / r.length_mm;
+}
+
+geom::PointMm RoutingGraph::point_at(std::uint32_t arc, std::uint32_t offset_mm) const {
+    const RouteArc& r = arcs_[arc];
+    const auto pts = shape(arc);
+    // Walk in way order; a backward arc's offset counts from the way's end.
+    std::uint64_t target = r.forward ? offset_mm : (r.length_mm >= offset_mm ? r.length_mm - offset_mm : 0);
+    for (std::size_t k = 0; k + 1 < pts.size(); ++k) {
+        const std::uint64_t seg = ceil_length_mm(pts[k], pts[k + 1]);
+        if (target <= seg || k + 2 == pts.size()) {
+            if (seg == 0) return pts[k];
+            const double t = std::min(1.0, static_cast<double>(target) / static_cast<double>(seg));
+            return {pts[k].x + std::llround(t * static_cast<double>(pts[k + 1].x - pts[k].x)),
+                    pts[k].y + std::llround(t * static_cast<double>(pts[k + 1].y - pts[k].y))};
+        }
+        target -= seg;
+    }
+    return pts.empty() ? geom::PointMm{} : pts.back();
+}
+
+Result<RoutePoint> RoutingGraph::snap(geom::PointMm point, const SnapOptions& options) const {
+    const std::int64_t cell = config_.snap_cell_mm;
+    const std::int64_t r = options.max_distance_mm;
+    const std::int64_t x0 = floor_div(point.x - r, cell), x1 = floor_div(point.x + r, cell);
+    const std::int64_t y0 = floor_div(point.y - r, cell), y1 = floor_div(point.y + r, cell);
+    const double hx = options.heading_dx, hy = options.heading_dy;
+    const double hlen = det::sqrt(hx * hx + hy * hy);
+    const bool use_heading = hlen > 0.0;
+    const double cos_tol = det::cos(options.heading_tolerance_deg * (det::kPi / 180.0));
+    struct Best {
+        double distance = 0.0;
+        std::uint32_t arc = kNoArc, segment = 0, chosen = kNoArc;
+        double t = 0.0;
+    };
+    Best any, headed;
+    // Order: distance, edge (its lower arc index), segment, chosen direction.
+    const auto better = [](const Best& cur, double d, std::uint32_t arc, std::uint32_t seg, std::uint32_t dir) {
+        if (cur.arc == kNoArc || d < cur.distance) return true;
+        if (d > cur.distance) return false;
+        if (arc != cur.arc) return arc < cur.arc;
+        if (seg != cur.segment) return seg < cur.segment;
+        return dir < cur.chosen;
+    };
+    for (std::int64_t cx = x0; cx <= x1; ++cx) {
+        for (std::int64_t cy = y0; cy <= y1; ++cy) {
+            const std::uint64_t key = cell_key(cx, cy);
+            auto it = std::lower_bound(snap_index_.begin(), snap_index_.end(), key,
+                                       [](const SnapEntry& e, std::uint64_t k) { return e.cell < k; });
+            for (; it != snap_index_.end() && it->cell == key; ++it) {
+                const RouteArc& a = arcs_[it->arc];
+                const geom::PointMm p = shape_[a.shape_first + it->segment], q = shape_[a.shape_first + it->segment + 1];
+                const double dx = static_cast<double>(q.x - p.x), dy = static_cast<double>(q.y - p.y);
+                const double px = static_cast<double>(point.x - p.x), py = static_cast<double>(point.y - p.y);
+                const double len2 = dx * dx + dy * dy;
+                const double t = len2 > 0.0 ? std::clamp((px * dx + py * dy) / len2, 0.0, 1.0) : 0.0;
+                const double ex = px - t * dx, ey = py - t * dy;
+                const double d = det::sqrt(ex * ex + ey * ey);
+                if (d > static_cast<double>(r)) continue;
+                if (better(any, d, it->arc, it->segment, kNoArc)) any = {d, it->arc, it->segment, kNoArc, t};
+                if (!use_heading || len2 == 0.0) continue;
+                // Directions of travel of this segment: the edge's arcs.
+                for (const std::uint32_t dir : {it->arc, a.reverse}) {
+                    if (dir == kNoArc) continue;
+                    // The shape is in way order: a backward arc travels the segment from q to p.
+                    const double sign = arcs_[dir].forward ? 1.0 : -1.0;
+                    const double c = sign * (dx * hx + dy * hy) / (det::sqrt(len2) * hlen);
+                    if (c < cos_tol) continue;
+                    if (better(headed, d, it->arc, it->segment, dir)) headed = {d, it->arc, it->segment, dir, t};
+                }
+            }
+        }
+    }
+    if (any.arc == kNoArc) return make_error(ErrorCode::NotFound, "snap: no routable edge within max_distance_mm");
+    const Best& pick = headed.arc != kNoArc ? headed : any;
+    const RouteArc& a = arcs_[pick.arc];
+    RoutePoint out;
+    out.heading_matched = headed.arc != kNoArc;
+    out.distance_mm = static_cast<std::uint64_t>(std::ceil(pick.distance));
+    const geom::PointMm p = shape_[a.shape_first + pick.segment], q = shape_[a.shape_first + pick.segment + 1];
+    out.position = {p.x + std::llround(pick.t * static_cast<double>(q.x - p.x)),
+                    p.y + std::llround(pick.t * static_cast<double>(q.y - p.y))};
+    // Way-order distance to the projected point: whole segments before it plus the part of this one.
+    std::uint64_t along = 0;
+    for (std::uint32_t k = 0; k < pick.segment; ++k)
+        along += ceil_length_mm(shape_[a.shape_first + k], shape_[a.shape_first + k + 1]);
+    along += static_cast<std::uint64_t>(std::llround(pick.t * static_cast<double>(ceil_length_mm(p, q))));
+    along = std::min<std::uint64_t>(along, a.length_mm);
+    for (const std::uint32_t dir : {pick.arc, a.reverse}) {
+        if (dir == kNoArc || (out.heading_matched && dir != pick.chosen)) continue;
+        const auto offset = arcs_[dir].forward ? along : a.length_mm - along;
+        out.candidates[out.count++] = {dir, static_cast<std::uint32_t>(offset)};
+    }
+    return out;
 }
 
 Result<RoutingGraph> build_routing_graph(const RoadGraph& graph, std::span<const TurnRestriction> restrictions,
@@ -248,11 +357,14 @@ Result<RoutingGraph> build_routing_graph(const RoadGraph& graph, std::span<const
 
     // 3. Edges between consecutive decision nodes of each way.
     std::vector<Edge> edges;
+    std::vector<geom::PointMm>& shape = out.shape_;
     for (std::size_t w = 0; w < graph.ways.size(); ++w) {
         if (!use[w].used) continue;
         const auto& r = refs[w];
         const auto pos = [&](std::size_t i) { return graph.nodes[r[i]].position; };
         std::size_t start = 0;
+        std::size_t shape_start = shape.size();
+        shape.push_back(pos(0));
         std::uint64_t length = 0;
         std::int64_t first_dx = 0, first_dy = 0;
         bool have_first = false;
@@ -260,20 +372,25 @@ Result<RoutingGraph> build_routing_graph(const RoadGraph& graph, std::span<const
             if (r[i] == r[i - 1]) continue;
             const geom::PointMm a = pos(i - 1), b = pos(i);
             length += ceil_length_mm(a, b);
+            shape.push_back(b);
             if (!have_first) { first_dx = b.x - a.x; first_dy = b.y - a.y; have_first = true; }
             if (compact[r[i]] == kNoArc) continue;
             // OSM ref-pair index of the edge's first segment: the first i' > start with a distinct ref.
             std::size_t seg_first = start;
             while (r[seg_first + 1] == r[seg_first]) ++seg_first;
             Edge e{compact[r[start]], compact[r[i]], w, static_cast<std::uint32_t>(seg_first),
-                   static_cast<std::uint32_t>(i - 1), length, first_dx, first_dy, b.x - a.x, b.y - a.y};
+                   static_cast<std::uint32_t>(i - 1), length, first_dx, first_dy, b.x - a.x, b.y - a.y,
+                   static_cast<std::uint32_t>(shape_start), static_cast<std::uint32_t>(shape.size() - shape_start)};
             if (e.length_mm > std::numeric_limits<std::uint32_t>::max())
                 return make_error(ErrorCode::LimitExceeded, "routing graph: edge longer than 4294 km");
             edges.push_back(e);
             start = i;
             length = 0;
             have_first = false;
+            shape_start = shape.size();
+            shape.push_back(b);
         }
+        shape.resize(shape_start); // the way's last ref only opened an empty edge
     }
 
     // 4. Arcs, canonical order (from node, way id, first segment, forward first).
@@ -294,6 +411,8 @@ Result<RoutingGraph> build_routing_graph(const RoadGraph& graph, std::span<const
             a.rank = static_cast<std::uint8_t>(std::clamp(graph.ways[e.way].rank, 0, 255));
             a.speed_kmh = forward ? u.fwd_kmh : u.bwd_kmh;
             a.length_mm = static_cast<std::uint32_t>(e.length_mm);
+            a.shape_first = e.shape_first;
+            a.shape_count = e.shape_count;
             const std::uint64_t num = e.length_mm * 36u, den = std::uint64_t{a.speed_kmh} * 10u;
             a.cost_ms = static_cast<std::uint32_t>((num + den - 1) / den);
             if (forward) { a.in_dx = e.first_dx; a.in_dy = e.first_dy; a.out_dx = e.last_dx; a.out_dy = e.last_dy; }
@@ -368,6 +487,26 @@ Result<RoutingGraph> build_routing_graph(const RoadGraph& graph, std::span<const
             while (at < rules.size() && rules[at].first == n) ++at;
         }
         for (const auto& [node, rule] : rules) out.rules_.push_back(rule);
+    }
+    // 6. Snapping index: every segment of every edge, in each cell its bounding box touches.
+    {
+        const std::int64_t cell = config.snap_cell_mm;
+        if (cell <= 0) return make_error(ErrorCode::InvalidArgument, "route config: snap_cell_mm");
+        for (std::uint32_t a = 0; a < arcs.size(); ++a) {
+            if (arcs[a].reverse != kNoArc && arcs[a].reverse < a) continue;
+            for (std::uint32_t k = 0; k + 1 < arcs[a].shape_count; ++k) {
+                const geom::PointMm p = shape[arcs[a].shape_first + k], q = shape[arcs[a].shape_first + k + 1];
+                const std::int64_t x0 = floor_div(std::min(p.x, q.x), cell), x1 = floor_div(std::max(p.x, q.x), cell);
+                const std::int64_t y0 = floor_div(std::min(p.y, q.y), cell), y1 = floor_div(std::max(p.y, q.y), cell);
+                for (std::int64_t cx = x0; cx <= x1; ++cx)
+                    for (std::int64_t cy = y0; cy <= y1; ++cy) out.snap_index_.push_back({cell_key(cx, cy), a, k});
+            }
+        }
+        std::sort(out.snap_index_.begin(), out.snap_index_.end(), [](const auto& x, const auto& y) {
+            if (x.cell != y.cell) return x.cell < y.cell;
+            if (x.arc != y.arc) return x.arc < y.arc;
+            return x.segment < y.segment;
+        });
     }
     RouteGraphNode sentinel;
     sentinel.first_out = static_cast<std::uint32_t>(arcs.size());

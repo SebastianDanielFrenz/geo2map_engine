@@ -81,6 +81,104 @@ inline std::string validate_route(const g2m::route::RoutingGraph& graph, const g
     return "";
 }
 
+// Plain Dijkstra between two route points: starts on each from-candidate at its
+// offset, ends on any to-candidate (the same goal semantics as RouteSearcher).
+inline g2m::route::Route dijkstra_point_reference(const g2m::route::RoutingGraph& graph, const g2m::route::RoutePoint& from,
+                                                  const g2m::route::RoutePoint& to) {
+    using namespace g2m::route;
+    const auto arcs = graph.arcs();
+    Route best;
+    std::uint64_t best_cost = UINT64_MAX;
+    std::uint32_t best_arc = kNoArc, best_parent = kNoArc, best_end = 0, best_start = 0;
+    bool same = false;
+    std::vector<std::uint64_t> dist(arcs.size(), UINT64_MAX);
+    std::vector<std::uint32_t> parent(arcs.size(), kNoArc), start_offset(arcs.size(), 0);
+    std::set<std::pair<std::uint64_t, std::uint32_t>> open;
+    for (std::uint32_t i = 0; i < from.count; ++i) {
+        const auto [a, o] = from.candidates[i];
+        for (std::uint32_t j = 0; j < to.count; ++j)
+            if (to.candidates[j].arc == a && to.candidates[j].offset_mm >= o) {
+                const auto c = graph.partial_cost_ms(a, o, to.candidates[j].offset_mm);
+                if (c < best_cost) { best_cost = c; best_arc = a; best_end = to.candidates[j].offset_mm; best_start = o; same = true; }
+            }
+        dist[a] = graph.partial_cost_ms(a, o, arcs[a].length_mm);
+        start_offset[a] = o;
+        open.insert({dist[a], a});
+    }
+    std::vector<Transition> succ;
+    while (!open.empty() && open.begin()->first < best_cost) {
+        const auto [d, a] = *open.begin();
+        open.erase(open.begin());
+        graph.successors(a, succ);
+        for (const Transition& tr : succ) {
+            const std::uint64_t pre = d + tr.turn_ms;
+            for (std::uint32_t j = 0; j < to.count; ++j)
+                if (to.candidates[j].arc == tr.arc) {
+                    const auto c = pre + graph.partial_cost_ms(tr.arc, 0, to.candidates[j].offset_mm);
+                    if (c < best_cost) { best_cost = c; best_arc = tr.arc; best_parent = a; best_end = to.candidates[j].offset_mm; same = false; }
+                }
+            const std::uint64_t nd = pre + arcs[tr.arc].cost_ms;
+            if (nd < dist[tr.arc]) {
+                if (dist[tr.arc] != UINT64_MAX) open.erase({dist[tr.arc], tr.arc});
+                dist[tr.arc] = nd;
+                parent[tr.arc] = a;
+                open.insert({nd, tr.arc});
+            }
+        }
+    }
+    if (best_arc == kNoArc) return best;
+    best.reachable = true;
+    best.cost_ms = best_cost;
+    best.arcs.push_back(best_arc);
+    if (!same) for (std::uint32_t x = best_parent; x != kNoArc; x = parent[x]) best.arcs.insert(best.arcs.begin(), x);
+    best.start_offset_mm = same ? best_start : start_offset[best.arcs.front()];
+    best.end_offset_mm = best_end;
+    return best;
+}
+
+// Checks a point route: starts on a from-candidate at its offset, ends on a
+// to-candidate, allowed transitions, cost and length; returns "" or a reason.
+inline std::string validate_point_route(const g2m::route::RoutingGraph& graph, const g2m::route::Route& route,
+                                        const g2m::route::RoutePoint& from, const g2m::route::RoutePoint& to) {
+    using namespace g2m::route;
+    if (!route.reachable) return "";
+    if (route.arcs.empty()) return "empty route";
+    const auto arcs = graph.arcs();
+    bool start_ok = false, end_ok = false;
+    for (std::uint32_t i = 0; i < from.count; ++i)
+        start_ok = start_ok || (from.candidates[i].arc == route.arcs.front() && from.candidates[i].offset_mm == route.start_offset_mm);
+    for (std::uint32_t i = 0; i < to.count; ++i)
+        end_ok = end_ok || (to.candidates[i].arc == route.arcs.back() && to.candidates[i].offset_mm == route.end_offset_mm);
+    if (!start_ok) return "start not on a from candidate";
+    if (!end_ok) return "end not on a to candidate";
+    std::uint64_t cost = 0, length = 0;
+    if (route.arcs.size() == 1) {
+        if (route.end_offset_mm < route.start_offset_mm) return "single arc runs backwards";
+        cost = graph.partial_cost_ms(route.arcs[0], route.start_offset_mm, route.end_offset_mm);
+        length = route.end_offset_mm - route.start_offset_mm;
+    } else {
+        const auto first = route.arcs.front();
+        cost = graph.partial_cost_ms(first, route.start_offset_mm, arcs[first].length_mm);
+        length = arcs[first].length_mm - route.start_offset_mm;
+        std::vector<Transition> succ;
+        for (std::size_t i = 1; i < route.arcs.size(); ++i) {
+            graph.successors(route.arcs[i - 1], succ);
+            bool found = false;
+            for (const auto& tr : succ) {
+                if (tr.arc != route.arcs[i]) continue;
+                found = true;
+                const bool last = i + 1 == route.arcs.size();
+                cost += tr.turn_ms + (last ? graph.partial_cost_ms(tr.arc, 0, route.end_offset_mm) : arcs[tr.arc].cost_ms);
+                length += last ? route.end_offset_mm : arcs[tr.arc].length_mm;
+            }
+            if (!found) return "forbidden or disconnected transition at step " + std::to_string(i);
+        }
+    }
+    if (cost != route.cost_ms) return "cost mismatch";
+    if (length != route.length_mm) return "length mismatch";
+    return "";
+}
+
 // Synthetic graphs in plain millimetre coordinates (no projection).
 struct GraphBuilder {
     g2m::RoadGraph graph;

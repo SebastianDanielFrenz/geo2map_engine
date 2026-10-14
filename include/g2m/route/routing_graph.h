@@ -61,6 +61,8 @@ struct RouteConfig {
     std::size_t max_nodes = 4u << 20;
     std::size_t max_arcs = 16u << 20;
     std::size_t max_settled = 8u << 20; // per query; LimitExceeded beyond
+    // Snapping index: square cells of this edge length (mm).
+    std::int64_t snap_cell_mm = 256000;
 };
 const RouteConfig& default_route_config();
 
@@ -82,6 +84,9 @@ struct RouteArc {
     std::uint32_t length_mm = 0;
     std::uint32_t cost_ms = 0;
     std::uint32_t reverse = kNoArc;            // the same edge in the other direction, if traversable
+    // The edge's points in WAY order (both end nodes included, repeated refs
+    // dropped), shared by both directions: RoutingGraph::shape(arc).
+    std::uint32_t shape_first = 0, shape_count = 0;
     // Direction of the first and last segment (mm, unnormalised) for turn angles.
     std::int64_t in_dx = 0, in_dy = 0, out_dx = 0, out_dy = 0;
 };
@@ -97,6 +102,31 @@ struct RouteBuildStats {
     std::size_t restrictions_applied = 0;
     std::size_t restrictions_via_way = 0;  // not supported yet (design doc, slice 3)
     std::size_t restrictions_unmatched = 0; // a member way or the via node is not in the routable graph
+};
+
+// A point on the graph: the projected position and, per traversable
+// direction of the snapped edge, the arc and the travelled distance from the
+// arc's start (mm, 0..length_mm). One candidate when a heading matched, else
+// every traversable direction (one or two).
+struct RouteCandidate {
+    std::uint32_t arc = kNoArc;
+    std::uint32_t offset_mm = 0;
+    friend bool operator==(const RouteCandidate&, const RouteCandidate&) = default;
+};
+struct RoutePoint {
+    geom::PointMm position;        // on the edge
+    std::uint64_t distance_mm = 0; // from the query point, rounded up
+    bool heading_matched = false;
+    std::uint8_t count = 0;
+    RouteCandidate candidates[2]{};
+};
+struct SnapOptions {
+    std::uint32_t max_distance_mm = 50000;
+    // Optional direction of travel (any length, mm units; both zero = none).
+    // Only directions within heading_tolerance_deg of it qualify; when none
+    // qualifies the nearest edge is taken in every direction (heading_matched = false).
+    double heading_dx = 0.0, heading_dy = 0.0;
+    double heading_tolerance_deg = 60.0;
 };
 
 struct Transition {
@@ -122,6 +152,18 @@ public:
     void successors(std::uint32_t arc, std::vector<Transition>& out) const;
     // Turn cost of arriving on `in` and leaving on `out` (no restriction check).
     std::uint32_t turn_cost_ms(const RouteArc& in, const RouteArc& out) const;
+    // The edge geometry of `arc` in way order (reverse it for a backward arc).
+    std::span<const geom::PointMm> shape(std::uint32_t arc) const {
+        return {shape_.data() + arcs_[arc].shape_first, arcs_[arc].shape_count};
+    }
+    // Cost of travelling `arc` from offset a to offset b (a <= b, mm along the
+    // arc): ceil(cost_ms * (b - a) / length_mm); 0 for a zero-length arc.
+    std::uint64_t partial_cost_ms(std::uint32_t arc, std::uint32_t a, std::uint32_t b) const;
+    // Point on the arc at `offset_mm` along its direction of travel.
+    geom::PointMm point_at(std::uint32_t arc, std::uint32_t offset_mm) const;
+    // Nearest edge point within options.max_distance_mm (NotFound if none).
+    // Ties: smaller distance, then smaller arc index, then segment index.
+    Result<RoutePoint> snap(geom::PointMm point, const SnapOptions& options = {}) const;
 
 private:
     friend Result<RoutingGraph> build_routing_graph(const RoadGraph&, std::span<const TurnRestriction>, const RouteConfig&);
@@ -129,6 +171,13 @@ private:
     std::vector<RouteGraphNode> nodes_; // + one sentinel
     std::vector<RouteArc> arcs_;
     std::vector<RouteRule> rules_;
+    std::vector<geom::PointMm> shape_;
+    struct SnapEntry {
+        std::uint64_t cell;
+        std::uint32_t arc; // the lower index of the edge's arcs
+        std::uint32_t segment; // index of the segment's first point within the shape
+    };
+    std::vector<SnapEntry> snap_index_; // sorted by (cell, arc, segment)
     RouteBuildStats stats_;
 };
 

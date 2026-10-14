@@ -193,12 +193,20 @@ geo2map_engine/
     routing_graph.h                  RouteConfig/default_route_config (class speeds, zone speeds, blocked access, implied
                                       oneway, turn-cost angle classes, limits), RoutingGraph (decision nodes, shape nodes
                                       collapsed, arcs = edge directions keyed (way, seg_first..seg_last), CSR out-arcs,
-                                      via-node rules per node; successors() = restrictions + dead-end-only U-turn),
+                                      via-node rules per node; successors() = restrictions + dead-end-only U-turn;
+                                      edge shapes; snap(point, SnapOptions) -> RoutePoint with per-direction candidates),
                                       build_routing_graph(RoadGraph, restrictions, config), RouteBuildStats
-    route_search.h                   RouteSearcher (reusable edge-based A* workspace, generation stamps, heuristic
-                                      = chord at max_speed, reopening, ties by (f, g, arc)), RouteQuery, Route,
-                                      RouteSearchStats
-  src/route/                          g2m_route implementation: turn_restriction.cpp, routing_graph.cpp, route_search.cpp
+    route_search.h                   RouteLandmarks (ALT: farthest-point landmarks, [node][landmark] uint32 tables,
+                                      bound(v, t)), RouteSearcher (reusable edge-based A* workspace, generation stamps,
+                                      heuristic = max(chord at max_speed, ALT), reopening, ties by (f, g, arc), stop when
+                                      min f >= best goal; find(RouteQuery) node to node, find(RoutePoint, RoutePoint)
+                                      with partial first/last arcs), Route (start/end offsets), RouteSearchStats
+    region_graph.h                   merge_region_graphs (one copy per OSM id, conflicts Malformed, order-independent,
+                                      no per-tile limits), assemble_region_graph(keys, RoadGraphTileFetch),
+                                      merge_turn_restrictions, build_region_routing (heap-held graph + landmarks)
+  src/route/                          g2m_route implementation: turn_restriction.cpp, routing_graph.cpp (incl. snapping:
+                                      sorted cell index, heading-aware snap, point_at, partial_cost_ms), route_search.cpp,
+                                      region_graph.cpp
   bridges/physics_sim/                 g2m_ps_bridge (PLAN.md R2.2 section 1b, G5/G6): the seam between
                                       g2m_phys's ps-free physics-tile data and physics_sim's own
                                       ps::terrain::ITerrainSource - the only place the two projects meet.
@@ -396,8 +404,11 @@ geo2map_engine/
                                       restriction/U-turn/limit cases, A* == Dijkstra on random restricted grids, hidden
                                       [.][bench] 90k-node grid timing incl. a test-only ALT experiment),
                                       test_route_fixture (both OSM fixtures with their restriction relations: 400 random
-                                      pairs each A* == Dijkstra, restriction negative control); route_reference.h =
-                                      the test-only Dijkstra, route validator and GraphBuilder
+                                      pairs each A* == Dijkstra, restriction negative control), test_route_slice2 (snapping,
+                                      point routes, ALT == Dijkstra on random grids and on fixture point queries, region
+                                      graph from roads.graph tiles == whole-world graph); route_reference.h = the test-only
+                                      Dijkstra (node and point), route validators and GraphBuilder; route_scenes.h = the
+                                      synthetic cross and random restricted grids
     golden/                           golden.h/.cpp + golden_g1.cpp + golden_g1c.cpp (g2m_golden, milestone G1c I6),
                                       dump_main.cpp (g2m_golden_dump [g0|g1|g1c]), test_golden.cpp (g2m_golden_tests)
     fuzz/                             libFuzzer targets for g2m_decode (fuzz_zip, fuzz_tiff, fuzz_pbf) over a
@@ -993,3 +1004,6 @@ roads.graph does not carry them yet, planned as encoding 6 in slice 3). Edge-bas
 oneway, access and integer ms costs; via-way rules are counted, not applied. Tests `tests/route/`
 (`g2m_route_tests "[route]"`; timing: `g2m_route_tests "[bench]" -s`). Plain A* misses 10 ms at 30 km on the
 90k-node stand-in grid (about 30 ms); ALT landmarks are slice 2.
+Slice 2 (2026-10-14): ALT landmarks (`RouteLandmarks`, 16 by default; 30 km on the stand-in grid: 1.2 ms mean,
+1,695 settled vs 78,464 plain), heading-aware snapping and point-to-point routes, region graph assembly from
+roads.graph tiles (`region_graph.h`). Defaults settled: tracks routable at 15 km/h, time restrictions ignored.

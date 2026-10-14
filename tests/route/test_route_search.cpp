@@ -2,36 +2,22 @@
 // restrictions, U-turns, unreachable targets, ties, and A* == Dijkstra on
 // random graphs. Coordinates in metres (GraphBuilder scales to mm).
 #include "route_reference.h"
+#include "route_scenes.h"
 #include "splitmix64.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
 #include <cstdio>
-#include <functional>
-#include <queue>
-#include <set>
-#include <tuple>
 
 using namespace g2m;
 using namespace g2m::route;
 using g2m_test::GraphBuilder;
 using g2m_test::via_node_rule;
+using g2m_test::cross;
+using g2m_test::random_scene;
 
 namespace {
-
-// A cross at C(0,0): S south, N north (y = north_y), W west, E east, 100 m arms.
-// Way 50 links W to N through (-100, north_y) unless `no_link`.
-RoadGraph cross(bool no_link = false, std::int64_t north_y = 100, std::vector<std::pair<std::string, std::string>> north_tags = {}) {
-    GraphBuilder b;
-    b.node(1, 0, 0); b.node(2, 0, -100); b.node(3, 0, north_y); b.node(4, -100, 0); b.node(5, 100, 0); b.node(6, -100, north_y);
-    b.way(10, {2, 1});
-    b.way(20, {1, 4});
-    b.way(30, {1, 3}, std::move(north_tags));
-    b.way(40, {1, 5});
-    if (!no_link) b.way(50, {4, 6, 3});
-    return b.build();
-}
 
 std::vector<std::int64_t> ways_of(const RoutingGraph& g, const Route& r) {
     std::vector<std::int64_t> out;
@@ -93,7 +79,7 @@ TEST_CASE("Access tags close ways; the most specific key decides", "[route]") {
     b.way(1, {1, 2}, {{"access", "private"}});
     b.way(2, {3, 4}, {{"access", "no"}, {"motorcar", "yes"}});
     b.way(3, {5, 6}, {{"motor_vehicle", "agricultural"}});
-    b.way(4, {7, 8}, {{"highway", "track"}});
+    b.way(4, {7, 8}, {{"highway", "path"}});
     const auto g = build_routing_graph(b.build(), {});
     REQUIRE(g);
     CHECK(g->stats().ways_used == 1);
@@ -249,68 +235,6 @@ TEST_CASE("Unknown nodes, unreachable components, unmatched and via-way restrict
     CHECK(capped.error().code == ErrorCode::LimitExceeded);
 }
 
-namespace {
-
-// A jittered grid of streets with random oneways, speeds, gaps and restrictions.
-struct RandomScene {
-    RoadGraph graph;
-    std::vector<TurnRestriction> rules;
-    std::vector<std::int64_t> node_ids;
-};
-RandomScene random_scene(std::uint64_t seed, int n, double restriction_share) {
-    g2m_test::SplitMix64 rng(seed);
-    GraphBuilder b;
-    RandomScene scene;
-    const auto id = [&](int i, int j) { return std::int64_t{1000} + i * n + j; };
-    for (int i = 0; i < n; ++i)
-        for (int j = 0; j < n; ++j) {
-            const auto jx = static_cast<std::int64_t>(rng.next() % 41);
-            const auto jy = static_cast<std::int64_t>(rng.next() % 41);
-            b.node(id(i, j), 200 * j + jx - 20, 200 * i + jy - 20);
-        }
-    std::int64_t way_id = 1;
-    std::vector<std::vector<std::pair<std::int64_t, std::int64_t>>> incident(static_cast<std::size_t>(n * n));
-    const char* classes[] = {"residential", "tertiary", "secondary", "primary", "service"};
-    for (int dir = 0; dir < 2; ++dir) {
-        for (int line = 0; line < n; ++line) {
-            int k = 0;
-            while (k < n - 1) {
-                const int run = 1 + static_cast<int>(rng.next() % 4);
-                const int end = std::min(n - 1, k + run);
-                const bool gap = rng.next() % 9 == 0;
-                if (!gap) {
-                    std::vector<std::int64_t> refs;
-                    for (int m = k; m <= end; ++m) refs.push_back(dir == 0 ? id(line, m) : id(m, line));
-                    std::vector<std::pair<std::string, std::string>> tags{{"highway", classes[rng.next() % 5]}};
-                    const auto r = rng.next() % 10;
-                    if (r == 0) tags.emplace_back("oneway", "yes");
-                    if (r == 1) tags.emplace_back("oneway", "-1");
-                    const auto s = rng.next() % 6;
-                    if (s == 0) tags.emplace_back("maxspeed", "30");
-                    if (s == 1) tags.emplace_back("maxspeed", "80");
-                    for (const auto ref : refs) incident[static_cast<std::size_t>(ref - 1000)].push_back({way_id, ref});
-                    b.way(way_id, refs, tags);
-                }
-                ++way_id;
-                k = end;
-            }
-        }
-    }
-    scene.graph = b.build();
-    const char* values[] = {"no_left_turn", "no_right_turn", "no_straight_on", "no_u_turn", "only_straight_on", "only_left_turn"};
-    for (std::size_t v = 0; v < incident.size(); ++v) {
-        if (incident[v].size() < 2 || rng.unit() >= restriction_share) continue;
-        const auto& from = incident[v][rng.next() % incident[v].size()];
-        const auto& to = incident[v][rng.next() % incident[v].size()];
-        TurnRestriction r = via_node_rule(from.first, from.second, to.first, values[rng.next() % 6]);
-        r.relation_id = static_cast<std::int64_t>(v);
-        scene.rules.push_back(r);
-    }
-    for (const auto& node : scene.graph.nodes) scene.node_ids.push_back(node.osm_id);
-    return scene;
-}
-
-} // namespace
 
 TEST_CASE("A* equals Dijkstra on random restricted grids", "[route][restriction][oneway]") {
     std::size_t reachable = 0, total = 0, with_turns = 0;
@@ -341,87 +265,9 @@ TEST_CASE("A* equals Dijkstra on random restricted grids", "[route][restriction]
     CHECK(reachable > total / 2);
 }
 
-namespace {
-
-// ALT experiment for the design decision (docs/routing_design.md, slice 2):
-// landmark lower bounds on the node graph (travel cost only; turn costs are
-// >= 0 and restrictions only remove options, so the bound stays admissible
-// for the edge-based search). Test-only until slice 2 moves it into g2m_route.
-struct AltTable {
-    std::vector<std::vector<std::uint64_t>> from, to; // [landmark][node]
-};
-std::vector<std::uint64_t> node_dijkstra(const RoutingGraph& g, std::uint32_t source, bool reverse) {
-    const auto n = g.nodes().size();
-    std::vector<std::vector<std::pair<std::uint32_t, std::uint32_t>>> adj(n);
-    for (const auto& a : g.arcs()) (reverse ? adj[a.to] : adj[a.from]).push_back({reverse ? a.from : a.to, a.cost_ms});
-    std::vector<std::uint64_t> d(n, UINT64_MAX);
-    std::set<std::pair<std::uint64_t, std::uint32_t>> open{{0, source}};
-    d[source] = 0;
-    while (!open.empty()) {
-        const auto [du, u] = *open.begin();
-        open.erase(open.begin());
-        for (const auto& [v, c] : adj[u])
-            if (du + c < d[v]) { open.erase({d[v], v}); d[v] = du + c; open.insert({d[v], v}); }
-    }
-    return d;
-}
-AltTable build_alt(const RoutingGraph& g, int count) {
-    AltTable t;
-    std::vector<std::uint64_t> nearest(g.nodes().size(), UINT64_MAX);
-    std::uint32_t next = 0;
-    for (int k = 0; k < count; ++k) {
-        t.from.push_back(node_dijkstra(g, next, false));
-        t.to.push_back(node_dijkstra(g, next, true));
-        std::uint64_t best = 0;
-        for (std::uint32_t v = 0; v < nearest.size(); ++v) {
-            const auto dv = std::min(t.from.back()[v], t.to.back()[v]);
-            nearest[v] = std::min(nearest[v], dv);
-            if (nearest[v] != UINT64_MAX && nearest[v] > best) { best = nearest[v]; next = v; }
-        }
-    }
-    return t;
-}
-std::uint64_t alt_bound(const AltTable& t, std::uint32_t v, std::uint32_t target) {
-    std::uint64_t h = 0;
-    for (std::size_t k = 0; k < t.from.size(); ++k) {
-        const auto lv = t.from[k][v], lt = t.from[k][target], vl = t.to[k][v], tl = t.to[k][target];
-        if (lt != UINT64_MAX && lv != UINT64_MAX && lt > lv) h = std::max(h, lt - lv);
-        if (vl != UINT64_MAX && tl != UINT64_MAX && vl > tl) h = std::max(h, vl - tl);
-    }
-    return h;
-}
-// Edge-based A* with the ALT bound; returns (cost, settled).
-std::pair<std::uint64_t, std::size_t> alt_search(const RoutingGraph& g, const AltTable& t, std::uint32_t s, std::uint32_t target) {
-    const auto arcs = g.arcs();
-    std::vector<std::uint64_t> best(arcs.size(), UINT64_MAX);
-    using E = std::tuple<std::uint64_t, std::uint64_t, std::uint32_t>;
-    std::priority_queue<E, std::vector<E>, std::greater<E>> open;
-    for (const auto& a : g.out_arcs(s)) {
-        const auto i = static_cast<std::uint32_t>(&a - arcs.data());
-        best[i] = a.cost_ms;
-        open.push({a.cost_ms + alt_bound(t, a.to, target), a.cost_ms, i});
-    }
-    std::vector<Transition> succ;
-    std::size_t settled = 0;
-    while (!open.empty()) {
-        const auto [f, gc, a] = open.top();
-        open.pop();
-        if (gc != best[a]) continue;
-        if (arcs[a].to == target) return {gc, settled};
-        ++settled;
-        g.successors(a, succ);
-        for (const auto& tr : succ) {
-            const auto ng = gc + tr.turn_ms + arcs[tr.arc].cost_ms;
-            if (ng < best[tr.arc]) { best[tr.arc] = ng; open.push({ng + alt_bound(t, arcs[tr.arc].to, target), ng, tr.arc}); }
-        }
-    }
-    return {UINT64_MAX, settled};
-}
-
-} // namespace
-
 // Region-scale timing (not asserted): a 301 x 301 street grid, 200 m blocks
-// (60 km square, 90k nodes) with arterials every 10th line. Run by hand:
+// (60 km square, 90k nodes) with arterials every 10th line; plain A* and A*
+// with 16 ALT landmarks. Run by hand:
 //   g2m_route_tests "[bench]" -s
 TEST_CASE("Route timing on a region-sized grid", "[.][route][bench]") {
     const int n = 301; // 300 blocks per side, divisible by the 5-block way length
@@ -445,10 +291,12 @@ TEST_CASE("Route timing on a region-sized grid", "[.][route][bench]") {
     std::printf("grid: nodes=%zu arcs=%zu build_ms=%.1f\n", g->nodes().size(), g->arcs().size(),
                 std::chrono::duration<double, std::milli>(t1 - t0).count());
     const auto a0 = std::chrono::steady_clock::now();
-    const AltTable alt = build_alt(*g, 16);
-    std::printf("grid: ALT 16 landmarks preprocessing %.0f ms (test code, std::set Dijkstra)\n",
+    const auto alt = RouteLandmarks::build(*g, 16);
+    REQUIRE(alt);
+    std::printf("grid: ALT 16 landmarks preprocessing %.0f ms\n",
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a0).count());
     RouteSearcher searcher(*g);
+    RouteSearcher alt_searcher(*g, &*alt);
     g2m_test::SplitMix64 rng(42);
     for (const double km : {5.0, 15.0, 30.0}) {
         double sum_ms = 0, max_ms = 0, sum_dij = 0, sum_alt = 0, max_alt = 0;
@@ -467,10 +315,11 @@ TEST_CASE("Route timing on a region-sized grid", "[.][route][bench]") {
             const double ms = std::chrono::duration<double, std::milli>(z - a).count();
             sum_ms += ms; max_ms = std::max(max_ms, ms); settled += searcher.stats().settled;
             const auto b0 = std::chrono::steady_clock::now();
-            const auto [alt_cost, alt_settled] = alt_search(*g, alt, g->find_node(id(si, sj)), g->find_node(id(ti, tj)));
+            const auto ra = alt_searcher.find({id(si, sj), id(ti, tj)});
             const double alt_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - b0).count();
-            sum_alt += alt_ms; max_alt = std::max(max_alt, alt_ms); settled_alt += alt_settled;
-            CHECK(alt_cost == r->cost_ms);
+            REQUIRE(ra);
+            sum_alt += alt_ms; max_alt = std::max(max_alt, alt_ms); settled_alt += alt_searcher.stats().settled;
+            CHECK(ra->cost_ms == r->cost_ms);
             if (q < 3) {
                 const auto d0 = std::chrono::steady_clock::now();
                 const auto ref = g2m_test::dijkstra_reference(*g, id(si, sj), id(ti, tj));
@@ -478,6 +327,17 @@ TEST_CASE("Route timing on a region-sized grid", "[.][route][bench]") {
                 CHECK(ref.cost_ms == r->cost_ms);
             }
         }
+        // Snapping cost: two snaps per request (start with a heading, destination without).
+        const auto s0 = std::chrono::steady_clock::now();
+        for (int q = 0; q < 100; ++q) {
+            SnapOptions o;
+            o.heading_dx = 1.0;
+            o.max_distance_mm = 150000; // blocks are 200 m
+            const auto p = g->snap({static_cast<std::int64_t>(rng.next() % 60000000), static_cast<std::int64_t>(rng.next() % 60000000)}, o);
+            REQUIRE(p);
+        }
+        const double snap_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s0).count() / 100;
+        std::printf("grid snap: %.3f ms per snap\n", snap_ms);
         std::printf("grid %.0f km (straight line): A* mean %.2f ms, max %.2f ms, settled mean %zu; ALT mean %.2f ms, max %.2f ms, "
                     "settled mean %zu; reference Dijkstra mean %.1f ms\n",
                     km, sum_ms / queries, max_ms, settled / queries, sum_alt / queries, max_alt, settled_alt / queries, sum_dij / 3);

@@ -7,10 +7,17 @@ later NPC traffic. Acceptance: routes on the fixture equal a brute-force
 Dijkstra; restrictions honoured in unit cases; route requests under 10 ms
 within 30 km [target].
 
-Status: slice 1 is built (`include/g2m/route/`, `src/route/`, `tests/route/`).
-Everything else here is a plan.
+Status: slices 1 and 2 are built (`include/g2m/route/`, `src/route/`,
+`tests/route/`). Everything else here is a plan.
 
-## Open owner questions
+## Owner questions
+
+Questions 2 to 6 were settled on 2026-10-14 with the recommended defaults
+(coordinator, PR #2): tracks are routable at 15 km/h, start and destination
+snap with the car's heading, the region graph is built on a worker at world
+load, ALT landmarks are computed in the background at load, and time-dependent
+restrictions are ignored. The original wording stays below for the record;
+question 1 is still open.
 
 1. **Turn costs.** Defaults: right turn 2 s, left 4 s, sharp right 4 s, sharp
    left 6 s, slight 0.5 s, U-turn 20 s and only at a dead end. Counted only at
@@ -18,7 +25,8 @@ Everything else here is a plan.
 2. **Access.** Blocked: `no`, `private`, `agricultural`, `forestry`,
    `emergency`, `use_sidepath`. Allowed: `destination`, `delivery`,
    `customers`. Service roads are routable at 15 km/h, tracks are not routable.
-   OK for a racing game, or should tracks be drivable too?
+   OK for a racing game, or should tracks be drivable too? **Settled: tracks
+   routable at 15 km/h.**
 3. **Start and destination.** Proposal: snap both to the nearest routable edge
    position. The start takes the car's heading, so the first arc is the one the
    car is driving on. A U-turn can then only happen at a dead end. Is that the
@@ -52,7 +60,8 @@ Everything else here is a plan.
   - **Arcs:** each traversable direction of an edge is one arc. Arc order is
     canonical: (from node, way id, first segment, forward first).
 - **Ways that are left out:**
-  - classes not in the config table (tracks by default);
+  - classes not in the config table, or marked not routable (every
+    roads.graph class is routable by default; tracks at 15 km/h);
   - access closed: the most specific of `motorcar` > `motor_vehicle` >
     `vehicle` > `access` decides;
   - `oneway=reversible|alternating`.
@@ -83,7 +92,7 @@ Everything else here is a plan.
   | trunk_link | 50 | primary | 70 | primary_link | 40 |
   | secondary | 60 | secondary_link | 40 | tertiary | 50 |
   | tertiary_link | 30 | unclassified | 40 | residential | 30 |
-  | living_street | 7 | service | 15 | | |
+  | living_street | 7 | service | 15 | track | 15 |
 
 - **Turn cost:** classified by the heading change between the arriving and the
   leaving segment.
@@ -160,7 +169,8 @@ Everything else here is a plan.
 - Region "home" (`docs/osm_tag_coverage_home.md`): 58,672 drivable ways,
   5,795 km, about 950 km^2.
 - The fixtures give a ratio of about 1.3 routing nodes and 2.7 arcs per used
-  way: frankfurt_hoechst has 575 ways, 751 nodes and 1,561 arcs.
+  way: frankfurt_hoechst has 627 ways, 814 nodes and 1,715 arcs (tracks
+  routable; 575 / 751 / 1,561 without them).
 - That predicts about 76k nodes and about 160k arcs for home [estimate].
 
 **Measured on a stand-in.** The stand-in graph is a 301 x 301 street grid with
@@ -185,7 +195,28 @@ on a shared 4-core box with load 14-17, so the times are noisy.
 - Plain A* misses the 10 ms target at 30 km. This is expected, because the
   time heuristic (distance at 130 km/h) is weak on 30-50 km/h streets.
 
-**Recommendation: edge-based A* with ALT landmarks.**
+**Slice 2, library ALT (measured).** `RouteLandmarks` in `g2m_route`, used by
+`RouteSearcher` through the generation-stamped workspace, so a query
+allocates nothing after warm-up. Same grid and machine (load 17-19), 40
+queries per row:
+
+| Straight-line distance | Plain A*: mean / max ms | A* settled | A* + ALT: mean / max ms | ALT settled |
+|---|---|---:|---|---:|
+| 5 km | 0.74 / 4.7 | 2,942 | 0.07 / 0.14 | 310 |
+| 15 km | 7.3 / 22 | 21,655 | 0.93 / 12.4 | 935 |
+| 30 km | 22.7 / 58 | 78,464 | 1.23 / 7.1 | 1,695 |
+
+- Preparing the 16 landmarks (32 node-graph Dijkstras with a binary heap)
+  takes 0.6 s on 90k nodes and 361k arcs.
+- One snap takes 0.003-0.08 ms.
+- The maxima come from preemption on the loaded box: the settled counts are
+  the stable measure.
+- A* + ALT equals the reference Dijkstra on every test query, for both node
+  queries and point queries.
+- The 10 ms / 30 km target is met on the stand-in. The real home store still
+  has to be measured on the owner machine.
+
+**Recommendation: edge-based A* with ALT landmarks** (built in slice 2).
 - 16 landmarks, picked by farthest-point selection from node 0, which is
   deterministic.
 - Lower bounds come from node-graph Dijkstras over arc costs. Turn costs are
@@ -300,14 +331,48 @@ is drawn twice.
   - more than `max_settled` states is `LimitExceeded`;
   - an unreachable target is not an error (`reachable = false`).
 
+**Slice 2, built:**
+- `RouteLandmarks::build(graph, count = 16)` (`route_search.h`):
+  - landmarks by farthest-point selection; a node that no landmark reaches
+    yet is taken first, so every connected component gets a landmark;
+  - tables in [node][landmark] uint32 order;
+  - `bound(v, t)`;
+  - immutable, so searchers and threads can share it.
+- `RouteSearcher(graph, &landmarks)`: the heuristic is the larger of the chord
+  bound and the ALT bound to the target node(s).
+- `RoutingGraph::snap(point, SnapOptions{max_distance_mm = 50 m, heading,
+  tolerance = 60 deg}) -> RoutePoint`:
+  - the snap index is a sorted cell grid (`snap_cell_mm`, 256 m);
+  - with a heading, only directions within the tolerance qualify. If none
+    qualifies, the nearest edge is returned in every traversable direction
+    and `heading_matched` is false;
+  - ties go by distance, then edge, then segment, then direction;
+  - each candidate holds an arc and the mm offset along its direction of
+    travel.
+  - Helpers: `shape(arc)`, `point_at(arc, offset)`, and
+    `partial_cost_ms(arc, a, b) = ceil(cost * (b - a) / length)`.
+- `RouteSearcher::find(RoutePoint from, RoutePoint to)`:
+  - travel starts on a from candidate at its offset and ends on a to
+    candidate;
+  - a destination ahead on the start arc is direct. One behind it goes
+    around the block and re-enters the arc;
+  - `Route::start_offset_mm` and `end_offset_mm` give the partial first and
+    last arc.
+- `g2m/route/region_graph.h`:
+  - `assemble_region_graph(keys, RoadGraphTileFetch)` sorts and dedups the
+    keys, treats absent tiles as allowed, and checks that each fetched tile
+    has the requested key.
+  - `merge_region_graphs` keeps one copy per OSM id and rejects conflicting
+    copies. It sorts, so the result does not depend on the tile order, and it
+    applies no per-tile limits.
+  - `merge_turn_restrictions` merges the per-tile restriction sets.
+  - `build_region_routing(graph, restrictions, config, landmarks = 16)`
+    returns the heap-held graph and landmarks. The game runs it on a worker
+    at world load.
+
 **Planned:**
-- `RouteLandmarks build_landmarks(graph, count)`, handed to `RouteSearcher` as
-  an option (slice 2).
-- `RoutePoint snap_to_graph(graph, PointMm, optional heading)`, giving an arc
-  and an offset in mm.
-- `find(RouteRequest{RoutePoint from, RoutePoint to})`, which charges the
-  partial first and last arc (slice 2).
-- `build_guidance(...)` (slice 4), `build_map_tile(...)` (slice 5).
+- `build_guidance(...)` (slice 4).
+- `build_map_tile(...)` (slice 5).
 
 ## 8. Slices
 
@@ -319,14 +384,26 @@ is drawn twice.
      Dijkstra).
    - On the fixtures, 400 random pairs each agree with Dijkstra and every
      route validates. The negative control is that dropping the restrictions
-     changes 3 and 35 routes respectively.
-2. **ALT landmarks, snapping and the region graph.**
+     changes 4 and 36 routes respectively (3 and 35 before tracks became
+     routable).
+2. **Done: ALT landmarks, snapping and the region graph.**
    - ALT landmarks in the library.
-   - Snapping and mid-edge start/end with the car's heading.
-   - Region graph assembly from a store's roads.graph tiles, built in the
-     background.
-   - Timing on the real home store, on the owner machine: target < 10 ms for
-     30 km.
+   - Heading-aware snapping and mid-edge start and end.
+   - Region graph assembly from roads.graph tiles.
+   - Tests:
+     - snapping cases: heading, fallback, one-way, a farther edge chosen by
+       heading;
+     - point routes: partial arcs, same arc ahead and behind;
+     - ALT on random restricted grids: 400 node and point queries equal
+       Dijkstra;
+     - landmark determinism and admissibility;
+     - on both fixtures, about 300 heading-snapped point queries each equal
+       Dijkstra;
+     - the hoechst_a66 fixture rebuilt from its 12 roads.graph tiles through
+       the real codec, in a shuffled order with repeated keys and an absent
+       tile, equals the whole-world graph. The restrictions merged from the
+       per-tile `clip_osm` src.osm tiles equal the whole-file restrictions.
+   - Open: timing on the real home store, on the owner machine.
 3. **Restrictions in roads.graph and via-way rules.** The restriction section
    in roads.graph (encoding 6, release id change) and via-way rules through
    state expansion.
