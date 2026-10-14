@@ -7,6 +7,7 @@ set(G2M_ROUTE_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/routing_graph.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/route_search.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/region_graph.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/route_guidance.cpp
   CACHE INTERNAL "g2m_route sources"
 )
 add_library(g2m_route STATIC ${G2M_ROUTE_SOURCES})

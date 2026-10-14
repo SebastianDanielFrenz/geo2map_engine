@@ -295,7 +295,7 @@ flowchart TB
   G3D["G3 D junction surfaces and carving - served, consumer switch open"]
   G3E["G3 E ribbons, markings, bridge bodies - open"]
   G3F["G3 F route acceptance - open"]
-  G4["G4 routing - slices 1-2 of 5 done"]
+  G4["G4 routing - slices 1, 2, 4 of 5 done"]
   G5["G5 land cover, buildings, water, vegetation - planned"]
   G6["G6 HTTP server and packs - planned"]
   G7["G7 hosted server - planned"]
@@ -344,7 +344,7 @@ flowchart TB
 | Street fidelity P1 (lane-aware cross-section) | Slices 1 to 7 implemented (context, node tags, base and join resolution, encoding 6, consumer API: carve footprint, lane queries, grip-raster envelope, carved profile features) | [../street_fidelity/p1_cross_section_design.md](../street_fidelity/p1_cross_section_design.md) |
 | Street fidelity P2 (junction surfaces, carving, furniture = G3-D) | Slices 1-9 of 12 done: rules, surface height, junction rings and clusters, junction heights, the completion tier and furniture as library functions, served since slice 8 in `roads.geom` encoding 7 (junctions, furniture, provenance); slice 9 serves the carved heights `g2m.terrain.carved`; terrain.class and wiring (10-11) open; both owner questions answered 2026-10-05 (switch gate not zero gaps, relaxed profiles served flagged) | [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) |
 | Street fidelity P3 to P8 | Planned, nothing written | [../street_fidelity/plan.md](../street_fidelity/plan.md) section 6 |
-| G4: routing, guidance, map geometry | Slices 1-2 implemented (routable graph, edge-based A* with ALT, oneway, via-node restrictions, heading-aware snapping, region graph from roads.graph tiles; `g2m_route`); restrictions in roads.graph, guidance and map tiles open | [../routing_design.md](../routing_design.md) |
+| G4: routing, guidance, map geometry | Slices 1-2 implemented (routable graph, edge-based A* with ALT, oneway, via-node restrictions, heading-aware snapping, region graph from roads.graph tiles; `g2m_route`) and slice 4 (guidance manoeuvre list); restrictions in roads.graph and map tiles open | [../routing_design.md](../routing_design.md) |
 | HTTP server, packs, hosted CDN (G6, G7) | Planned | [../formats/protocol.md](../formats/protocol.md), [../formats/pack.md](../formats/pack.md) |
 
 ---

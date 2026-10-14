@@ -235,45 +235,62 @@ queries per row:
 - **Contraction hierarchies:** only if ALT misses 10 ms on an all-Hessen
   graph (G8 scale).
 
-## 5. Guidance data (slice 4)
+## 5. Guidance data (slice 4, done)
 
-`build_guidance(graph, roads, route) -> std::vector<Maneuver>`, a pure
-function of the route arcs and the way tags.
+`build_guidance(graph, roads, route, GuidanceConfig) -> std::vector<Maneuver>`
+(`g2m/route/route_guidance.h`), a pure function of the route arcs and the way
+tags. `roads` is the RoadGraph the routing graph was built from (the tags are
+looked up by way id).
 
 **Maneuver record:**
 - kind;
-- the node index and its position (mm);
-- the arc index;
-- distance from the start and to the next maneuver (mm);
-- heading change (deg);
-- the road it enters: `name`, `ref`, `destination`, `destination:ref` from
-  the way tags;
+- `step`: the index into `Route::arcs` of the arc driven after it;
+- the graph node and its position (mm; Depart and Arrive use the snapped
+  start and end points);
+- distance from the start and to the next manoeuvre (mm); the distances to
+  the next sum to `Route::length_mm`;
+- heading change (deg, rounded, positive = left);
+- the road it enters: `name`, `ref`, `destination`, `destination_ref` (OSM
+  `destination`, `destination:ref`);
 - the exit number for roundabouts.
 
 **Kinds:**
 - depart and arrive;
-- continue;
-- slight, turn and sharp left or right (the same angle classes as the cost);
-- keep left or right: a fork where two allowed exits lie within 45 deg of
-  each other;
-- U-turn;
-- roundabout enter (exit n) and exit;
-- ramp on and ramp off (moving onto or off a `*_link`);
-- merge.
+- continue (straight on onto a new name or ref);
+- slight, turn and sharp left or right (the RouteConfig angle classes the
+  cost model uses: 20 / 60 / 120 deg);
+- keep left or right: a fork, another allowed exit within
+  `GuidanceConfig::fork_max_deg` (45 deg) of a straight or slight move;
+- U-turn (only possible at a dead end);
+- roundabout enter with the exit number (exits = ring nodes where an allowed
+  exit leaves the ring); roundabout exit only when the route starts on the
+  ring;
+- ramp off (motorway/trunk onto a `*_link`), ramp on (another road onto a
+  `*_link`), merge (a `*_link` onto motorway/trunk).
 
-**When a maneuver is emitted:** at a node with degree >= 3 when any of these
+**When a manoeuvre is emitted:** at a node with degree >= 3 when any of these
 holds:
-- the turn class is not straight;
-- the name or ref changes;
-- another allowed exit lies within 30 deg of the chosen one, so going straight
-  is ambiguous.
+- the move is a ramp, merge, U-turn or roundabout entry;
+- the turn class is beyond slight;
+- a slight move with another allowed exit (a slight turn), or with one
+  within the fork angle (keep left/right);
+- the name or ref changes (continue).
 
-Consecutive arcs on the same road with no maneuver are merged. Lane hints
-(`turn:lanes`) come later. Instruction text and localisation stay in the game.
+Staying on a main road past a slip road is silent: a `*_link` exit does not
+make a fork unless the route changes name or ref there. Allowed exits come
+from `RoutingGraph::successors`, so a restricted or one-way exit never makes
+a fork. Lane hints (`turn:lanes`) come later. Instruction text and
+localisation stay in the game.
 
-**Test:** a scripted route on the hoechst_a66 fixture through 10 or more
-manoeuvres. Every manoeuvre kind and distance is pinned, and the route
-crosses the B 8 / A 66 links.
+**Tests** (`tests/route/test_route_guidance.cpp`, `[guidance]`): synthetic
+scenes for every kind (distances, names, refs, destination, exit numbers 1-3,
+silence on a same-name straight and past a slip road, U-turn on a point
+route). On the hoechst_a66 fixture, 200 random node pairs (148 reachable,
+1,478 manoeuvres) check the invariants: Depart first at 0, Arrive last at the
+route length, monotone distances, distances to the next summing to the route
+length. The longest of them (3.4 km, 21 manoeuvres, through Unterliederbach
+onto the B 8, off at the Main-Taunus-Zentrum ramp) has its kind sequence
+pinned. Guidance of all 148 routes takes well under 1 ms each.
 
 ## 6. Client map geometry (slice 5)
 
@@ -370,8 +387,10 @@ is drawn twice.
     returns the heap-held graph and landmarks. The game runs it on a worker
     at world load.
 
+- `g2m/route/route_guidance.h` (slice 4): `build_guidance(graph, roads,
+  route, GuidanceConfig)` -> `Maneuver` list, `to_string(ManeuverKind)`.
+
 **Planned:**
-- `build_guidance(...)` (slice 4).
 - `build_map_tile(...)` (slice 5).
 
 ## 8. Slices
@@ -407,7 +426,8 @@ is drawn twice.
 3. **Restrictions in roads.graph and via-way rules.** The restriction section
    in roads.graph (encoding 6, release id change) and via-way rules through
    state expansion.
-4. **Guidance.** The maneuver list and the 10-manoeuvre fixture route.
+4. **Done: guidance.** The manoeuvre list (section 5), synthetic tests per
+   kind and the pinned 21-manoeuvre hoechst_a66 route. Open: lane hints.
 5. **Map geometry.** Map tiles at three LODs and the route polyline.
 6. **Later, with traffic.** The lane graph (`turn:lanes`, lane connectivity at
    junctions), signals and stop points from the P2 furniture records.
