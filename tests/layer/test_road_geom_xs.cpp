@@ -298,7 +298,7 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
     const std::string after = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
         "sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=7 rules=de:" +
         rules_hex + " join-bisector=1 context=nodes junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/60 "
-        "completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05 corner-fillet=1 star-union=1";
+        "completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05 corner-fillet=1";
     CHECK(road_geom_config_text() == after);
     CHECK(deriver.config_hash() == Sha256::of(after));
     CHECK(road_geom_desc().encoding == 7);

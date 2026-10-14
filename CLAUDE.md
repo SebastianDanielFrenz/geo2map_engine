@@ -972,7 +972,3 @@ simplicity, 2 mm nesting or the vertex budget is dropped per corner (full, half 
 ` corner-fillet=1`; de.json SHA `1677d98b...fc27`. Tests `tests/layer/test_junction_fillets.cpp` ([fillet]); hidden
 `[.][diag][junction_dump]` (`tests/layer/test_junction_dump.cpp`, env G2M_JUNCTION_DUMP) + `tools/junction_view/render.py`
 draw rings and approach edges as PNGs.
-Star-union fallback (design D45): a single-node junction whose offset rings are not simple or not nested gets
-`star_union_ring` (the polar upper envelope about the node of the approach strips plus the node core, star-shaped, so
-simple and nested) instead of the convex hull; a union over 1.02 x the piece area + 1 m^2 (shadow fill) still takes the
-hull. Flag `HullFallback` kept; `JunctionBuildOptions::star_union_fallback`, stat `star_fallbacks`. Config text ` star-union=1`.

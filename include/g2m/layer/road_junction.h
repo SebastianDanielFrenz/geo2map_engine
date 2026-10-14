@@ -52,7 +52,6 @@ struct JunctionBuildStats {
     std::size_t ring_cap_hulls = 0;      // an offset ring above kJunctionMaxRingVertices: all-layer hull (D34)
     std::size_t fillets = 0;             // block corners rounded with a kerb return (all layers of one corner count once)
     std::size_t filleted_junctions = 0;  // junctions with at least one fillet
-    std::size_t star_fallbacks = 0;      // single nodes whose broken offset rings took the star union of their strips (D45)
     std::size_t fillet_fallbacks = 0;    // corners left sharp because their fillet broke ring simplicity or nesting
 };
 
@@ -65,8 +64,7 @@ struct JunctionBuildOptions {
     bool unknown_links_are_absent = false; // a possible link to an incomplete node ends discovery (D20)
     bool raised_tables = true;             // slice 5: a table or hump tag on a junction node raises the junction (4.4)
     bool hull_when_not_nested = true;      // D34 (slice 8): simple offset rings that do not nest take the all-layer hull
-    bool star_union_fallback = true;     // D45: false = the convex hull for every broken ring (pre-D45)
-    bool corner_fillets = true;          // block corners take a kerb-return radius (rules.junction.corner_radius_mm)
+    bool corner_fillets = true;            // block corners take a kerb-return radius (rules.junction.corner_radius_mm)
 };
 
 // True iff `ring` has at least 3 vertices, no repeated vertex, positive (counter-clockwise) area and no two

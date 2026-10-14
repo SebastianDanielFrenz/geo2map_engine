@@ -275,8 +275,8 @@ TEST_CASE("Fillets: fixture census - kerb returns on most junctions, rings valid
             }
         }
         std::printf("[fillet census] %s: ring records over all tiles' builds %zu, junctions with fillets %zu, corners rounded %zu, corners left sharp %zu, "
-            "hull fallbacks %zu of them star unions %zu (sharp %zu), clusters %zu (sharp %zu)\n", pbf, rings, with.filleted_junctions, with.fillets, with.fillet_fallbacks,
-            with.hull_fallbacks, with.star_fallbacks, without.hull_fallbacks, with.clusters, without.clusters);
+            "hull fallbacks %zu (sharp %zu), clusters %zu (sharp %zu)\n", pbf, rings, with.filleted_junctions, with.fillets, with.fillet_fallbacks,
+            with.hull_fallbacks, without.hull_fallbacks, with.clusters, without.clusters);
         CHECK(with.filleted_junctions * 10 >= rings * 7);           // most junctions get kerb returns
         CHECK(with.fillet_fallbacks * 100 <= with.fillets);         // and rarely have to leave a corner sharp
         CHECK(with.hull_fallbacks <= without.hull_fallbacks + 2);

@@ -357,49 +357,20 @@ TEST_CASE("T3: constructed self-crossing junctions fall back to the convex hull 
     // open-pair ring crosses itself at the node and no extension of 3 m helps.
     const auto scene = star_scene({0.0, 3.0, 180.0}, {{"highway", "motorway"}, {"oneway", "yes"}});
     JunctionBuildStats stats;
-    JunctionBuildOptions hull_only = sharp_corners(); hull_only.star_union_fallback = false;
-    const auto j = junction_of(*scene, 1, builtin_road_rules_de(), &stats, hull_only);
+    const auto j = junction_of(*scene, 1, builtin_road_rules_de(), &stats);
     CHECK(j.decline == JunctionDecline::None);
     CHECK(has(j, JunctionFlags::HullFallback));
     CHECK(stats.hull_fallbacks == 1); CHECK(stats.bowtie_rounds == static_cast<std::size_t>(builtin_road_rules_de().junction.bowtie_rounds));
     for (const auto& ring : j.rings) { CHECK(junction_ring_valid(ring)); CHECK(ring.vertices.size() >= 3); }
     // A branch that curves back across the main road, the same: hull, flag, valid rings.
     const auto fork = fork_scene(10.0, 40.0, -1.0);
-    const auto jf = junction_of(*fork, 1, builtin_road_rules_de(), nullptr, hull_only);
+    const auto jf = junction_of(*fork, 1);
     CHECK(has(jf, JunctionFlags::HullFallback));
     for (const auto& ring : jf.rings) CHECK(junction_ring_valid(ring));
     // A convex hull is convex: every turn is a left turn.
     const auto& hull = j.rings[2].vertices;
     for (std::size_t i = 0; i < hull.size(); ++i)
         CHECK(geom::orient(hull[i], hull[(i + 1) % hull.size()], hull[(i + 2) % hull.size()]) > 0);
-}
-
-TEST_CASE("D45: a broken single-node ring takes the star union of its strips, inside the hull, nested", "[layer][junction]") {
-    const auto scene = star_scene({0.0, 3.0, 180.0}, {{"highway", "motorway"}, {"oneway", "yes"}});
-    JunctionBuildOptions hull_only = sharp_corners(); hull_only.star_union_fallback = false;
-    JunctionBuildStats stats, hull_stats;
-    const auto star = junction_of(*scene, 1, builtin_road_rules_de(), &stats, sharp_corners());
-    const auto hull = junction_of(*scene, 1, builtin_road_rules_de(), &hull_stats, hull_only);
-    CHECK(star.decline == JunctionDecline::None);
-    CHECK(has(star, JunctionFlags::HullFallback));
-    CHECK(stats.star_fallbacks == 1); CHECK(hull_stats.star_fallbacks == 0);
-    for (const auto& ring : star.rings) CHECK(junction_ring_valid(ring));
-    CHECK(junction_rings_nested(star));
-    // Not the hull: the open wedge between the two carriageways stays open (a reflex vertex on every layer).
-    CHECK_FALSE(star.rings == hull.rings);
-    for (std::size_t layer = 0; layer < 3; ++layer) {
-        const auto& v = star.rings[layer].vertices;
-        bool reflex = false;
-        for (std::size_t i = 0; i < v.size(); ++i) reflex = reflex || geom::orient(v[i], v[(i + 1) % v.size()], v[(i + 2) % v.size()]) < 0;
-        CHECK(reflex);
-    }
-    // Every vertex of the hull's road bed that is a trim corner is on the star ring too: the strips reach their trims.
-    std::size_t on = 0;
-    for (const auto& v : hull.rings[0].vertices)
-        if (std::find(star.rings[0].vertices.begin(), star.rings[0].vertices.end(), v) != star.rings[0].vertices.end()) ++on;
-    CHECK(on >= 3);
-    // Deterministic.
-    CHECK(junction_of(*scene, 1, builtin_road_rules_de(), nullptr, sharp_corners()) == star);
 }
 
 TEST_CASE("Junction declines, excluded approaches and flags", "[layer][junction]") {
@@ -701,7 +672,7 @@ TEST_CASE("D17: corner caps close an obtuse pair whose edges meet behind the nod
         const auto all = build_node_junction(*g, *builder, 562041); REQUIRE(all);
         REQUIRE(has(*all, JunctionFlags::HullFallback));
         CHECK(nested_violations(*all) == 0);
-        JunctionBuildOptions one; one.hull_all_layers = false; one.star_union_fallback = false;
+        JunctionBuildOptions one; one.hull_all_layers = false;
         const auto mixed = build_node_junction(*g, *builder, 562041, builtin_road_rules_de(), nullptr, one); REQUIRE(mixed);
         CHECK(nested_violations(*mixed) > 0);
     }

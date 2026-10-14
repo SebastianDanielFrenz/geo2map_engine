@@ -354,118 +354,6 @@ bool build_ring(const Frame& fr, int layer, std::vector<Tagged>& out) {
     return true;
 }
 
-
-// Star-union ring (design D45): the boundary of the union of every approach strip (its road from the node to its trim
-// on this layer) and the node core (convex hull of the approaches' cross-section ends at the node). Every strip and
-// the core contain the node, so the union is star-shaped about it and its boundary is the upper envelope of the
-// pieces' boundary segments in polar angle: exact between the sorted angles of every vertex and every crossing of two
-// pieces' segments. Simple by construction (one point per angle, radius > 0) and, because a wider layer's strips and
-// core contain the narrower layer's, nested by construction; it replaces the convex hull of a single-node junction
-// whose offset ring could not be repaired, so a broken corner never inflates the junction over the open wedges.
-std::vector<Tagged> star_union_ring(const std::vector<Dart>& darts, const std::vector<double>& trims, int layer, PointMm centre) {
-    struct Seg { double ax, ay, bx, by; };
-    std::vector<std::vector<Seg>> pieces;
-    const double ox = static_cast<double>(centre.x), oy = static_cast<double>(centre.y);
-    const auto add_piece = [&](const std::vector<PointMm>& poly) {
-        if (poly.size() < 3) return;
-        std::vector<Seg> segs;
-        for (std::size_t i = 0; i < poly.size(); ++i) {
-            const PointMm a = poly[i], b = poly[(i + 1) % poly.size()];
-            if (a == b) continue;
-            segs.push_back({static_cast<double>(a.x) - ox, static_cast<double>(a.y) - oy, static_cast<double>(b.x) - ox, static_cast<double>(b.y) - oy});
-        }
-        if (segs.size() >= 3) pieces.push_back(std::move(segs));
-    };
-    std::vector<PointMm> core;
-    double piece_area = 0;   // sum of the pieces' areas, an upper bound of the union's (2 x mm^2)
-    const auto area2 = [](const std::vector<PointMm>& poly) {
-        double a = 0;
-        for (std::size_t i = 0; i < poly.size(); ++i) {
-            const PointMm p = poly[i], q = poly[(i + 1) % poly.size()];
-            a += static_cast<double>(p.x - poly[0].x) * static_cast<double>(q.y - poly[0].y) - static_cast<double>(q.x - poly[0].x) * static_cast<double>(p.y - poly[0].y);
-        }
-        return std::abs(a);
-    };
-    for (std::size_t i = 0; i < darts.size(); ++i) {
-        const Dart& g = darts[i];
-        if (g.internal) return {};
-        const double trim = trims[i];
-        std::vector<PointMm> strip;
-        for (std::size_t k = 0; k < g.sigma.size() && g.sigma[k] < trim; ++k) strip.push_back(g.edge[layer][kRight][k]);
-        PointMm r, l;
-        if (!place(g, trim, layer, kRight, r) || !place(g, trim, layer, kLeft, l)) return {};
-        strip.push_back(r); strip.push_back(l);
-        for (std::size_t k = g.sigma.size(); k-- > 0;) if (g.sigma[k] < trim) strip.push_back(g.edge[layer][kLeft][k]);
-        piece_area += area2(strip);
-        add_piece(strip);
-        core.push_back(g.edge[layer][kRight][0]); core.push_back(g.edge[layer][kLeft][0]);
-    }
-    core.push_back(centre);
-    std::vector<PointMm> core_ring;
-    for (const auto& t : convex_hull(core)) core_ring.push_back(t.p);
-    piece_area += area2(core_ring);
-    add_piece(core_ring);
-    if (pieces.empty()) return {};
-    // Candidate angles: every vertex, every crossing of segments of two different pieces.
-    std::vector<double> angles;
-    for (const auto& piece : pieces) for (const auto& sg : piece) angles.push_back(det::atan2(sg.ay, sg.ax));
-    for (std::size_t p = 0; p < pieces.size(); ++p)
-        for (std::size_t q = p + 1; q < pieces.size(); ++q)
-            for (const auto& u : pieces[p])
-                for (const auto& v : pieces[q]) {
-                    const double rx = u.bx - u.ax, ry = u.by - u.ay, sx = v.bx - v.ax, sy = v.by - v.ay;
-                    const double den = rx * sy - ry * sx;
-                    if (den == 0) continue;
-                    const double cx = v.ax - u.ax, cy = v.ay - u.ay;
-                    const double t = (cx * sy - cy * sx) / den, w = (cx * ry - cy * rx) / den;
-                    if (t < 0 || t > 1 || w < 0 || w > 1) continue;
-                    angles.push_back(det::atan2(u.ay + t * ry, u.ax + t * rx));
-                }
-    std::sort(angles.begin(), angles.end());
-    std::vector<double> unique_angles;
-    for (const double a : angles) if (unique_angles.empty() || a - unique_angles.back() > 1e-9) unique_angles.push_back(a);
-    if (unique_angles.size() >= 2 && unique_angles.front() + 2 * det::kPi - unique_angles.back() <= 1e-9) unique_angles.pop_back();
-    if (unique_angles.size() < 3) return {};
-    // The farthest hit of the ray at `angle` on any segment: its segment, or none.
-    const auto farthest = [&](double angle) -> const Seg* {
-        const double dx = det::cos(angle), dy = det::sin(angle);
-        const Seg* best = nullptr; double best_t = 0;
-        for (const auto& piece : pieces)
-            for (const auto& sg : piece) {
-                const double ex = sg.bx - sg.ax, ey = sg.by - sg.ay;
-                const double den = dx * ey - dy * ex;
-                if (den == 0) continue;
-                const double w = (sg.ax * dy - sg.ay * dx) / den;          // position on the segment
-                if (w < 0 || w > 1) continue;
-                const double t = (sg.ax * ey - sg.ay * ex) / den;          // distance along the ray
-                if (t > best_t) { best_t = t; best = &sg; }
-            }
-        return best;
-    };
-    const auto on_line = [&](const Seg& sg, double angle, std::vector<Tagged>& out) {
-        const double dx = det::cos(angle), dy = det::sin(angle), ex = sg.bx - sg.ax, ey = sg.by - sg.ay;
-        const double den = dx * ey - dy * ex;
-        if (den == 0) return;
-        const double t = (sg.ax * ey - sg.ay * ex) / den;
-        if (!(t > 0)) return;
-        out.push_back({{static_cast<std::int64_t>(std::llround(ox + t * dx)), static_cast<std::int64_t>(std::llround(oy + t * dy))}, 0});
-    };
-    std::vector<Tagged> out;
-    const std::size_t n = unique_angles.size();
-    for (std::size_t k = 0; k < n; ++k) {
-        const double a0 = unique_angles[k], a1 = k + 1 < n ? unique_angles[k + 1] : unique_angles[0] + 2 * det::kPi;
-        const Seg* sg = farthest((a0 + a1) / 2);
-        if (!sg) { out.push_back({centre, 0}); continue; }
-        on_line(*sg, a0, out); on_line(*sg, a1, out);
-    }
-    clean_ring(out);
-    // A strip that curves around the node (a roundabout arc) is not star-shaped about it: the envelope then fills its
-    // shadow. The union's area is at most the sum of the pieces' areas; more than that (plus rounding) means a filled
-    // shadow, and the caller keeps the hull.
-    if (out.size() < 3 || static_cast<double>(twice_area(out)) > piece_area * 1.02 + 1e6) return {};
-    return out;
-}
-
 bool is_roundabout(const RoadGraphWay& way) {
     for (const auto& [k, v] : way.tags) if (k == "junction") return v == "roundabout" || v == "circular";
     return false;
@@ -667,7 +555,6 @@ void add_stats(JunctionBuildStats& to, const JunctionBuildStats& from) {
     to.raised_tables += from.raised_tables; to.calming_ignored += from.calming_ignored;
     to.nesting_hulls += from.nesting_hulls; to.nesting_declined += from.nesting_declined; to.ring_cap_hulls += from.ring_cap_hulls;
     to.fillets += from.fillets; to.filleted_junctions += from.filleted_junctions; to.fillet_fallbacks += from.fillet_fallbacks;
-    to.star_fallbacks += from.star_fallbacks;
 }
 }
 
@@ -954,23 +841,6 @@ RoadJunction build_from(const RoadGeomTile& tile, const std::vector<NodeInput>& 
     if (!any_hull && options.hull_when_not_nested && !tagged_rings_nested(rings)) { any_hull = true; ++stats.nesting_hulls; }
     // A ring above the encoding's vertex budget takes the hull too (never on the fixtures).
     for (int layer = 0; layer < kLayers && !any_hull; ++layer) if (rings[layer].size() > kJunctionMaxRingVertices) { any_hull = true; ++stats.ring_cap_hulls; }
-    // A single node whose offset rings failed takes the star union of its strips (D45) when it is simple and nested
-    // on every layer, else the convex hull below.
-    if (any_hull && options.star_union_fallback && nodes.size() == 1 && face_ok) {
-        std::array<std::vector<Tagged>, kLayers> star;
-        bool ok = true;
-        for (int layer = 0; layer < kLayers && ok; ++layer) {
-            star[layer] = star_union_ring(darts, fr.trims, layer, nodes.front().position);
-            ok = star[layer].size() >= 3 && star[layer].size() <= kJunctionMaxRingVertices && ring_simple(star[layer], nullptr);
-        }
-        if (ok && tagged_rings_nested(star)) {
-            rings = std::move(star);
-            hull.fill(true);
-            any_hull = false;
-            ++stats.star_fallbacks;
-            j.flags |= static_cast<std::uint16_t>(JunctionFlags::HullFallback);
-        }
-    }
     for (int layer = 0; layer < kLayers; ++layer) {
         if (!any_hull || (!options.hull_all_layers && face_ok && ring_simple(rings[layer], nullptr))) continue;
         std::vector<PointMm> pts;

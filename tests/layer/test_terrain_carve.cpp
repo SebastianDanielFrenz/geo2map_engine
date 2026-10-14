@@ -299,10 +299,7 @@ TEST_CASE("carve T12: continuity on every busy fixture tile, flat and tilted DEM
             print_jumps(what, j);
             CHECK(j.core_blend <= 0.005);
             CHECK(j.blend_terrain <= 0.005);
-            // D45: a star-union ring (a broken single node) can border an approach's core on that approach's trim line
-            // beyond the outer trim segment, where another strip overlaps it at a shallow angle; the Shepard blend is
-            // exact only on the segment. Worst 12.5 mm (a66 1822/21685 flat, node 507147); offset rings stay < 1 mm.
-            CHECK(j.trim < 0.015);
+            CHECK(j.trim < 0.01);
         }
 }
 
