@@ -184,6 +184,21 @@ geo2map_engine/
                                       join / inline run), tile_cache.h (internal: byte-weighted LRU of
                                       decoded tiles), tile_fetch.cpp, height_sampler.cpp,
                                       chunk_road_classes.cpp
+  include/g2m/route/                  public API of g2m_route (G4 routing, docs/routing_design.md): engine-neutral,
+                                      Result<T>, integer mm / ms costs; links g2m_layers only
+    turn_restriction.h               TurnRestriction (No/Only, from way, via node or via ways, to way), RestrictionSet
+                                      (counts: not_for_cars, conditional_only, unknown_value, malformed),
+                                      extract_turn_restrictions(osm::OsmData) (restriction:motorcar > restriction, except,
+                                      no_entry/no_exit expanded per pair)
+    routing_graph.h                  RouteConfig/default_route_config (class speeds, zone speeds, blocked access, implied
+                                      oneway, turn-cost angle classes, limits), RoutingGraph (decision nodes, shape nodes
+                                      collapsed, arcs = edge directions keyed (way, seg_first..seg_last), CSR out-arcs,
+                                      via-node rules per node; successors() = restrictions + dead-end-only U-turn),
+                                      build_routing_graph(RoadGraph, restrictions, config), RouteBuildStats
+    route_search.h                   RouteSearcher (reusable edge-based A* workspace, generation stamps, heuristic
+                                      = chord at max_speed, reopening, ties by (f, g, arc)), RouteQuery, Route,
+                                      RouteSearchStats
+  src/route/                          g2m_route implementation: turn_restriction.cpp, routing_graph.cpp, route_search.cpp
   bridges/physics_sim/                 g2m_ps_bridge (PLAN.md R2.2 section 1b, G5/G6): the seam between
                                       g2m_phys's ps-free physics-tile data and physics_sim's own
                                       ps::terrain::ITerrainSource - the only place the two projects meet.
@@ -377,6 +392,12 @@ geo2map_engine/
     unit/                             g2m_unit_tests: test_det_math, test_tm_reference, test_geo_frames,
                                       test_tile_raster_hash, test_decode_zip, test_decode_tiff, test_decode_osm,
                                       test_decode_real_data (gated on env var G2M_DATA_DIR, SKIP when unset)
+    route/                            g2m_route_tests (G4): test_turn_restrictions, test_route_search (synthetic cross/oneway/
+                                      restriction/U-turn/limit cases, A* == Dijkstra on random restricted grids, hidden
+                                      [.][bench] 90k-node grid timing incl. a test-only ALT experiment),
+                                      test_route_fixture (both OSM fixtures with their restriction relations: 400 random
+                                      pairs each A* == Dijkstra, restriction negative control); route_reference.h =
+                                      the test-only Dijkstra, route validator and GraphBuilder
     golden/                           golden.h/.cpp + golden_g1.cpp + golden_g1c.cpp (g2m_golden, milestone G1c I6),
                                       dump_main.cpp (g2m_golden_dump [g0|g1|g1c]), test_golden.cpp (g2m_golden_tests)
     fuzz/                             libFuzzer targets for g2m_decode (fuzz_zip, fuzz_tiff, fuzz_pbf) over a
@@ -962,3 +983,13 @@ phi over l_i = clamp(2 relief_i / slope, min, max) and psi over the verge fade (
 the busy tiles, flat and tilted DEM, gradient <= max(B, 2 F_paved) + 0.02 at >= 2 m from every trim and
 <= max(B, own, 2 F_all) + 0.02 nearer (B steepest approach grade + crossfall, F forced gradient between trim points); the
 sabotage case expects >= 10 flat junctions over; `[.][diag]` cases print per-junction tables, distance bins and a probe.
+
+## G4 routing, slice 1 (2026-10-14)
+
+Design, owner questions and the slice plan: `docs/routing_design.md`. `g2m_route` (`include/g2m/route/`, `src/route/`)
+builds an in-memory routable car graph from a complete `RoadGraph` (`merge_road_graphs` of roads.graph tiles, or
+`build_road_graph` of OSM) plus `extract_turn_restrictions` of canonical OSM (src.osm keeps restriction relations;
+roads.graph does not carry them yet, planned as encoding 6 in slice 3). Edge-based A* with via-node restrictions,
+oneway, access and integer ms costs; via-way rules are counted, not applied. Tests `tests/route/`
+(`g2m_route_tests "[route]"`; timing: `g2m_route_tests "[bench]" -s`). Plain A* misses 10 ms at 30 km on the
+90k-node stand-in grid (about 30 ms); ALT landmarks are slice 2.
