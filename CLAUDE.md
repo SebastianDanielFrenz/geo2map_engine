@@ -70,7 +70,9 @@ geo2map_engine/
     osm_roads.h                        client-side OSM road raster (PLAN.md 6.5, roads_plan.md): RoadStyle (data-table
                                       highway->LandClass/rank/width, surface->SurfaceKind), extract_road_segments,
                                       Lattice/RasterParams, rasterize_road_segments (exact integer inside test, round
-                                      end caps via clamped projection)
+                                      end caps via clamped projection); render road LOD as caller data: RenderRoadLod
+                                      (per chunk level enabled/min_rank/min_half_width_mm), default_render_road_lod
+                                      (== the compiled raster_params_for_render_level), render_road_lod_key(policy, level)
     release.h                         ReleaseInputs -> compute_release_id, Coverage, ReleaseManifest + to_json/from_json,
                                       to_hex / content_hash_from_hex
     pack.h                            PackDirectory/PackEntry/PackTileState, pack_of/pack_tile, encode/decode_pack
@@ -163,7 +165,8 @@ geo2map_engine/
                                       sample_height_bilinear (render only), L0TileLookupFn; session-local
                                       metres, lattice (c - e0 + 0.5)
     chunk_road_classes.h             ClassLookup/RoadSegmentsFn, road_class_lattice,
-                                      src_osm_tiles_for_chunk, rasterize_chunk_road_classes (owner rule)
+                                      src_osm_tiles_for_chunk, rasterize_chunk_road_classes (owner rule;
+                                      ClassLookup::lod = the caller's RenderRoadLod, null = default)
     surface_id_table.h               g2m::classes::SurfaceIdTable (SurfaceKind + LandClass -> consumer
                                       id; road cell with a known kind -> kind id, else land class id;
                                       to_road_value_lut)
@@ -213,7 +216,10 @@ geo2map_engine/
                                       far L6, level-2 roads.graph tiles, MapConfig) -> MapTile (lines over the owned edges,
                                       runs merged per way, Douglas-Peucker 1 / 8 / 40 m, int32 dm points from the SW corner,
                                       rank, flags, name/ref string indices, label anchor, (way, segment range));
-                                      simplify_polyline, route_polyline (driven line cut at the snapped ends)
+                                      simplify_polyline, route_polyline (driven line cut at the snapped ends); every LOD
+                                      parameter is caller data (levels, ranks, tolerances, switch distances, detail_scale):
+                                      validate_map_config, effective_lod, select_map_lod, map_lod_key (per-LOD content key,
+                                      MapTile::params_key), MapTileCache (set_config drops only LODs whose key changed)
   src/route/                          g2m_route implementation: turn_restriction.cpp, routing_graph.cpp (incl. snapping:
                                       sorted cell index, heading-aware snap, point_at, partial_cost_ms), route_search.cpp,
                                       region_graph.cpp, route_guidance.cpp, route_map.cpp
@@ -1024,4 +1030,6 @@ Slice 2 (2026-10-14): ALT landmarks (`RouteLandmarks`, 16 by default; 30 km on t
 roads.graph tiles (`region_graph.h`). Defaults settled: tracks routable at 15 km/h, time restrictions ignored.
 Slice 4 (2026-10-14): guidance manoeuvre list (`route_guidance.h`, `g2m_route_tests "[guidance]"`). Slice 5
 (2026-10-14): client map tiles at three LODs from level-2 roads.graph tiles (`route_map.h`, `"[map]"`; fixture
-tiles <= 22 KiB, < 5 ms). Next: slice 3 (restrictions in roads.graph, via-way rules), batched with a release-id bump.
+tiles <= 22 KiB, < 5 ms). Owner rules from PR #2: turn costs final at the defaults; every map and render-road LOD
+parameter is a runtime setting the game passes in, with per-LOD/per-level cache keys (docs/routing_design.md 6.1,
+tests `"[lod_settings]"`). Next: slice 3 (restrictions in roads.graph, via-way rules), batched with a release-id bump.

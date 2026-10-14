@@ -2,10 +2,12 @@
 #include "g2m/route/route_map.h"
 
 #include "g2m/core/det_math.h"
+#include "g2m/core/hash.h"
 #include "g2m/layer/osm_roads.h"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string_view>
 #include <utility>
 
@@ -99,12 +101,52 @@ const MapConfig& default_map_config() {
             return e != nullptr ? e->rank : fallback;
         };
         MapConfig c;
-        c.lods[0] = {2, 0, 1000};
-        c.lods[1] = {4, rank_of("tertiary", 5), 8000};
-        c.lods[2] = {6, rank_of("primary", 7), 40000};
+        c.lods[0] = {2, 0, 1000, 2000.0};
+        c.lods[1] = {4, rank_of("tertiary", 5), 8000, 12000.0};
+        c.lods[2] = {6, rank_of("primary", 7), 40000, std::numeric_limits<double>::infinity()};
         return c;
     }();
     return config;
+}
+
+Result<void> validate_map_config(const MapConfig& config) {
+    const auto bad = [](const char* what) { return make_error(ErrorCode::InvalidArgument, std::string("map config: ") + what); };
+    if (!(config.detail_scale >= 0.05 && config.detail_scale <= 20.0)) return bad("detail_scale outside [0.05, 20]");
+    for (std::size_t i = 0; i < kMapLodCount; ++i) {
+        const MapLodConfig& l = config.lods[i];
+        if (l.level < 2 || l.level > TileKey::kMaxLevel) return bad("LOD level outside 2..kMaxLevel");
+        if (l.min_rank < 0 || l.min_rank > 127) return bad("min_rank outside 0..127");
+        if (l.tolerance_mm < 0 || l.tolerance_mm > 1000000000) return bad("tolerance outside 0..1e9 mm");
+        if (!(l.switch_distance_m > 0.0)) return bad("switch distance not positive");
+        if (i > 0 && l.level < config.lods[i - 1].level) return bad("LOD levels decrease");
+        if (i > 0 && !(l.switch_distance_m >= config.lods[i - 1].switch_distance_m)) return bad("switch distances decrease");
+    }
+    return {};
+}
+
+MapLodConfig effective_lod(const MapConfig& config, MapLod lod) {
+    MapLodConfig l = config.lods[static_cast<std::size_t>(lod)];
+    const double scale = config.detail_scale;
+    if (scale != 1.0) {
+        l.tolerance_mm = std::max<std::int64_t>(0, std::llround(static_cast<double>(l.tolerance_mm) / scale));
+        l.switch_distance_m *= scale;
+    }
+    return l;
+}
+
+MapLod select_map_lod(const MapConfig& config, double view_radius_m) {
+    for (std::size_t i = 0; i + 1 < kMapLodCount; ++i)
+        if (view_radius_m <= effective_lod(config, static_cast<MapLod>(i)).switch_distance_m) return static_cast<MapLod>(i);
+    return static_cast<MapLod>(kMapLodCount - 1);
+}
+
+std::uint64_t map_lod_key(const MapConfig& config, MapLod lod) {
+    const MapLodConfig l = effective_lod(config, lod);
+    Fnv1a64 h;
+    h.str("g2m.map_tile/1").u8(static_cast<std::uint8_t>(lod)).i32(l.level).i32(l.min_rank).i64(l.tolerance_mm);
+    h.u64(config.directions.implied_oneway.size());
+    for (const auto& v : config.directions.implied_oneway) h.str(v);
+    return h.value();
 }
 
 std::size_t MapTile::byte_size() const {
@@ -145,7 +187,8 @@ Result<MapTile> build_map_tile(const TileKey& key, MapLod lod, std::span<const R
                                const MapConfig& config, MapTileStats* stats_out) {
     const auto lod_index = static_cast<std::size_t>(lod);
     if (lod_index >= kMapLodCount) return make_error(ErrorCode::InvalidArgument, "map tile: unknown LOD");
-    const MapLodConfig& lc = config.lods[lod_index];
+    if (auto valid = validate_map_config(config); !valid) return valid.error();
+    const MapLodConfig lc = effective_lod(config, lod);
     if (!key.valid() || key.level != lc.level)
         return make_error(ErrorCode::InvalidArgument, "map tile: key level does not match the LOD level");
     MapTileStats stats;
@@ -189,6 +232,7 @@ Result<MapTile> build_map_tile(const TileKey& key, MapLod lod, std::span<const R
     MapTile out;
     out.key = key;
     out.lod = lod;
+    out.params_key = map_lod_key(config, lod);
     std::vector<geom::PointMm> run;
     std::size_t k = 0;
     while (k < items.size()) {
@@ -262,6 +306,53 @@ Result<MapTile> build_map_tile(const TileKey& key, MapLod lod, std::span<const R
     }
     if (stats_out != nullptr) *stats_out = stats;
     return out;
+}
+
+MapTileCache::MapTileCache(MapConfig config) : config_(std::move(config)) {
+    for (std::size_t i = 0; i < kMapLodCount; ++i) keys_[i] = map_lod_key(config_, static_cast<MapLod>(i));
+}
+
+Result<std::size_t> MapTileCache::set_config(const MapConfig& config) {
+    if (auto valid = validate_map_config(config); !valid) return valid.error();
+    std::size_t dropped = 0;
+    for (std::size_t i = 0; i < kMapLodCount; ++i) {
+        const std::uint64_t k = map_lod_key(config, static_cast<MapLod>(i));
+        if (k != keys_[i]) {
+            dropped += tiles_[i].size();
+            tiles_[i].clear();
+            keys_[i] = k;
+        }
+    }
+    config_ = config;
+    return dropped;
+}
+
+const MapTile* MapTileCache::find(const TileKey& key, MapLod lod) const {
+    const auto& list = tiles_[static_cast<std::size_t>(lod)];
+    const auto it = std::lower_bound(list.begin(), list.end(), key, [](const auto& e, const TileKey& k) { return e.first < k; });
+    return it != list.end() && it->first == key ? it->second.get() : nullptr;
+}
+
+Result<const MapTile*> MapTileCache::get(const TileKey& key, MapLod lod, std::span<const RoadGraphTile* const> tiles) {
+    if (static_cast<std::size_t>(lod) >= kMapLodCount) return make_error(ErrorCode::InvalidArgument, "map tile: unknown LOD");
+    if (const MapTile* hit = find(key, lod)) return hit;
+    auto built = build_map_tile(key, lod, tiles, config_);
+    if (!built) return built.error();
+    ++builds_;
+    auto& list = tiles_[static_cast<std::size_t>(lod)];
+    const auto it = std::lower_bound(list.begin(), list.end(), key, [](const auto& e, const TileKey& k) { return e.first < k; });
+    const auto placed = list.insert(it, {key, std::make_unique<MapTile>(std::move(*built))});
+    return static_cast<const MapTile*>(placed->second.get());
+}
+
+std::size_t MapTileCache::size() const {
+    std::size_t n = 0;
+    for (const auto& list : tiles_) n += list.size();
+    return n;
+}
+
+void MapTileCache::clear() {
+    for (auto& list : tiles_) list.clear();
 }
 
 std::vector<geom::PointMm> route_polyline(const RoutingGraph& graph, const Route& route) {

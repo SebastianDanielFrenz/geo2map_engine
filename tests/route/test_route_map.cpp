@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <limits>
 #include <map>
 #include <set>
 #include <string>
@@ -346,4 +347,168 @@ TEST_CASE("Map tiles on the real fixtures: coverage, accuracy, size and time", "
                         total_ms / static_cast<double>(keys.size()), max_ms, worst_err);
         }
     }
+}
+
+TEST_CASE("Map LOD settings from the game: keys, selection, validation", "[route][map][lod_settings]") {
+    const MapConfig& d = default_map_config();
+    REQUIRE(validate_map_config(d));
+    // Keys: deterministic, per LOD, sensitive to every content parameter only.
+    const auto keys = [](const MapConfig& c) {
+        return std::vector<std::uint64_t>{map_lod_key(c, MapLod::Detail), map_lod_key(c, MapLod::Mid), map_lod_key(c, MapLod::Far)};
+    };
+    const auto base = keys(d);
+    CHECK(base == keys(MapConfig(d)));
+    CHECK(base[0] != base[1]);
+    CHECK(base[1] != base[2]);
+    const auto changed = [&](auto edit) {
+        MapConfig c = d;
+        edit(c);
+        const auto k = keys(c);
+        std::vector<bool> diff;
+        for (std::size_t i = 0; i < k.size(); ++i) diff.push_back(k[i] != base[i]);
+        return diff;
+    };
+    using V = std::vector<bool>;
+    CHECK(changed([](MapConfig& c) { c.lods[1].tolerance_mm = 2000; }) == V{false, true, false});
+    CHECK(changed([](MapConfig& c) { c.lods[2].min_rank = 5; }) == V{false, false, true});
+    CHECK(changed([](MapConfig& c) { c.lods[2].level = 7; }) == V{false, false, true});
+    CHECK(changed([](MapConfig& c) { c.detail_scale = 2.0; }) == V{true, true, true});
+    CHECK(changed([](MapConfig& c) { c.directions.implied_oneway.push_back("trunk"); }) == V{true, true, true});
+    CHECK(changed([](MapConfig& c) { c.lods[0].switch_distance_m = 3000; }) == V{false, false, false});
+    CHECK(changed([](MapConfig& c) { c.max_lines = 10; }) == V{false, false, false});
+    // Scale 2 with doubled tolerances builds the same tiles as the defaults.
+    MapConfig doubled = d;
+    doubled.detail_scale = 2.0;
+    for (auto& l : doubled.lods) l.tolerance_mm *= 2;
+    CHECK(keys(doubled) == base);
+    CHECK(effective_lod(doubled, MapLod::Mid).tolerance_mm == 8000);
+    CHECK(effective_lod(doubled, MapLod::Detail).switch_distance_m == 4000.0);
+
+    // LOD selection by view radius, scaled by the detail setting.
+    CHECK(select_map_lod(d, 500.0) == MapLod::Detail);
+    CHECK(select_map_lod(d, 2000.0) == MapLod::Detail);
+    CHECK(select_map_lod(d, 5000.0) == MapLod::Mid);
+    CHECK(select_map_lod(d, 80000.0) == MapLod::Far);
+    MapConfig coarse = d;
+    coarse.detail_scale = 0.5;
+    CHECK(select_map_lod(coarse, 1500.0) == MapLod::Mid);
+    CHECK(select_map_lod(doubled, 3000.0) == MapLod::Detail);
+
+    // Validation.
+    const auto invalid = [&](auto edit) {
+        MapConfig c = d;
+        edit(c);
+        const auto r = validate_map_config(c);
+        return !r && r.error().code == ErrorCode::InvalidArgument;
+    };
+    CHECK(invalid([](MapConfig& c) { c.detail_scale = 0.0; }));
+    CHECK(invalid([](MapConfig& c) { c.detail_scale = std::numeric_limits<double>::quiet_NaN(); }));
+    CHECK(invalid([](MapConfig& c) { c.lods[0].level = 1; }));
+    CHECK(invalid([](MapConfig& c) { c.lods[1].level = 7; })); // above far's 6
+    CHECK(invalid([](MapConfig& c) { c.lods[1].tolerance_mm = -1; }));
+    CHECK(invalid([](MapConfig& c) { c.lods[2].switch_distance_m = 100.0; }));
+    CHECK(invalid([](MapConfig& c) { c.lods[0].min_rank = 200; }));
+    const std::vector<const RoadGraphTile*> none;
+    MapConfig bad = d;
+    bad.detail_scale = -1.0;
+    CHECK(build_map_tile(TileKey{g2m_test::kZone32N, 2, 0, 0}, MapLod::Detail, none, bad).error().code == ErrorCode::InvalidArgument);
+}
+
+TEST_CASE("Map LOD settings change the tiles; the cache rebuilds only the affected LOD", "[route][map][lod_settings][real-data]") {
+    const auto data = g2m_test::read_route_fixture("hoechst_a66");
+    const auto world = build_road_graph(data, g2m_test::kZone32N);
+    REQUIRE(world);
+    const auto tiles = tile_world(*world);
+    const auto all = ptrs(tiles);
+    std::set<TileKey> mids, fars;
+    for (const auto& t : tiles) { mids.insert(up(t.key, 4)); fars.insert(up(t.key, 6)); }
+    // The mid tile with the most points (the fixture covers some mid tiles only at their edge).
+    TileKey mid_key = *mids.begin();
+    std::size_t most = 0;
+    for (const auto& k : mids) {
+        const auto t = build_map_tile(k, MapLod::Mid, all);
+        REQUIRE(t);
+        if (t->points.size() > most) { most = t->points.size(); mid_key = k; }
+    }
+    const TileKey detail_key = tiles.front().key, far_key = *fars.begin();
+
+    const MapConfig& d = default_map_config();
+    const auto mid = build_map_tile(mid_key, MapLod::Mid, all);
+    REQUIRE(mid);
+    CHECK(mid->params_key == map_lod_key(d, MapLod::Mid));
+    // An explicit copy of the defaults gives the identical tile.
+    const auto same = build_map_tile(mid_key, MapLod::Mid, all, MapConfig(d));
+    REQUIRE(same);
+    CHECK(*same == *mid);
+
+    // Finer tolerance: more points; more detail_scale: the same effect.
+    MapConfig fine = d;
+    fine.lods[1].tolerance_mm = 1000;
+    const auto mid_fine = build_map_tile(mid_key, MapLod::Mid, all, fine);
+    REQUIRE(mid_fine);
+    CHECK(mid_fine->points.size() > mid->points.size());
+    CHECK(mid_fine->params_key != mid->params_key);
+    MapConfig scaled = d;
+    scaled.detail_scale = 8.0;
+    const auto mid_scaled = build_map_tile(mid_key, MapLod::Mid, all, scaled);
+    REQUIRE(mid_scaled);
+    CHECK(mid_scaled->points == mid_fine->points);
+    CHECK(mid_scaled->lines == mid_fine->lines);
+    // Lower class cut-off on the far map: more lines.
+    MapConfig busy = d;
+    busy.lods[2].min_rank = 0;
+    const auto far_default = build_map_tile(far_key, MapLod::Far, all);
+    const auto far_busy = build_map_tile(far_key, MapLod::Far, all, busy);
+    REQUIRE(far_default);
+    REQUIRE(far_busy);
+    CHECK(far_busy->lines.size() > far_default->lines.size());
+    // Another level: the mid LOD at level 3 is built for level-3 keys only.
+    MapConfig l3 = d;
+    l3.lods[1].level = 3;
+    CHECK(build_map_tile(mid_key, MapLod::Mid, all, l3).error().code == ErrorCode::InvalidArgument);
+    const auto mid_l3 = build_map_tile(up(detail_key, 3), MapLod::Mid, all, l3);
+    REQUIRE(mid_l3);
+    CHECK(mid_l3->key.level == 3);
+
+    // The cache follows the settings.
+    MapTileCache cache;
+    for (const auto& t : tiles) REQUIRE(cache.get(t.key, MapLod::Detail, all));
+    for (const auto& k : mids) REQUIRE(cache.get(k, MapLod::Mid, all));
+    for (const auto& k : fars) REQUIRE(cache.get(k, MapLod::Far, all));
+    const std::size_t total = cache.size(), builds = cache.builds();
+    CHECK(total == tiles.size() + mids.size() + fars.size());
+    REQUIRE(cache.get(mid_key, MapLod::Mid, all));
+    CHECK(cache.builds() == builds); // a hit
+    CHECK(**cache.get(mid_key, MapLod::Mid, all) == *mid);
+
+    const auto unchanged = cache.set_config(MapConfig(d));
+    REQUIRE(unchanged);
+    CHECK(*unchanged == 0);
+    MapConfig switch_only = d;
+    switch_only.lods[0].switch_distance_m = 1000; // selection only: no tile changes
+    REQUIRE(cache.set_config(switch_only));
+    CHECK(cache.size() == total);
+
+    const auto dropped = cache.set_config(fine);
+    REQUIRE(dropped);
+    CHECK(*dropped == mids.size());
+    CHECK(cache.find(mid_key, MapLod::Mid) == nullptr);
+    CHECK(cache.find(detail_key, MapLod::Detail) != nullptr);
+    CHECK(cache.find(far_key, MapLod::Far) != nullptr);
+    const auto rebuilt = cache.get(mid_key, MapLod::Mid, all);
+    REQUIRE(rebuilt);
+    CHECK(**rebuilt == *mid_fine);
+
+    MapConfig invalid = fine;
+    invalid.detail_scale = 100.0;
+    CHECK_FALSE(cache.set_config(invalid));
+    CHECK(cache.config().detail_scale == 1.0);
+    CHECK(cache.find(mid_key, MapLod::Mid) != nullptr);
+
+    // Scale 8: detail and far tolerances change; mid's effective 1000 mm equals `fine`'s, so it stays.
+    const auto rescaled = cache.set_config(scaled);
+    REQUIRE(rescaled);
+    CHECK(*rescaled == tiles.size() + fars.size());
+    CHECK(cache.size() == 1);
+    CHECK(cache.find(mid_key, MapLod::Mid) != nullptr);
 }

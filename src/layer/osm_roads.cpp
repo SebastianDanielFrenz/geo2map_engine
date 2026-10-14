@@ -1,6 +1,8 @@
 // src/layer/osm_roads.cpp - see g2m/layer/osm_roads.h.
 
 #include "g2m/layer/osm_roads.h"
+
+#include "g2m/core/hash.h"
 #include "g2m/core/det_math.h"
 
 #include "g2m/core/geom/project.h" // project_e7_to_mm
@@ -534,6 +536,35 @@ std::optional<RasterParams> raster_params_for_render_level(int level) {
     }
 
     return std::nullopt; // L>=4: no road classes
+}
+
+const RenderRoadLod& default_render_road_lod() {
+    static const RenderRoadLod lod = [] {
+        RenderRoadLod d;
+        for (int level = 0; level <= 3; ++level) {
+            const auto p = raster_params_for_render_level(level);
+            d.levels.push_back({true, p->min_rank, p->min_half_width_mm});
+        }
+        return d;
+    }();
+    return lod;
+}
+
+std::optional<RasterParams> raster_params_for_render_level(int level, const RenderRoadLod& lod) {
+    // Negative levels behave like level 0, as in the compiled policy.
+    const std::size_t index = level < 0 ? 0 : static_cast<std::size_t>(level);
+    if (index >= lod.levels.size()) return std::nullopt;
+    const RenderRoadLodLevel& l = lod.levels[index];
+    if (!l.enabled) return std::nullopt;
+    return RasterParams{l.min_rank, l.min_half_width_mm};
+}
+
+std::uint64_t render_road_lod_key(const RenderRoadLod& lod, int level) {
+    Fnv1a64 h;
+    h.str("g2m.render_road_lod/1").i32(level);
+    const auto p = raster_params_for_render_level(level, lod);
+    if (!p) return h.u8(0).value();
+    return h.u8(1).i32(p->min_rank).i64(p->min_half_width_mm).value();
 }
 
 } // namespace g2m

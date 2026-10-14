@@ -16,12 +16,16 @@ Questions 2 to 6 were settled on 2026-10-14 with the recommended defaults
 (coordinator, PR #2): tracks are routable at 15 km/h, start and destination
 snap with the car's heading, the region graph is built on a worker at world
 load, ALT landmarks are computed in the background at load, and time-dependent
-restrictions are ignored. The original wording stays below for the record;
-question 1 is still open.
+restrictions are ignored. Question 1 was settled by the owner on PR #2: the
+turn costs are final at the defaults below (they are `RouteConfig` fields, so
+the game can still change them). A further owner rule from PR #2 is section
+6.1: every map and render LOD parameter is a runtime setting the game passes
+in. The original wording stays below for the record.
 
 1. **Turn costs.** Defaults: right turn 2 s, left 4 s, sharp right 4 s, sharp
    left 6 s, slight 0.5 s, U-turn 20 s and only at a dead end. Counted only at
    nodes with three or more edge ends. Fine, or should the route avoid lefts harder?
+   **Settled: final at these defaults.**
 2. **Access.** Blocked: `no`, `private`, `agricultural`, `forestry`,
    `emergency`, `use_sidepath`. Allowed: `destination`, `delivery`,
    `customers`. Service roads are routable at 15 km/h, tracks are not routable.
@@ -102,6 +106,8 @@ question 1 is still open.
     120, sharp beyond.
   - Charged only at nodes with degree >= 3, so a bend where two ways join costs
     nothing.
+  - Costs (final, owner PR #2; `RouteConfig`): slight 0.5 s, right 2 s,
+    left 4 s, sharp right 4 s, sharp left 6 s, U-turn 20 s (dead end only).
 - **Heuristic:** floor(straight-line mm) * 3.6 / 130 km/h. It is admissible, and
   the search reopens states, so it stays optimal even where rounding makes the
   heuristic inconsistent by 1 ms.
@@ -352,6 +358,52 @@ rounding (1036 mm at detail, 7.9 m at mid, 39.9 m at far).
   `SubViewport` mask, to stay under the 0.3 ms minimap budget;
 - the full map draws the mid and far LODs as GPU vectors.
 
+### 6.1 LOD settings contract (owner rule, PR #2)
+
+LOD aggressiveness, distances and detail are in-game settings. The game owns
+them, passes them to the engine on every call and may change them at any
+time; no engine rebuild, no compiled constant decides them. Every default
+reproduces the earlier fixed behaviour exactly.
+
+| Path | Parameters (caller data) | Defaults | Cache key |
+|---|---|---|---|
+| Map tiles (`route_map.h`) | `MapConfig`: per LOD `level`, `min_rank`, `tolerance_mm`, `switch_distance_m`; `detail_scale`; limits; oneway rules | detail L2 / all / 1 m / 2 km, mid L4 / tertiary / 8 m / 12 km, far L6 / primary / 40 m / unbounded; scale 1 | `map_lod_key(config, lod)`, stored in `MapTile::params_key` |
+| Render road classes (`osm_roads.h`, `chunk_road_classes.h`) | `RenderRoadLod`: per chunk level `enabled`, `min_rank`, `min_half_width_mm`; passed as `ClassLookup::lod` | `default_render_road_lod()`: L0-L1 all, L2 tertiary, L3 primary with a 6 m half-width floor, none from L4 | `render_road_lod_key(policy, level)` |
+| Terrain chunk selection (`mesh/lod_select.h`) | `LodParams`: `range0_m`, `max_level`, `max_distance_m` (already caller data) | 250 m, 6, 6000 m (the game passes 20000 m) | none needed: a chunk's mesh depends only on its key and the heights, so a change only reselects |
+
+Rules:
+- **Detail scale.** `MapConfig::detail_scale` (0.05 to 20) divides every map
+  tolerance and multiplies every switch distance; 2 means twice the detail out
+  to twice the distance. For terrain the game scales `LodParams::range0_m`
+  and `max_distance_m` itself; for road classes it edits the per-level ranks
+  and widths.
+- **Effective parameters.** `effective_lod(config, lod)` applies the scale
+  (tolerance rounded to whole mm). Keys hash the effective values, so two
+  settings that build the same tiles share a key.
+- **Keys.** FNV-1a over a format tag and only the parameters that change the
+  content of that LOD (or chunk level). Switch distances and size limits only
+  change selection or failure, so they are not part of a key.
+- **Invalidation.** A settings change drops only tiles whose key changed.
+  `MapTileCache::set_config` does this for map tiles (a mid tolerance change
+  keeps every detail and far tile; a switch-distance change keeps all). The
+  game's terrain chunk cache adds `render_road_lod_key(policy, chunk level)`
+  to its key and rebuilds only the chunk levels whose key changed.
+- **Validation.** `validate_map_config` rejects bad values (levels 2 to max
+  and non-decreasing, ranks 0 to 127, tolerances 0 to 1e9 mm, switch
+  distances positive and non-decreasing, scale 0.05 to 20) with
+  InvalidArgument; `build_map_tile` and the cache refuse an invalid config,
+  and the cache keeps the previous one.
+- **Selection.** `select_map_lod(config, view_radius_m)` picks the LOD for a
+  minimap or full-map view radius.
+
+Tests (`[lod_settings]`): defaults give byte-identical output (explicit
+default config and default road policy against the old paths); a finer mid
+tolerance gives more points and `detail_scale` 8 gives exactly the same
+tile; a lower far class cut-off gives more lines; a level-3 mid LOD builds
+level-3 tiles; keys change for exactly the LODs or levels whose content
+parameter changed; the cache drops exactly those tiles; road classes appear
+or disappear per level with the policy.
+
 ## 7. Public API
 
 **Slice 1, built:**
@@ -418,7 +470,12 @@ rounding (1036 mm at detail, 7.9 m at mid, 39.9 m at far).
   route, GuidanceConfig)` -> `Maneuver` list, `to_string(ManeuverKind)`.
 
 - `g2m/route/route_map.h` (slice 5): `build_map_tile`, `MapTile`/`MapLine`,
-  `default_map_config`, `simplify_polyline`, `route_polyline`.
+  `default_map_config`, `simplify_polyline`, `route_polyline`; settings:
+  `validate_map_config`, `effective_lod`, `select_map_lod`, `map_lod_key`,
+  `MapTileCache`.
+- `g2m/layer/osm_roads.h`: `RenderRoadLod`, `default_render_road_lod`,
+  `raster_params_for_render_level(level, policy)`, `render_road_lod_key`;
+  `g2m/world/chunk_road_classes.h`: `ClassLookup::lod`.
 - `g2m/route/routing_graph.h`: `way_directions` is public (shared by the map
   flags).
 
