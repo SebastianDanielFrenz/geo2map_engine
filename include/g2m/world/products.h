@@ -9,6 +9,8 @@
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/src_osm.h"
 #include "g2m/layer/tile_container.h"
+#include "g2m/world/road_ribbons.h"
+#include "g2m/world/road_structures.h"
 #include "g2m/world/ticket.h"
 
 #include <cstdint>
@@ -77,19 +79,13 @@ struct RawTile {
     std::vector<std::uint8_t> container; // HEADER || BODY, exactly as a TileResponse carries it
 };
 
-// ---- Products that phase 3 fills in (meshes, ribbons, buildings) ----------------
+// ---- Products of phase 3 ----------------------------------------------------------
 //
-// These three exist as ticket payloads and request entry points now, so the game
-// can run its current producers through the service's pool (dedup, priority,
-// cancellation) before the code moves into geo2map. The members are those of the
-// phase-3 ports and are added then; until a producer is installed
-// (TerrainService::set_*_producer) the matching request is Failed.
-struct StructureSet {
-    TileKey key; // level-2 tile
-};
-struct RoadRibbonTile {
-    TileKey key;
-};
+// StructureSet (road_structures.h) and RoadRibbonTile (road_ribbons.h) are filled in by
+// phase 3a: build_structure_set / build_road_ribbons over a RoadGeomTile the caller
+// hands in. The service delivers them through the producer the caller installs
+// (TerrainService::set_*_producer); until then the matching request is Failed.
+// BuildingSet is phase 3b.
 struct BuildingSet {
     TileKey key;
 };
