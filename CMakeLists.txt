@@ -226,6 +226,10 @@ add_subdirectory(src/phys)
 # service pieces moved from racing_game (links g2m_client/g2m_mesh/g2m_phys).
 add_subdirectory(src/world)
 
+# G4 routing (docs/routing_design.md): g2m_route, the in-memory routable graph
+# and the edge-based A* (links g2m_layers only).
+add_subdirectory(src/route)
+
 add_subdirectory(third_party/musl_math)
 add_subdirectory(src)
 
@@ -254,6 +258,7 @@ if(G2M_BUILD_TESTS)
   add_subdirectory(tests/mesh)
   add_subdirectory(tests/phys)
   add_subdirectory(tests/world)
+  add_subdirectory(tests/route)
   add_subdirectory(tests/golden)
   add_subdirectory(tests/fuzz)
 endif()

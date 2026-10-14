@@ -427,3 +427,72 @@ TEST_CASE("src_osm_tiles_for_chunk: order is y ascending, then x ascending", "[w
     };
     for (std::size_t i = 0; i < 4; ++i) CHECK(tiles[i] == expect[i]);
 }
+
+TEST_CASE("Render road LOD policy from the caller: defaults identical, changes rebuild, keys per level",
+          "[world][chunk_road_classes][lod_settings]") {
+    const g2m::RoadStyle& style = g2m::RoadStyle::default_style();
+    const g2m::RenderRoadLod& defaults = g2m::default_render_road_lod();
+    // The default policy equals the compiled one at every level.
+    for (int level = -1; level <= 8; ++level) {
+        const auto compiled = g2m::raster_params_for_render_level(level);
+        const auto given = g2m::raster_params_for_render_level(level, defaults);
+        REQUIRE(compiled.has_value() == given.has_value());
+        if (compiled) {
+            CHECK(compiled->min_rank == given->min_rank);
+            CHECK(compiled->min_half_width_mm == given->min_half_width_mm);
+        }
+    }
+    REQUIRE(defaults.levels.size() == 4);
+    CHECK(defaults.levels[3].min_half_width_mm == 6000);
+
+    const int residential_rank = style.find_highway("residential")->rank;
+    auto segments = std::make_shared<const std::vector<g2m::RoadSegment>>(std::vector<g2m::RoadSegment>{
+        g2m::RoadSegment{{10000, 32500}, {54000, 32500}, 2000, g2m::LandClass::PavedRoad, g2m::SurfaceKind::Asphalt,
+                         residential_rank},
+    });
+    g2m::world::ClassLookup lookup = make_lookup(segments);
+    const g2m::mesh::ChunkKey l0{kZone32, 0, 0, 0}, l2{kZone32, 2, 0, 0}, l4{kZone32, 4, 0, 0};
+
+    // Explicit defaults == null policy, byte for byte.
+    g2m::mesh::ClassWindow plain, explicit_default;
+    g2m::world::rasterize_chunk_road_classes(l0, lookup, plain);
+    lookup.lod = &defaults;
+    g2m::world::rasterize_chunk_road_classes(l0, lookup, explicit_default);
+    CHECK(plain.c == explicit_default.c);
+    CHECK(at(plain, 32, 32) == kPaved);
+
+    // More detail: residential roads at L2, roads at L4.
+    g2m::RenderRoadLod detailed = defaults;
+    detailed.levels[2].min_rank = 0;
+    detailed.levels.push_back({true, 0, 8000});
+    detailed.levels.push_back({true, 0, 12000});
+    lookup.lod = &detailed;
+    g2m::mesh::ClassWindow w2, w4;
+    g2m::world::rasterize_chunk_road_classes(l2, lookup, w2);
+    g2m::world::rasterize_chunk_road_classes(l4, lookup, w4);
+    CHECK(at(w2, 8, 8) == kPaved);
+    CHECK(at(w4, 2, 2) == kPaved);
+    lookup.lod = &defaults;
+    g2m::world::rasterize_chunk_road_classes(l2, lookup, w2);
+    CHECK(at(w2, 8, 8) == kUnknown);
+
+    // Less detail: L0 disabled.
+    g2m::RenderRoadLod off = defaults;
+    off.levels[0].enabled = false;
+    lookup.lod = &off;
+    g2m::mesh::ClassWindow w0;
+    g2m::world::rasterize_chunk_road_classes(l0, lookup, w0);
+    CHECK(at(w0, 32, 32) == kUnknown);
+
+    // Keys: equal for equal policies, different only at the changed level.
+    for (int level = 0; level <= 5; ++level) CHECK(g2m::render_road_lod_key(defaults, level) == g2m::render_road_lod_key(g2m::RenderRoadLod(defaults), level));
+    CHECK(g2m::render_road_lod_key(off, 0) != g2m::render_road_lod_key(defaults, 0));
+    for (int level = 1; level <= 5; ++level) CHECK(g2m::render_road_lod_key(off, level) == g2m::render_road_lod_key(defaults, level));
+    CHECK(g2m::render_road_lod_key(detailed, 2) != g2m::render_road_lod_key(defaults, 2));
+    CHECK(g2m::render_road_lod_key(detailed, 4) != g2m::render_road_lod_key(defaults, 4));
+    CHECK(g2m::render_road_lod_key(detailed, 3) == g2m::render_road_lod_key(defaults, 3));
+    CHECK(g2m::render_road_lod_key(defaults, 4) != g2m::render_road_lod_key(defaults, 5)); // the level is part of the key
+    g2m::RenderRoadLod wider = defaults;
+    wider.levels[3].min_half_width_mm = 4000;
+    CHECK(g2m::render_road_lod_key(wider, 3) != g2m::render_road_lod_key(defaults, 3));
+}
