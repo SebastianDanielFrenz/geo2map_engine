@@ -2168,6 +2168,60 @@ rejected.
 - racing_game still runs its own `complete_road_profiles` on the served geometry (road_structures.cpp); the fixed
   rhein_main_hessen store needs a re-derive with this build before the game sees the profile.
 
+**D44. Block corners get circular kerb returns; a fillet that breaks the rings is left sharp, corner by corner.**
+- Problem: offset-intersect-trim (3.3) meets two approach edges at a sharp point. Real crossings (RASt 06, 6.3.3; every
+  aerial image of the fixtures' streets) round the kerb with a radius that grows with the road class; the sharp rings
+  read as a cut-out of two overlapping ribbons, and the trims stop at the corner, so the paved area of a turn is missing.
+- Rule data (`de.json` `junction`): `corner_radius_mm` per highway class (default 6 m, residential 6, tertiary 8,
+  secondary 10, primary/trunk/links 12, service/track/living_street 4, motorway 0 = sharp), `corner_min_wedge_deg` 20,
+  `corner_tangent_max_percent` 150, a one-way pair (dual carriageway split) under `corner_oneway_pair_max_wedge_deg` 60
+  takes `corner_oneway_pair_radius_mm` 1 m. Values [assumed/unverified] from RASt 06 ranges.
+- Geometry (`fillet_corner`, stub-stub corners only; no fillet at cap corners, roundabout-roundabout pairs, wedges
+  under the minimum, or junctions with an excluded approach): road bed radius R0 = min of the two classes' radii;
+  outer layers concentric, R_L = max(R_{L-1} - min(d_a, d_b), 0) with d the layer offsets (any radius in
+  [R_{L-1} - d, R_{L-1}] nests for straight edges), radii in (0, 0.25 m) raised to 0.25 m. One scale over all layers
+  keeps the tangent t = R / tan(wedge/2) within 150 % of R and before each approach's trim clamp minus the margin. The
+  arc is the rational quadratic Bezier with the corner as control point and weight sin(wedge/2) (an exact circle on
+  straight edges, inside the tangent triangle on curved ones), one segment per 7.5 degrees; the trims extend to the
+  tangent stations + margin, so the whole return lies in the ring.
+- Fallback: rings with fillets that are not simple, not nested within 2 mm or over the vertex budget are rebuilt with
+  every corner sharp; if that is good, corners are re-admitted one at a time in walk order at full, then half radius,
+  each kept only if the rings stay good (deterministic, at most 2m + 1 builds). Rings that are bad even sharp go to the
+  D34 hull as before. `JunctionBuildStats::fillets / filleted_junctions / fillet_fallbacks` (corners left sharp);
+  `JunctionBuildOptions::corner_fillets` = false is the pre-D44 build (sabotage and the sharp-geometry tests).
+- Measured (fixture census, every tile's build): frankfurt_hoechst 594 of 658 ring records filleted, 1381 corners
+  rounded, 5 left sharp, hulls 36 (sharp build 38); hoechst_a66 370 of 476, 867 rounded, 4 sharp, hulls 47 (49). Longer
+  trims link more neighbouring nodes into clusters (frankfurt 34 -> 98 cluster records), within the D19 caps. Random
+  star sweep (60 scenes, 3-6 arms, curved arms, one-ways, sidewalks): 42 filleted, 0 fallbacks, never a hull the sharp
+  build avoided. Tests `tests/layer/test_junction_fillets.cpp` ([fillet]); diag dump `[.][diag][junction_dump]` +
+  `tools/junction_view/render.py`. The config text gains ` corner-fillet=1`; with the de.json change the roads.geom
+  config hash and every release id containing roads.geom move; g3xs, g3j, g3d re-recorded (Linux; Windows to confirm).
+
+**D45 (withdrawn). Keep the convex hull for a broken single-node ring; do not replace it with the union of the strips.**
+- Tried: the boundary of the union of the approach strips and the node core (polar upper envelope about the node), so
+  the hull would not pave the wedge between diverging approaches.
+- Measured on every single-node hull of both fixtures and on synthetic 3-arm wedges (motorway/primary/residential
+  one-ways at 3-20 degrees): the hull paves at most 38.8 m^2 outside the union (fixtures; under 8 m^2 synthetic),
+  because the trims of a broken ring are short. The union instead shows steps where strips of different widths meet,
+  and the before/after renders looked worse with it. It also moved the G3-D T12 trim-line bound from 10 to 15 mm.
+- Decision: the hull stays; revisit only if real data shows a hull paving a large wedge (the measurement: hull area
+  outside the union on a 0.5 m grid).
+
+**D46. A road that changes width at a junction tapers 1:5 instead of stepping.**
+- Problem: two stubs that continue each other (edges within 30 degrees of opposite) with different road bed widths meet
+  on a cap corner (D17). The ring steps straight across the node by the width difference, so the narrower road's edge
+  starts behind the wider one's end: a sudden widening and, seen from the narrow side, a notch (the B 8 where the ramp to
+  the A 66 splits off, owner report on PR #1).
+- Geometry (`taper_corner`, tried after `fillet_corner` on every corner the fillet pass admits, so the D44 fallback and
+  re-admission apply unchanged): the wide stub's edge end (station 0) is joined by a straight line to the narrow stub's
+  edge at 5 x the step (at least 1 m, the fillet length factor applied, before the narrow trim clamp minus the margin),
+  on every layer whose corner lies on a cap. The taper length comes from the road bed step and is shared by the layers.
+  The trims extend past the taper end like a kerb return's tangent points. Ratio [assumed]; RASt 06 tapers are longer on
+  fast roads, but the trim clamp bounds it anyway.
+- `JunctionBuildOptions::width_tapers` = false is the pre-D46 build. Config text gains ` width-taper=5`; roads.geom
+  config hash and release ids move; g3xs, g3j, g3d re-recorded (Linux). Test `[taper]` in
+  `tests/layer/test_junction_fillets.cpp`.
+
 ---
 
 

@@ -19,12 +19,14 @@ using strict::Reader;
 constexpr std::int64_t kMaxMm = 20000;
 // P2 lengths: every one in (0, 200] m (design 8.1).
 constexpr std::int64_t kMaxLengthMm = 200000, kMaxLengthM = 200;
+constexpr std::int64_t kMaxCornerRadiusMm = 30000;
 
 bool read_junction_rules(Reader& rd, const json& root, JunctionRules& out) {
     const auto* j = rd.field(root, "root", "junction");
     static constexpr const char* kPath = "junction";
     if (!j || !rd.keys(*j, kPath, {"trim_min_mm", "trim_margin_mm", "edge_station_spacing_mm", "link_trim_cap_m", "cluster_max_extent_m",
-            "cluster_max_nodes", "reach_max_m", "bowtie_rounds", "bowtie_step_mm"})) return false;
+            "cluster_max_nodes", "reach_max_m", "bowtie_rounds", "bowtie_step_mm", "corner_radius_mm", "corner_min_wedge_deg",
+            "corner_tangent_max_percent", "corner_oneway_pair_radius_mm", "corner_oneway_pair_max_wedge_deg"})) return false;
     if (!rd.integer(*j, kPath, "trim_min_mm", 1, kMaxLengthMm, out.trim_min_mm) ||
         !rd.integer(*j, kPath, "trim_margin_mm", 1, kMaxLengthMm, out.trim_margin_mm) ||
         !rd.integer(*j, kPath, "edge_station_spacing_mm", 1, kMaxLengthMm, out.edge_station_spacing_mm) ||
@@ -33,7 +35,26 @@ bool read_junction_rules(Reader& rd, const json& root, JunctionRules& out) {
         !rd.integer(*j, kPath, "cluster_max_nodes", 1, 12, out.cluster_max_nodes) || // the encoding stores 1..12 nodes per junction
         !rd.integer(*j, kPath, "reach_max_m", 1, kMaxLengthM, out.reach_max_m) ||
         !rd.integer(*j, kPath, "bowtie_rounds", 0, 16, out.bowtie_rounds) ||
-        !rd.integer(*j, kPath, "bowtie_step_mm", 1, kMaxLengthMm, out.bowtie_step_mm)) return false;
+        !rd.integer(*j, kPath, "bowtie_step_mm", 1, kMaxLengthMm, out.bowtie_step_mm) ||
+        !rd.integer(*j, kPath, "corner_min_wedge_deg", 1, 179, out.corner_min_wedge_deg) ||
+        !rd.integer(*j, kPath, "corner_tangent_max_percent", 100, 1000, out.corner_tangent_max_percent) ||
+        !rd.integer(*j, kPath, "corner_oneway_pair_radius_mm", 0, kMaxCornerRadiusMm, out.corner_oneway_pair_radius_mm) ||
+        !rd.integer(*j, kPath, "corner_oneway_pair_max_wedge_deg", 0, 179, out.corner_oneway_pair_max_wedge_deg)) return false;
+    {
+        // Corner radii per highway class: every key a class of the default road style or "default", 0..30 m.
+        const std::string path = std::string(kPath) + ".corner_radius_mm";
+        const auto* radii = rd.field(*j, kPath, "corner_radius_mm");
+        if (!radii || !rd.object(*radii, path)) return false;
+        std::set<std::string> known;
+        for (const auto& entry : RoadStyle::default_style().highways) known.emplace(std::string(entry.highway));
+        for (auto it = radii->begin(); it != radii->end(); ++it) {   // ascending key order
+            if (it.key() != "default" && !known.contains(it.key())) return rd.fail(path + ": unknown class '" + it.key() + "'");
+            if (!it.value().is_number_integer() || it.value().get<std::int64_t>() < 0 || it.value().get<std::int64_t>() > kMaxCornerRadiusMm)
+                return rd.fail(path + "." + it.key() + " must be an integer in [0, 30000]");
+            if (it.key() != "default") out.corner_radius_mm.emplace_back(it.key(), it.value().get<std::int32_t>());
+        }
+        if (!rd.integer(*radii, path, "default", 0, kMaxCornerRadiusMm, out.corner_radius_default_mm)) return false;
+    }
     // Design 5.2: cluster discovery from the owner node visits nodes within extent + one link (2 trim caps) and that
     // must stay inside the 128 m halo that roads.graph keeps (reach_max_m).
     if (out.cluster_max_extent_m + 2 * out.link_trim_cap_m > out.reach_max_m)
@@ -100,6 +121,12 @@ const CrossingPattern* find_pattern(const std::vector<CrossingPatternEntry>& tab
 
 const CrossingPattern* FurnitureRules::find_marking(std::string_view value) const { return find_pattern(crossing_markings, value); }
 const CrossingPattern* FurnitureRules::find_kind(std::string_view value) const { return find_pattern(crossing_kind, value); }
+
+std::int32_t JunctionRules::corner_radius_for(std::string_view highway) const {
+    const auto it = std::lower_bound(corner_radius_mm.begin(), corner_radius_mm.end(), highway,
+        [](const std::pair<std::string, std::int32_t>& e, std::string_view h) { return e.first < h; });
+    return it != corner_radius_mm.end() && it->first == highway ? it->second : corner_radius_default_mm;
+}
 
 const RoadClassRules* RoadRules::find_class(std::string_view highway) const {
     const auto it = std::lower_bound(classes.begin(), classes.end(), highway,

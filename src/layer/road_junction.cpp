@@ -53,6 +53,13 @@ struct Corner {
     bool found = false;
     PointMm point;
     double sigma_a = 0, sigma_b = 0;
+    // Corner fillet (kerb return): the ring leaves A's left edge at station fillet_a, follows `arc` (its first point
+    // on A's edge, its last on B's right edge) and joins B's right edge at fillet_b. The sharp corner point is unused.
+    bool fillet = false;
+    double fillet_a = 0, fillet_b = 0;
+    std::vector<PointMm> arc;
+    double from_a() const { return fillet ? fillet_a : sigma_a; }
+    double from_b() const { return fillet ? fillet_b : sigma_b; }
 };
 
 std::int64_t floor_div(std::int64_t n, std::int64_t d) {   // d > 0
@@ -298,7 +305,7 @@ struct Frame {
     double bound(std::size_t dart) const { return (*darts)[dart].internal ? (*darts)[dart].length : trims[dart]; }
     bool corner_valid(int layer, std::size_t k) const {
         const Corner& c = corners[layer][k];
-        return c.found && c.sigma_a <= bound(arrival(k)) && c.sigma_b <= bound(walk[(k + 1) % walk.size()]);
+        return c.found && c.from_a() <= bound(arrival(k)) && c.from_b() <= bound(walk[(k + 1) % walk.size()]);
     }
 };
 
@@ -320,7 +327,7 @@ bool build_ring(const Frame& fr, int layer, std::vector<Tagged>& out) {
         }
         const bool cv = fr.corner_valid(layer, k);
         const Corner& c = fr.corners[layer][k];
-        const double lo = cv ? c.sigma_a : kNegInf;
+        const double lo = cv ? c.from_a() : kNegInf;
         const Dart& a = darts[A];
         if (!a.internal) {
             for (std::size_t s = a.sigma.size(); s-- > 0;)
@@ -329,15 +336,16 @@ bool build_ring(const Frame& fr, int layer, std::vector<Tagged>& out) {
             // A runs back along the internal stretch; its far end is the start of D, where pair k - 1 has its corner.
             const std::size_t km1 = (k + m - 1) % m;
             const bool prev = fr.corner_valid(layer, km1);
-            const double ub = prev ? a.length - fr.corners[layer][km1].sigma_b : a.length;
+            const double ub = prev ? a.length - fr.corners[layer][km1].from_b() : a.length;
             for (std::size_t s = a.sigma.size(); s-- > 0;)
                 if (a.sigma[s] > lo && (prev ? a.sigma[s] < ub : a.sigma[s] <= ub))
                     out.push_back({a.edge[layer][kLeft][s], static_cast<std::uint16_t>(A)});
         }
-        if (cv) out.push_back({c.point, static_cast<std::uint16_t>(A)});
+        if (cv && c.fillet) for (const auto& p : c.arc) out.push_back({p, static_cast<std::uint16_t>(A)});
+        else if (cv) out.push_back({c.point, static_cast<std::uint16_t>(A)});
         const Dart& n = darts[N];
         if (!n.internal) {
-            const double from = cv ? c.sigma_b : kNegInf;
+            const double from = cv ? c.from_b() : kNegInf;
             for (std::size_t s = 0; s < n.sigma.size(); ++s)
                 if (n.sigma[s] < fr.trims[N] && n.sigma[s] > from) out.push_back({n.edge[layer][kRight][s], static_cast<std::uint16_t>(N)});
         }
@@ -360,6 +368,228 @@ const RoadGraphNode* find_node(const RoadGraph& g, std::int64_t id) {
     return it != g.nodes.end() && it->osm_id == id ? &*it : nullptr;
 }
 
+// ---- corner fillets (kerb returns) ----
+
+std::string_view way_tag(const RoadGraphWay& way, std::string_view key) {
+    for (const auto& [k, v] : way.tags) if (k == key) return v;
+    return {};
+}
+bool way_is_oneway(const RoadGraphWay& way) {
+    const auto o = way_tag(way, "oneway");
+    if (o == "yes" || o == "1" || o == "true" || o == "-1") return true;
+    if (o == "no") return false;
+    const auto j = way_tag(way, "junction");
+    return j == "roundabout" || j == "circular" || way_tag(way, "highway") == "motorway";
+}
+
+// A point on an edge polyline at a fractional station, in mm (double).
+struct EdgePoint { double x = 0, y = 0, sigma = 0; };
+
+// The segment of a dart's edge polyline that holds station `sigma` (>= 0): index i with sigma[i] <= sigma < sigma[i+1].
+std::size_t edge_segment(const Dart& g, double sigma) {
+    const std::size_t n = g.sigma.size();
+    std::size_t i = static_cast<std::size_t>(std::upper_bound(g.sigma.begin(), g.sigma.end(), sigma) - g.sigma.begin());
+    i = i == 0 ? 0 : i - 1;
+    return std::min(i, n - 2);
+}
+// Walks outward (increasing sigma) along edge (layer, side) of `g` from `start` (at station sigma0) by arc length
+// `length` mm, never past station `sigma_limit`. Returns the point reached and the arc length actually walked.
+EdgePoint walk_edge(const Dart& g, int layer, int side, EdgePoint start, double length, double sigma_limit, double& walked) {
+    const auto& pts = g.edge[layer][side];
+    std::size_t i = edge_segment(g, start.sigma);
+    EdgePoint at = start;
+    walked = 0;
+    while (i + 1 < pts.size()) {
+        double nx = static_cast<double>(pts[i + 1].x), ny = static_cast<double>(pts[i + 1].y), ns = g.sigma[i + 1];
+        bool last = false;
+        if (ns > sigma_limit) {   // stop on the limit station inside this segment
+            const double span = g.sigma[i + 1] - g.sigma[i];
+            const double f = span > 0 ? (sigma_limit - g.sigma[i]) / span : 0.0;
+            nx = static_cast<double>(pts[i].x) + f * static_cast<double>(pts[i + 1].x - pts[i].x);
+            ny = static_cast<double>(pts[i].y) + f * static_cast<double>(pts[i + 1].y - pts[i].y);
+            ns = sigma_limit; last = true;
+        }
+        const double dx = nx - at.x, dy = ny - at.y, d = det::sqrt(dx * dx + dy * dy);
+        if (ns > at.sigma && d >= length - walked) {
+            const double f = d > 0 ? (length - walked) / d : 0.0;
+            walked = length;
+            return {at.x + f * dx, at.y + f * dy, at.sigma + f * (ns - at.sigma)};
+        }
+        if (ns > at.sigma) { walked += d; at = {nx, ny, ns}; }
+        if (last) break;
+        ++i;
+    }
+    return at;
+}
+// Unit direction of edge (layer, side) of `g` going outward at station sigma.
+bool edge_direction(const Dart& g, int layer, int side, double sigma, double& ux, double& uy) {
+    const auto& pts = g.edge[layer][side];
+    const std::size_t i = edge_segment(g, sigma);
+    const double dx = static_cast<double>(pts[i + 1].x - pts[i].x), dy = static_cast<double>(pts[i + 1].y - pts[i].y);
+    const double d = det::sqrt(dx * dx + dy * dy);
+    if (!(d > 0)) return false;
+    ux = dx / d; uy = dy / d;
+    return true;
+}
+// |t(layer) - t(layer - 1)| of one side of `g` at station sigma: how far the layer's edge lies outside the inner one.
+double layer_offset_m(const Dart& g, int layer, int side, double sigma) {
+    const double s = std::clamp(g.at_end ? g.length - sigma : sigma, 0.0, g.length);
+    const CarveFootprint f = carve_footprint(*g.xs, s);
+    return std::abs(edge_t(f, layer, side, g.at_end) - edge_t(f, layer - 1, side, g.at_end));
+}
+
+// Rounds the block corner of pair k (A's left edge against B's right edge, both stubs) on every layer with a circular
+// kerb return. Road bed radius R0 = the lower class radius of the two ways (rules); each further layer is concentric:
+// R_L = max(R_{L-1} - min(offset on A, offset on B), 0), which keeps road bed in paved in outer for straight edges
+// (the opening of a smaller wedge by a radius in [R_{L-1} - d, R_{L-1}] lies inside the opening of the larger one).
+// One scale factor shrinks every layer's radius together when the tangent would leave the available edge (the trim
+// clamp) or exceed the tangent cap of an acute wedge. Each arc is the rational quadratic Bezier through the tangent
+// points with the corner as control point (an exact circle for straight edges; for curved edges it stays inside the
+// triangle of the tangent points and the corner, so it never crosses either edge). Returns true if a fillet was set.
+bool fillet_corner(const RoadGeomTile& tile, const RoadRules& rules, const std::vector<Dart>& darts, std::size_t A, std::size_t B,
+    const std::vector<double>& cap, double margin, double radius_factor, std::array<Corner*, kLayers> corners) {
+    const Dart& a = darts[A];
+    const Dart& b = darts[B];
+    if (a.internal || b.internal) return false;
+    const Corner& c0 = *corners[0];
+    if (!c0.found || c0.sigma_a < 0 || c0.sigma_b < 0) return false;
+    const RoadGraphWay* wa = find_way(tile.source.graph, tile.entries[a.entry].way_id);
+    const RoadGraphWay* wb = find_way(tile.source.graph, tile.entries[b.entry].way_id);
+    if (!wa || !wb) return false;
+    if (is_roundabout(*wa) && is_roundabout(*wb)) return false;   // the island side of a roundabout node
+    double r0 = static_cast<double>(std::min(rules.junction.corner_radius_for(way_tag(*wa, "highway")),
+                                             rules.junction.corner_radius_for(way_tag(*wb, "highway"))));   // mm
+    r0 *= radius_factor;
+    if (!(r0 > 0)) return false;
+    // Wedge angle on the road bed: the angle between the two edges leaving the corner.
+    double uax = 0, uay = 0, ubx = 0, uby = 0;
+    if (!edge_direction(a, 0, kLeft, c0.sigma_a, uax, uay) || !edge_direction(b, 0, kRight, c0.sigma_b, ubx, uby)) return false;
+    const double dot0 = std::clamp(uax * ubx + uay * uby, -1.0, 1.0);
+    const double wedge_deg = det::acos(dot0) * 180.0 / det::kPi;
+    if (wedge_deg < static_cast<double>(rules.junction.corner_min_wedge_deg)) return false;
+    if (way_is_oneway(*wa) && way_is_oneway(*wb) && wedge_deg < static_cast<double>(rules.junction.corner_oneway_pair_max_wedge_deg))
+        r0 = std::min(r0, static_cast<double>(rules.junction.corner_oneway_pair_radius_mm));
+    constexpr double kMinRadiusMm = 250.0;
+    if (r0 < kMinRadiusMm) return false;
+
+    struct LayerPlan { bool use = false; double r = 0, tan_half = 0, dot = 0; EdgePoint ca, cb; };
+    std::array<LayerPlan, kLayers> plan{};
+    double scale = 1.0;
+    const double tangent_cap = static_cast<double>(rules.junction.corner_tangent_max_percent) / 100.0;
+    double r_prev = r0;
+    for (int layer = 0; layer < kLayers; ++layer) {
+        const Corner& c = *corners[layer];
+        double r = r0;
+        if (layer > 0) {
+            // A layer whose inner neighbour is sharp stays sharp (radius 0 nests in anything).
+            if (r_prev <= 0) break;
+            if (!c.found || c.sigma_a < 0 || c.sigma_b < 0) return false;   // cannot follow the inner arc: no fillet at all
+            const double d = std::min(layer_offset_m(a, layer, kLeft, c.sigma_a), layer_offset_m(b, layer, kRight, c.sigma_b)) * 1000.0;
+            r = std::max(r_prev - d, 0.0);
+            // Any radius in [r_prev - d, r_prev] nests; a tiny positive one is raised to the minimum instead of being
+            // dropped, because a sharp corner nests only when r_prev - d <= 0.
+            if (r > 0 && r < kMinRadiusMm) r = kMinRadiusMm;
+        }
+        r_prev = r;
+        if (r <= 0) break;
+        double ax = 0, ay = 0, bx = 0, by = 0;
+        if (!edge_direction(a, layer, kLeft, c.sigma_a, ax, ay) || !edge_direction(b, layer, kRight, c.sigma_b, bx, by)) return false;
+        const double dot = std::clamp(ax * bx + ay * by, -1.0, 1.0);
+        const double crs = std::abs(ax * by - ay * bx);
+        if (!(crs > 1e-9) || dot <= -1.0 + 1e-12) return false;
+        LayerPlan& p = plan[layer];
+        p.use = true; p.r = r; p.dot = dot;
+        p.tan_half = crs / (1.0 + dot);                       // tan(wedge / 2)
+        p.ca = {static_cast<double>(c.point.x), static_cast<double>(c.point.y), c.sigma_a};
+        p.cb = {static_cast<double>(c.point.x), static_cast<double>(c.point.y), c.sigma_b};
+        const double t = r / p.tan_half;                      // tangent length, mm
+        if (layer == 0 && t > tangent_cap * r) scale = std::min(scale, tangent_cap * r / t);
+        // The tangent points must stay before the trim clamp minus the margin on both approaches.
+        double walked_a = 0, walked_b = 0;
+        walk_edge(a, layer, kLeft, p.ca, t, cap[A] - margin, walked_a);
+        walk_edge(b, layer, kRight, p.cb, t, cap[B] - margin, walked_b);
+        scale = std::min({scale, walked_a / t, walked_b / t});
+    }
+    if (!plan[0].use || scale * r0 < kMinRadiusMm) return false;
+    bool any = false;
+    for (int layer = 0; layer < kLayers; ++layer) {
+        const LayerPlan& p = plan[layer];
+        if (!p.use) break;
+        const double t = p.r * scale / p.tan_half;
+        double walked = 0;
+        const EdgePoint ta = walk_edge(a, layer, kLeft, p.ca, t, cap[A] - margin, walked);
+        const EdgePoint tb = walk_edge(b, layer, kRight, p.cb, t, cap[B] - margin, walked);
+        Corner& c = *corners[layer];
+        // Rational quadratic Bezier, weight sin(wedge / 2) = sqrt((1 - cos wedge) / 2): a circular arc of central
+        // angle pi - wedge for straight edges. One segment per <= 7.5 degrees of turn.
+        const double w = det::sqrt((1.0 - p.dot) / 2.0);
+        const double turn = det::kPi - det::acos(p.dot);
+        const int n = std::max(2, static_cast<int>(std::ceil(turn / (7.5 * det::kPi / 180.0))));
+        const double px = static_cast<double>(c.point.x), py = static_cast<double>(c.point.y);
+        c.arc.clear();
+        for (int i = 0; i <= n; ++i) {
+            const double u = static_cast<double>(i) / static_cast<double>(n);
+            const double b0 = (1 - u) * (1 - u), b1 = 2 * w * u * (1 - u), b2 = u * u, den = b0 + b1 + b2;
+            const double x = (b0 * ta.x + b1 * px + b2 * tb.x) / den, y = (b0 * ta.y + b1 * py + b2 * tb.y) / den;
+            const PointMm q{std::llround(x), std::llround(y)};
+            if (c.arc.empty() || c.arc.back() != q) c.arc.push_back(q);
+        }
+        c.fillet = true; c.fillet_a = ta.sigma; c.fillet_b = tb.sigma;
+        any = true;
+    }
+    return any;
+}
+
+// Width taper (design D46): two stubs that continue each other (their edges leave the node within 30 degrees of
+// opposite) with different widths meet on a CAP corner (D17): the ring steps across the node by the width difference
+// and the narrower road's edge starts behind the wider one's end. Real kerbs taper there. The wide stub's edge end
+// (station 0) is joined by a straight line to the narrow stub's edge kTaperRatio times the step further out (at least
+// 1 m, before the trim clamp minus the margin), on every layer whose corner lies on a cap. Returns true if a taper
+// was set on some layer; fillet_a / fillet_b carry the stations as for a kerb return.
+constexpr double kTaperRatio = 5.0;            // length per unit of width step [assumed]
+constexpr double kTaperMinMm = 1000.0;
+constexpr double kTaperContinuationDot = -0.866;   // cos 150 degrees
+bool taper_corner(const std::vector<Dart>& darts, std::size_t A, std::size_t B, const std::vector<double>& cap, double margin,
+    double length_factor, std::array<Corner*, kLayers> corners) {
+    const Dart& a = darts[A];
+    const Dart& b = darts[B];
+    if (a.internal || b.internal) return false;
+    const Corner& c0 = *corners[0];
+    if (!c0.found || (c0.sigma_a >= 0 && c0.sigma_b >= 0)) return false;
+    double uax = 0, uay = 0, ubx = 0, uby = 0;
+    if (!edge_direction(a, 0, kLeft, 0.0, uax, uay) || !edge_direction(b, 0, kRight, 0.0, ubx, uby)) return false;
+    if (uax * ubx + uay * uby > kTaperContinuationDot) return false;
+    // The taper length from the road bed step, shared by every layer so the layers stay parallel.
+    const bool wide_a = c0.sigma_a < 0;
+    const Dart& wide = wide_a ? a : b;
+    const Dart& narrow = wide_a ? b : a;
+    const int wide_side = wide_a ? kLeft : kRight, narrow_side = wide_a ? kRight : kLeft;
+    double nx = 0, ny = 0;
+    if (!edge_direction(narrow, 0, narrow_side, 0.0, nx, ny)) return false;
+    const PointMm w0 = wide.edge[0][wide_side][0], n0 = narrow.edge[0][narrow_side][0];
+    const double step = std::abs(nx * static_cast<double>(w0.y - n0.y) - ny * static_cast<double>(w0.x - n0.x));
+    const double length = std::max(kTaperRatio * step, kTaperMinMm) * length_factor;
+    if (!(length > 0)) return false;
+    bool any = false;
+    for (int layer = 0; layer < kLayers; ++layer) {
+        Corner& c = *corners[layer];
+        if (!c.found || (c.sigma_a >= 0 && c.sigma_b >= 0) || (c.sigma_a < 0) != wide_a) continue;
+        const PointMm wp = wide.edge[layer][wide_side][0], np = narrow.edge[layer][narrow_side][0];
+        double walked = 0;
+        const std::size_t narrow_index = wide_a ? B : A;
+        const EdgePoint t = walk_edge(narrow, layer, narrow_side, {static_cast<double>(np.x), static_cast<double>(np.y), 0.0},
+                                      length, cap[narrow_index] - margin, walked);
+        if (!(t.sigma > 0)) continue;
+        const PointMm tp{std::llround(t.x), std::llround(t.y)};
+        c.arc.clear();
+        if (wide_a) { c.arc = {wp, tp}; c.fillet_a = 0.0; c.fillet_b = t.sigma; }
+        else { c.arc = {tp, wp}; c.fillet_a = t.sigma; c.fillet_b = 0.0; }
+        c.fillet = true;
+        any = true;
+    }
+    return any;
+}
+
 struct RawApproach { std::size_t entry; bool at_end; };
 struct NodeInput { std::int64_t id = 0; PointMm position; std::vector<RawApproach> raw; };
 
@@ -374,6 +604,7 @@ void add_stats(JunctionBuildStats& to, const JunctionBuildStats& from) {
     to.face_fallbacks += from.face_fallbacks;
     to.raised_tables += from.raised_tables; to.calming_ignored += from.calming_ignored;
     to.nesting_hulls += from.nesting_hulls; to.nesting_declined += from.nesting_declined; to.ring_cap_hulls += from.ring_cap_hulls;
+    to.fillets += from.fillets; to.filleted_junctions += from.filleted_junctions; to.fillet_fallbacks += from.fillet_fallbacks;
 }
 }
 
@@ -538,48 +769,115 @@ RoadJunction build_from(const RoadGeomTile& tile, const std::vector<NodeInput>& 
     if (face_ok) {
         // ---- corners per layer, trims of the stubs from the outer layer (3.3, 3.4) ----
         const std::size_t m = fr.walk.size();
+        std::array<std::vector<Corner>, kLayers> sharp;
         for (int layer = 0; layer < kLayers; ++layer) {
-            fr.corners[layer].resize(m);
+            sharp[layer].resize(m);
             for (std::size_t k = 0; k < m; ++k)
-                fr.corners[layer][k] = find_corner(darts[fr.arrival(k)], darts[fr.walk[(k + 1) % m]], layer, options.corner_caps);
+                sharp[layer][k] = find_corner(darts[fr.arrival(k)], darts[fr.walk[(k + 1) % m]], layer, options.corner_caps);
         }
-        bool beyond = false;
-        for (std::size_t k = 0; k < m; ++k) {
-            const Corner& c = fr.corners[2][k];
-            if (!c.found) continue;
-            const std::size_t a = fr.arrival(k), b = fr.walk[(k + 1) % m];
-            if (!darts[a].internal) { base[a] = std::max(base[a], std::max(c.sigma_a, trim_min) + margin); if (c.sigma_a > cap[a]) beyond = true; }
-            if (!darts[b].internal) { base[b] = std::max(base[b], std::max(c.sigma_b, trim_min) + margin); if (c.sigma_b > cap[b]) beyond = true; }
-        }
-        if (beyond) j.flags |= static_cast<std::uint16_t>(JunctionFlags::Partial);
-        set_trims();
-        // ---- rings, bow-tie repair (3.5) ----
-        for (int round = 0;; ++round) {
-            bool all_simple = true;
-            std::array<std::vector<std::pair<std::size_t, std::size_t>>, kLayers> per_layer;
-            for (int layer = 0; layer < kLayers; ++layer) {
-                if (!build_ring(fr, layer, rings[layer])) return finish(JunctionDecline::Degenerate);
-                if (!ring_simple(rings[layer], &per_layer[layer])) all_simple = false;
+        // One attempt: with corner fillets (kerb returns) or with the sharp offset corners. Returns the number of
+        // fillets applied; the rings, trims and rounds are left in `rings`, `fr`, `rounds_used`.
+        // allow[k]: 0 sharp corner, 1 full kerb radius, 2 half radius.
+        static constexpr double kFilletFactors[] = {0.0, 1.0, 0.5};
+        const auto attempt = [&](const std::vector<char>& allow) -> std::size_t {
+            fr.corners = sharp;
+            std::fill(extra.begin(), extra.end(), 0.0);
+            for (std::size_t i = 0; i < k_stubs; ++i) base[i] = trim_min + margin;
+            rounds_used = 0;
+            bool beyond = false;
+            for (std::size_t k = 0; k < m; ++k) {
+                const Corner& c = fr.corners[2][k];
+                if (!c.found) continue;
+                const std::size_t a = fr.arrival(k), b = fr.walk[(k + 1) % m];
+                if (!darts[a].internal) { base[a] = std::max(base[a], std::max(c.sigma_a, trim_min) + margin); if (c.sigma_a > cap[a]) beyond = true; }
+                if (!darts[b].internal) { base[b] = std::max(base[b], std::max(c.sigma_b, trim_min) + margin); if (c.sigma_b > cap[b]) beyond = true; }
             }
-            if (all_simple) break;
-            // Which stubs take part in a crossing: the tags of the four end vertices of every crossing pair.
-            std::vector<bool> involved(darts.size(), false);
-            bool any = false;
-            for (int layer = 0; layer < kLayers; ++layer) {
-                const auto& v = rings[layer];
-                for (const auto& [a, b] : per_layer[layer])
-                    for (const std::size_t s : {a, a + 1, b, b + 1}) {
-                        const std::size_t tag = v[s % v.size()].tag;
-                        if (tag < k_stubs) { involved[tag] = true; any = true; }
+            if (beyond) j.flags |= static_cast<std::uint16_t>(JunctionFlags::Partial);
+            std::size_t filleted = 0;
+            {
+                for (std::size_t k = 0; k < m; ++k) {
+                    if (!allow[k]) continue;
+                    const std::size_t a = fr.arrival(k), b = fr.walk[(k + 1) % m];
+                    const std::array<Corner*, kLayers> cs{&fr.corners[0][k], &fr.corners[1][k], &fr.corners[2][k]};
+                    const double factor = kFilletFactors[static_cast<std::size_t>(allow[k])];
+                    if (!(options.corner_fillets && fillet_corner(tile, rules, darts, a, b, cap, margin, factor, cs)) &&
+                        !(options.width_tapers && taper_corner(darts, a, b, cap, margin, factor, cs))) continue;
+                    ++filleted;
+                    // The trims reach past every tangent point, so the whole kerb return lies inside the ring.
+                    for (int layer = 0; layer < kLayers; ++layer) {
+                        const Corner& c = fr.corners[layer][k];
+                        if (!c.fillet) continue;
+                        base[a] = std::max(base[a], c.fillet_a + margin);
+                        base[b] = std::max(base[b], c.fillet_b + margin);
                     }
+                }
             }
-            if (round >= rules.junction.bowtie_rounds || !any) break;
-            const std::vector<double> before = fr.trims;
-            for (std::size_t i = 0; i < k_stubs; ++i) if (involved[i]) extra[i] += step;
             set_trims();
-            if (fr.trims == before) break;           // every involved trim sits on its clamp: nothing left to extend
-            ++rounds_used;
+            // ---- rings, bow-tie repair (3.5) ----
+            for (int round = 0;; ++round) {
+                bool all_simple = true;
+                std::array<std::vector<std::pair<std::size_t, std::size_t>>, kLayers> per_layer;
+                for (int layer = 0; layer < kLayers; ++layer) {
+                    if (!build_ring(fr, layer, rings[layer])) return kNone;
+                    if (!ring_simple(rings[layer], &per_layer[layer])) all_simple = false;
+                }
+                if (all_simple) break;
+                // Which stubs take part in a crossing: the tags of the four end vertices of every crossing pair.
+                std::vector<bool> involved(darts.size(), false);
+                bool any = false;
+                for (int layer = 0; layer < kLayers; ++layer) {
+                    const auto& v = rings[layer];
+                    for (const auto& [a, b] : per_layer[layer])
+                        for (const std::size_t s : {a, a + 1, b, b + 1}) {
+                            const std::size_t tag = v[s % v.size()].tag;
+                            if (tag < k_stubs) { involved[tag] = true; any = true; }
+                        }
+                }
+                if (round >= rules.junction.bowtie_rounds || !any) break;
+                const std::vector<double> before = fr.trims;
+                for (std::size_t i = 0; i < k_stubs; ++i) if (involved[i]) extra[i] += step;
+                set_trims();
+                if (fr.trims == before) break;           // every involved trim sits on its clamp: nothing left to extend
+                ++rounds_used;
+            }
+            return filleted;
+        };
+        // No fillets where an approach is excluded (a tunnel or a declined stretch): its mouth lies in one of the
+        // wedges, so that wedge is not a block corner, and the ring already closes across the mouth.
+        std::vector<char> allow(m, (options.corner_fillets || options.width_tapers) && excluded.empty() ? 1 : 0);
+        std::size_t filleted = attempt(allow);
+        if (filleted == kNone) return finish(JunctionDecline::Degenerate);
+        // The fillets must not cost the junction its offset rings: rings that are not simple, do not nest or exceed
+        // the vertex budget lose fillets, never the rings. Corners are then re-admitted one at a time in walk order,
+        // each at the largest radius (full, then half) with which the rings stay good, else sharp (deterministic, at
+        // most 2 m + 1 extra builds).
+        const auto good = [&] {
+            if (!tagged_rings_nested(rings)) return false;
+            for (int layer = 0; layer < kLayers; ++layer)
+                if (!ring_simple(rings[layer], nullptr) || rings[layer].size() > kJunctionMaxRingVertices) return false;
+            return true;
+        };
+        if (filleted > 0 && !good()) {
+            const std::size_t wanted = filleted;
+            std::vector<char> keep(m, 0);
+            // Rings that are bad without any fillet go to the hull below anyway; no corner is to blame there.
+            const std::size_t sharp_result = attempt(keep);
+            if (sharp_result == kNone) return finish(JunctionDecline::Degenerate);
+            const bool sharp_good = good();
+            for (std::size_t k = 0; k < m && sharp_good; ++k) {
+                if (!allow[k]) continue;
+                for (char level = 1; level <= 2 && !keep[k]; ++level) {
+                    std::vector<char> trial = keep; trial[k] = level;
+                    const std::size_t n = attempt(trial);
+                    const std::size_t before = std::count_if(keep.begin(), keep.end(), [](char c) { return c != 0; });
+                    if (n != kNone && n > before && good()) keep[k] = level;
+                }
+            }
+            filleted = attempt(keep);
+            if (filleted == kNone) return finish(JunctionDecline::Degenerate);
+            if (sharp_good) stats.fillet_fallbacks += wanted - std::min(wanted, filleted);
         }
+        if (filleted > 0) { stats.fillets += filleted; ++stats.filleted_junctions; }
     } else {
         // A stub off the outer boundary walk (inside a cycle of absorbed stretches, D16): no single ring order
         // reaches every stub. Every stub keeps trim_min + margin and every layer is the hull.
