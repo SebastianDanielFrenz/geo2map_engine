@@ -540,6 +540,56 @@ bool fillet_corner(const RoadGeomTile& tile, const RoadRules& rules, const std::
     return any;
 }
 
+// Width taper (design D46): two stubs that continue each other (their edges leave the node within 30 degrees of
+// opposite) with different widths meet on a CAP corner (D17): the ring steps across the node by the width difference
+// and the narrower road's edge starts behind the wider one's end. Real kerbs taper there. The wide stub's edge end
+// (station 0) is joined by a straight line to the narrow stub's edge kTaperRatio times the step further out (at least
+// 1 m, before the trim clamp minus the margin), on every layer whose corner lies on a cap. Returns true if a taper
+// was set on some layer; fillet_a / fillet_b carry the stations as for a kerb return.
+constexpr double kTaperRatio = 5.0;            // length per unit of width step [assumed]
+constexpr double kTaperMinMm = 1000.0;
+constexpr double kTaperContinuationDot = -0.866;   // cos 150 degrees
+bool taper_corner(const std::vector<Dart>& darts, std::size_t A, std::size_t B, const std::vector<double>& cap, double margin,
+    double length_factor, std::array<Corner*, kLayers> corners) {
+    const Dart& a = darts[A];
+    const Dart& b = darts[B];
+    if (a.internal || b.internal) return false;
+    const Corner& c0 = *corners[0];
+    if (!c0.found || (c0.sigma_a >= 0 && c0.sigma_b >= 0)) return false;
+    double uax = 0, uay = 0, ubx = 0, uby = 0;
+    if (!edge_direction(a, 0, kLeft, 0.0, uax, uay) || !edge_direction(b, 0, kRight, 0.0, ubx, uby)) return false;
+    if (uax * ubx + uay * uby > kTaperContinuationDot) return false;
+    // The taper length from the road bed step, shared by every layer so the layers stay parallel.
+    const bool wide_a = c0.sigma_a < 0;
+    const Dart& wide = wide_a ? a : b;
+    const Dart& narrow = wide_a ? b : a;
+    const int wide_side = wide_a ? kLeft : kRight, narrow_side = wide_a ? kRight : kLeft;
+    double nx = 0, ny = 0;
+    if (!edge_direction(narrow, 0, narrow_side, 0.0, nx, ny)) return false;
+    const PointMm w0 = wide.edge[0][wide_side][0], n0 = narrow.edge[0][narrow_side][0];
+    const double step = std::abs(nx * static_cast<double>(w0.y - n0.y) - ny * static_cast<double>(w0.x - n0.x));
+    const double length = std::max(kTaperRatio * step, kTaperMinMm) * length_factor;
+    if (!(length > 0)) return false;
+    bool any = false;
+    for (int layer = 0; layer < kLayers; ++layer) {
+        Corner& c = *corners[layer];
+        if (!c.found || (c.sigma_a >= 0 && c.sigma_b >= 0) || (c.sigma_a < 0) != wide_a) continue;
+        const PointMm wp = wide.edge[layer][wide_side][0], np = narrow.edge[layer][narrow_side][0];
+        double walked = 0;
+        const std::size_t narrow_index = wide_a ? B : A;
+        const EdgePoint t = walk_edge(narrow, layer, narrow_side, {static_cast<double>(np.x), static_cast<double>(np.y), 0.0},
+                                      length, cap[narrow_index] - margin, walked);
+        if (!(t.sigma > 0)) continue;
+        const PointMm tp{std::llround(t.x), std::llround(t.y)};
+        c.arc.clear();
+        if (wide_a) { c.arc = {wp, tp}; c.fillet_a = 0.0; c.fillet_b = t.sigma; }
+        else { c.arc = {tp, wp}; c.fillet_a = t.sigma; c.fillet_b = 0.0; }
+        c.fillet = true;
+        any = true;
+    }
+    return any;
+}
+
 struct RawApproach { std::size_t entry; bool at_end; };
 struct NodeInput { std::int64_t id = 0; PointMm position; std::vector<RawApproach> raw; };
 
@@ -748,7 +798,10 @@ RoadJunction build_from(const RoadGeomTile& tile, const std::vector<NodeInput>& 
                 for (std::size_t k = 0; k < m; ++k) {
                     if (!allow[k]) continue;
                     const std::size_t a = fr.arrival(k), b = fr.walk[(k + 1) % m];
-                    if (!fillet_corner(tile, rules, darts, a, b, cap, margin, kFilletFactors[static_cast<std::size_t>(allow[k])], {&fr.corners[0][k], &fr.corners[1][k], &fr.corners[2][k]})) continue;
+                    const std::array<Corner*, kLayers> cs{&fr.corners[0][k], &fr.corners[1][k], &fr.corners[2][k]};
+                    const double factor = kFilletFactors[static_cast<std::size_t>(allow[k])];
+                    if (!(options.corner_fillets && fillet_corner(tile, rules, darts, a, b, cap, margin, factor, cs)) &&
+                        !(options.width_tapers && taper_corner(darts, a, b, cap, margin, factor, cs))) continue;
                     ++filleted;
                     // The trims reach past every tangent point, so the whole kerb return lies inside the ring.
                     for (int layer = 0; layer < kLayers; ++layer) {
@@ -791,7 +844,7 @@ RoadJunction build_from(const RoadGeomTile& tile, const std::vector<NodeInput>& 
         };
         // No fillets where an approach is excluded (a tunnel or a declined stretch): its mouth lies in one of the
         // wedges, so that wedge is not a block corner, and the ring already closes across the mouth.
-        std::vector<char> allow(m, options.corner_fillets && excluded.empty() ? 1 : 0);
+        std::vector<char> allow(m, (options.corner_fillets || options.width_tapers) && excluded.empty() ? 1 : 0);
         std::size_t filleted = attempt(allow);
         if (filleted == kNone) return finish(JunctionDecline::Degenerate);
         // The fillets must not cost the junction its offset rings: rings that are not simple, do not nest or exceed

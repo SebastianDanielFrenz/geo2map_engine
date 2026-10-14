@@ -972,3 +972,7 @@ simplicity, 2 mm nesting or the vertex budget is dropped per corner (full, half 
 ` corner-fillet=1`; de.json SHA `1677d98b...fc27`. Tests `tests/layer/test_junction_fillets.cpp` ([fillet]); hidden
 `[.][diag][junction_dump]` (`tests/layer/test_junction_dump.cpp`, env G2M_JUNCTION_DUMP) + `tools/junction_view/render.py`
 draw rings and approach edges as PNGs.
+
+Width tapers (design D46): `taper_corner` in `src/layer/road_junction.cpp` replaces the cap-corner step where a road
+continues at a different width with a straight 1:5 taper (at least 1 m) on every layer; `JunctionBuildOptions::width_tapers`,
+config text ` width-taper=5`, test `[taper]` in `tests/layer/test_junction_fillets.cpp`.

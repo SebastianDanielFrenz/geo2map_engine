@@ -2207,6 +2207,21 @@ rejected.
 - Decision: the hull stays; revisit only if real data shows a hull paving a large wedge (the measurement: hull area
   outside the union on a 0.5 m grid).
 
+**D46. A road that changes width at a junction tapers 1:5 instead of stepping.**
+- Problem: two stubs that continue each other (edges within 30 degrees of opposite) with different road bed widths meet
+  on a cap corner (D17). The ring steps straight across the node by the width difference, so the narrower road's edge
+  starts behind the wider one's end: a sudden widening and, seen from the narrow side, a notch (the B 8 where the ramp to
+  the A 66 splits off, owner report on PR #1).
+- Geometry (`taper_corner`, tried after `fillet_corner` on every corner the fillet pass admits, so the D44 fallback and
+  re-admission apply unchanged): the wide stub's edge end (station 0) is joined by a straight line to the narrow stub's
+  edge at 5 x the step (at least 1 m, the fillet length factor applied, before the narrow trim clamp minus the margin),
+  on every layer whose corner lies on a cap. The taper length comes from the road bed step and is shared by the layers.
+  The trims extend past the taper end like a kerb return's tangent points. Ratio [assumed]; RASt 06 tapers are longer on
+  fast roads, but the trim clamp bounds it anyway.
+- `JunctionBuildOptions::width_tapers` = false is the pre-D46 build. Config text gains ` width-taper=5`; roads.geom
+  config hash and release ids move; g3xs, g3j, g3d re-recorded (Linux). Test `[taper]` in
+  `tests/layer/test_junction_fillets.cpp`.
+
 ---
 
 

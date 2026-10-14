@@ -282,3 +282,47 @@ TEST_CASE("Fillets: fixture census - kerb returns on most junctions, rings valid
         CHECK(with.hull_fallbacks <= without.hull_fallbacks + 2);
     }
 }
+
+TEST_CASE("Width taper: a road narrowing at a junction tapers 1:5 on the side without a side road (D46)", "[layer][junction][fillet][taper]") {
+    // A four-lane secondary road (way 10, from the west) continues east as a two-lane one (way 12); a residential side
+    // road (way 11) joins from the south. On the north side the two stubs meet on a cap corner: without the taper the
+    // ring steps across the node by the width difference, with it the wide edge's end runs straight to the narrow edge
+    // five times the step further east.
+    const Tags wide = {{"highway", "secondary"}, {"lanes", "4"}}, narrow = {{"highway", "secondary"}, {"lanes", "2"}};
+    const auto scene = make_scene({{1, 0, 0}, {2, -300, 0}, {3, 300, 0}, {4, 0, -300}},
+        {{10, {2, 1}, wide}, {11, {4, 1}}, {12, {1, 3}, narrow}});
+    const double ww = roadbed_half_width(*scene, 10), wn = roadbed_half_width(*scene, 12), step = ww - wn;
+    REQUIRE(step > 1.0);
+    const auto node = node_pos(*scene, 1);
+    // The north-side ring vertex furthest east that lies on the narrow road's edge (y = wn), in metres from the node.
+    const auto north_join = [&](const RoadJunction& j) {
+        double best = -1e9;
+        for (const auto& v : j.rings[0].vertices) {
+            const double x = static_cast<double>(v.x - node.x) / 1000.0, y = static_cast<double>(v.y - node.y) / 1000.0;
+            if (std::abs(y - wn) < 0.01 && x > best) best = x;
+        }
+        return best;
+    };
+    JunctionBuildOptions off; off.width_tapers = false;
+    const auto s = junction_of(*scene, 1, nullptr, off);
+    const auto t = junction_of(*scene, 1);
+    REQUIRE(t.decline == JunctionDecline::None);
+    check_rings(t);
+    CHECK_FALSE((t.flags & static_cast<std::uint16_t>(JunctionFlags::HullFallback)));
+    // The taper's narrow end lies 5 x step east of the node; the ring has no vertex between the two edges on the north
+    // side apart from the taper's two ends.
+    bool on_taper = false;
+    for (const auto& v : t.rings[0].vertices) {
+        const double x = static_cast<double>(v.x - node.x) / 1000.0, y = static_cast<double>(v.y - node.y) / 1000.0;
+        if (y > wn + 0.01 && y < ww - 0.01) on_taper = true;
+        if (std::abs(y - wn) < 0.01 && std::abs(x - 5.0 * step) < 0.05) on_taper = true;
+    }
+    CHECK(on_taper);
+    CHECK(north_join(t) >= 5.0 * step - 0.05);
+    CHECK(north_join(t) > north_join(s) + 2.0 * step);
+    // Equal widths: nothing to taper, the ring is the plain build.
+    const auto even = make_scene({{1, 0, 0}, {2, -300, 0}, {3, 300, 0}, {4, 0, -300}},
+        {{10, {2, 1}, narrow}, {11, {4, 1}}, {12, {1, 3}, narrow}});
+    const auto e1 = junction_of(*even, 1), e0 = junction_of(*even, 1, nullptr, off);
+    CHECK(e1.rings[0].vertices == e0.rings[0].vertices);
+}

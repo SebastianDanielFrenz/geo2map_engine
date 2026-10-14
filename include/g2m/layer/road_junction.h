@@ -65,6 +65,7 @@ struct JunctionBuildOptions {
     bool raised_tables = true;             // slice 5: a table or hump tag on a junction node raises the junction (4.4)
     bool hull_when_not_nested = true;      // D34 (slice 8): simple offset rings that do not nest take the all-layer hull
     bool corner_fillets = true;            // block corners take a kerb-return radius (rules.junction.corner_radius_mm)
+    bool width_tapers = true;              // D46: a width step between two continuing stubs tapers 1:5 instead of stepping
 };
 
 // True iff `ring` has at least 3 vertices, no repeated vertex, positive (counter-clockwise) area and no two
