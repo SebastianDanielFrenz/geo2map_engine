@@ -209,9 +209,14 @@ geo2map_engine/
                                       classes, keep left/right forks within fork_max_deg, U-turn, roundabout enter with
                                       exit number, ramp off/on, merge; name/ref/destination of the road entered;
                                       distances in mm), to_string(ManeuverKind)
+    route_map.h                      client map geometry (G4 slice 5): build_map_tile(key, MapLod detail L2 / mid L4 /
+                                      far L6, level-2 roads.graph tiles, MapConfig) -> MapTile (lines over the owned edges,
+                                      runs merged per way, Douglas-Peucker 1 / 8 / 40 m, int32 dm points from the SW corner,
+                                      rank, flags, name/ref string indices, label anchor, (way, segment range));
+                                      simplify_polyline, route_polyline (driven line cut at the snapped ends)
   src/route/                          g2m_route implementation: turn_restriction.cpp, routing_graph.cpp (incl. snapping:
                                       sorted cell index, heading-aware snap, point_at, partial_cost_ms), route_search.cpp,
-                                      region_graph.cpp, route_guidance.cpp
+                                      region_graph.cpp, route_guidance.cpp, route_map.cpp
   bridges/physics_sim/                 g2m_ps_bridge (PLAN.md R2.2 section 1b, G5/G6): the seam between
                                       g2m_phys's ps-free physics-tile data and physics_sim's own
                                       ps::terrain::ITerrainSource - the only place the two projects meet.
@@ -413,7 +418,9 @@ geo2map_engine/
                                       point routes, ALT == Dijkstra on random grids and on fixture point queries, region
                                       graph from roads.graph tiles == whole-world graph), test_route_guidance (a scene per
                                       manoeuvre kind, invariants on 148 fixture routes, a pinned 21-manoeuvre
-                                      hoechst_a66 route); route_fixture_io.h = read_route_fixture (OSM fixture with
+                                      hoechst_a66 route), test_route_map (simplification bounds, ownership/LOD/flag scene,
+                                      route_polyline, every fixture LOD tiled with coverage, accuracy, size/time print);
+                                      route_fixture_io.h = read_route_fixture (OSM fixture with
                                       relations); route_reference.h = the test-only
                                       Dijkstra (node and point), route validators and GraphBuilder; route_scenes.h = the
                                       synthetic cross and random restricted grids
@@ -1015,5 +1022,6 @@ oneway, access and integer ms costs; via-way rules are counted, not applied. Tes
 Slice 2 (2026-10-14): ALT landmarks (`RouteLandmarks`, 16 by default; 30 km on the stand-in grid: 1.2 ms mean,
 1,695 settled vs 78,464 plain), heading-aware snapping and point-to-point routes, region graph assembly from
 roads.graph tiles (`region_graph.h`). Defaults settled: tracks routable at 15 km/h, time restrictions ignored.
-Slice 4 (2026-10-14): guidance manoeuvre list (`route_guidance.h`, `g2m_route_tests "[guidance]"`); next: slice 3
-(restrictions in roads.graph, via-way rules) and slice 5 (map tiles).
+Slice 4 (2026-10-14): guidance manoeuvre list (`route_guidance.h`, `g2m_route_tests "[guidance]"`). Slice 5
+(2026-10-14): client map tiles at three LODs from level-2 roads.graph tiles (`route_map.h`, `"[map]"`; fixture
+tiles <= 22 KiB, < 5 ms). Next: slice 3 (restrictions in roads.graph, via-way rules), batched with a release-id bump.

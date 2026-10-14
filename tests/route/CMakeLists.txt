@@ -8,6 +8,7 @@ add_executable(g2m_route_tests
   test_route_fixture.cpp
   test_route_slice2.cpp
   test_route_guidance.cpp
+  test_route_map.cpp
 )
 target_include_directories(g2m_route_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(g2m_route_tests PRIVATE g2m_route g2m_layers g2m_decode g2m_test_catch_main g2m_warnings g2m_options)

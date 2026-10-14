@@ -292,31 +292,58 @@ length. The longest of them (3.4 km, 21 manoeuvres, through Unterliederbach
 onto the B 8, off at the Main-Taunus-Zentrum ramp) has its kind sequence
 pinned. Guidance of all 148 routes takes well under 1 ms each.
 
-## 6. Client map geometry (slice 5)
+## 6. Client map geometry (slice 5, done)
 
-`build_map_tile(roads.graph tile, lod) -> MapTile` is a client-side product
-with no new server layer. A served `g2m.map.lines` layer comes only if
-bandwidth needs it.
+`build_map_tile(key, lod, level-2 roads.graph tiles, MapConfig) -> MapTile`
+(`g2m/route/route_map.h`) is a client-side product with no new server layer.
+A served `g2m.map.lines` layer comes only if bandwidth needs it.
 
-**One `MapTile` per level-2 tile per LOD:**
+**One `MapTile` per tile key per LOD** (`default_map_config()`; every number
+is config):
 
 | LOD | Tile size | Classes | Simplification | Used by |
 |---|---|---|---|---|
-| detail | L2, 1 km | all routable classes plus service | 1 m Douglas-Peucker | minimap at 0.5-2 km radius |
-| mid | L4, 4 km | tertiary and above | 8 m | full map, zoomed in |
+| detail | L2, 1 km | every roads.graph class (track and up) | 1 m Douglas-Peucker | minimap at 0.5-2 km radius |
+| mid | L4, 4 km | tertiary and above (links share their tier's rank) | 8 m | full map, zoomed in |
 | far | L6, 16 km | primary and above | 40 m | full map, zoomed out |
 
-**Polyline records:**
-- int32 decimetres relative to the tile's SW corner;
+**Polyline records (`MapLine`):**
+- points: int32 decimetres relative to the tile's SW corner, in a shared
+  per-tile point array, way order, at least two;
 - the class rank;
-- flags: oneway, bridge, tunnel, link, roundabout;
-- a name/ref string index;
-- a label anchor (the midpoint of the longest piece);
-- every record also keeps its (way id, segment range), so the route highlight
-  draws from the same records.
+- flags: oneway, oneway against way order, no cars (reversible), bridge,
+  tunnel, link, roundabout (directions use `way_directions`, the routing
+  graph's own rule);
+- name and ref as indices into the tile's sorted string table;
+- a label anchor: the midpoint of the longest piece, plus that piece's
+  direction for label rotation;
+- (way id, first and last segment index), so the route highlight can pick
+  the same records. `route_polyline(graph, route)` gives the exact driven
+  line in mm, cut at the snapped start and end.
 
-**Ownership:** by edge midpoint, the roads.graph `owned_edges` rule, so no line
-is drawn twice.
+**Ownership:** a map tile draws the edges owned by the level-2 roads.graph
+tiles inside it (`owned_edges`: the tile containing the edge midpoint), so no
+edge is drawn twice and every LOD is assembled from level-2 tiles alone.
+Owned edges of one way that follow each other form one polyline, across
+level-2 borders inside the tile. Output sorted by (way id, first segment);
+the input tile order does not matter.
+
+**Measured** (`g2m_route_tests "[map]" -s`, release build, loaded machine):
+
+| fixture | LOD | tiles | lines | points in -> out | total | max per tile | build mean / max |
+|---|---|---|---|---|---|---|---|
+| frankfurt_hoechst | detail | 10 | 808 | 4117 -> 2679 | 67.3 KiB | 21.7 KiB | 0.50 / 4.4 ms |
+| frankfurt_hoechst | mid | 3 | 135 | 702 -> 302 | 10.0 KiB | 6.7 KiB | 0.08 / 0.13 ms |
+| frankfurt_hoechst | far | 2 | 43 | 288 -> 90 | 3.1 KiB | 2.0 KiB | 0.05 / 0.06 ms |
+| hoechst_a66 | detail | 13 | 543 | 2672 -> 1717 | 44.3 KiB | 18.9 KiB | 0.05 / 0.24 ms |
+| hoechst_a66 | mid | 3 | 169 | 1024 -> 382 | 12.5 KiB | 10.6 KiB | 0.08 / 0.21 ms |
+| hoechst_a66 | far | 1 | 106 | 733 -> 217 | 7.5 KiB | 7.5 KiB | 0.17 / 0.17 ms |
+
+Sizes are in-memory (`MapTile::byte_size`, 56-byte records, 8-byte points).
+The fixtures cover only parts of each mid/far tile, so a full far tile of the
+home region is larger; it is built once at load from the region's level-2
+tiles. The worst point deviation stays at the tolerance plus the decimetre
+rounding (1036 mm at detail, 7.9 m at mid, 39.9 m at far).
 
 **The game (R4):**
 - builds ribbon meshes per tile off-thread, with width by class, and caches
@@ -390,8 +417,10 @@ is drawn twice.
 - `g2m/route/route_guidance.h` (slice 4): `build_guidance(graph, roads,
   route, GuidanceConfig)` -> `Maneuver` list, `to_string(ManeuverKind)`.
 
-**Planned:**
-- `build_map_tile(...)` (slice 5).
+- `g2m/route/route_map.h` (slice 5): `build_map_tile`, `MapTile`/`MapLine`,
+  `default_map_config`, `simplify_polyline`, `route_polyline`.
+- `g2m/route/routing_graph.h`: `way_directions` is public (shared by the map
+  flags).
 
 ## 8. Slices
 
@@ -428,6 +457,10 @@ is drawn twice.
    state expansion.
 4. **Done: guidance.** The manoeuvre list (section 5), synthetic tests per
    kind and the pinned 21-manoeuvre hoechst_a66 route. Open: lane hints.
-5. **Map geometry.** Map tiles at three LODs and the route polyline.
+5. **Done: map geometry.** Map tiles at three LODs and the route polyline
+   (section 6). Tests: Douglas-Peucker bounds on random walks, a synthetic
+   scene pinning ownership across a level-2 border, LOD filters, flags,
+   strings, anchors, determinism and errors; on both fixtures every LOD
+   draws every edge of its classes exactly once within tolerance.
 6. **Later, with traffic.** The lane graph (`turn:lanes`, lane connectivity at
    junctions), signals and stop points from the P2 furniture records.

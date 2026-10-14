@@ -55,24 +55,6 @@ bool access_blocked(const RoadGraphWay& way, const RouteConfig& config) {
     return false;
 }
 
-struct Directions {
-    bool forward = true, backward = true;
-};
-Directions way_directions(const RoadGraphWay& way, const RouteConfig& config) {
-    const auto oneway = tag_of(way, "oneway");
-    if (oneway) {
-        if (*oneway == "yes" || *oneway == "true" || *oneway == "1") return {true, false};
-        if (*oneway == "-1" || *oneway == "reverse") return {false, true};
-        if (*oneway == "reversible" || *oneway == "alternating") return {false, false};
-        if (*oneway == "no" || *oneway == "false" || *oneway == "0") return {true, true};
-    }
-    const auto junction = tag_of(way, "junction");
-    if (junction && (*junction == "roundabout" || *junction == "circular")) return {true, false};
-    const auto highway = tag_of(way, "highway");
-    if (highway && contains(config.implied_oneway, *highway)) return {true, false};
-    return {true, true};
-}
-
 std::uint32_t ceil_length_mm(const geom::PointMm& a, const geom::PointMm& b) {
     const double dx = static_cast<double>(b.x - a.x), dy = static_cast<double>(b.y - a.y);
     return static_cast<std::uint32_t>(std::ceil(det::sqrt(dx * dx + dy * dy)));
@@ -96,6 +78,22 @@ std::uint64_t cell_key(std::int64_t cx, std::int64_t cy) {
 }
 
 } // namespace
+
+WayDirections way_directions(const RoadGraphWay& way, const RouteConfig& config) {
+    const auto oneway = tag_of(way, "oneway");
+    if (oneway) {
+        if (*oneway == "yes" || *oneway == "true" || *oneway == "1") return {true, false};
+        if (*oneway == "-1" || *oneway == "reverse") return {false, true};
+        if (*oneway == "reversible" || *oneway == "alternating") return {false, false};
+        if (*oneway == "no" || *oneway == "false" || *oneway == "0") return {true, true};
+    }
+    const auto junction = tag_of(way, "junction");
+    if (junction && (*junction == "roundabout" || *junction == "circular")) return {true, false};
+    const auto highway = tag_of(way, "highway");
+    if (highway && contains(config.implied_oneway, *highway)) return {true, false};
+    return {true, true};
+}
+
 
 const RouteConfig& default_route_config() {
     static const RouteConfig config = [] {
@@ -299,7 +297,7 @@ Result<RoutingGraph> build_routing_graph(const RoadGraph& graph, std::span<const
     // 1. Which ways, in which directions, at which speeds.
     struct WayUse {
         bool used = false;
-        Directions dirs;
+        WayDirections dirs;
         std::uint16_t fwd_kmh = 0, bwd_kmh = 0;
     };
     std::vector<WayUse> use(graph.ways.size());

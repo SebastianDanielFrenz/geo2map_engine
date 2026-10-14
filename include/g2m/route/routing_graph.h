@@ -66,6 +66,13 @@ struct RouteConfig {
 };
 const RouteConfig& default_route_config();
 
+// The directions a car may drive a way in (oneway, oneway=-1, reversible,
+// roundabout, RouteConfig::implied_oneway), in way order.
+struct WayDirections {
+    bool forward = true, backward = true;
+};
+WayDirections way_directions(const RoadGraphWay& way, const RouteConfig& config = default_route_config());
+
 struct RouteGraphNode {
     std::int64_t osm_id = 0;
     geom::PointMm position;
