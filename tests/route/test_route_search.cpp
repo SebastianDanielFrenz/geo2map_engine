@@ -66,8 +66,11 @@ TEST_CASE("Speeds: maxspeed, direction tags, zones, class defaults and the cap",
     REQUIRE(g);
     std::vector<std::pair<std::int64_t, std::uint16_t>> speeds;
     for (const auto& a : g->arcs()) speeds.emplace_back(a.way_id * (a.forward ? 1 : -1), a.speed_kmh);
+    // Typed helper: pair's converting constructor from int literals trips MSVC C4244 (warnings are errors).
+    const auto sp = [](std::int64_t way, std::uint16_t kmh) { return std::pair<std::int64_t, std::uint16_t>{way, kmh}; };
     CHECK(speeds == std::vector<std::pair<std::int64_t, std::uint16_t>>{
-        {1, 50}, {-1, 50}, {2, 100}, {-2, 30}, {3, 50}, {-3, 50}, {4, 120}, {5, 130}, {-5, 130}, {6, 48}, {-6, 48}});
+        sp(1, 50), sp(-1, 50), sp(2, 100), sp(-2, 30), sp(3, 50), sp(-3, 50), sp(4, 120), sp(5, 130), sp(-5, 130),
+        sp(6, 48), sp(-6, 48)});
     // 1000 m (the arc rises 100 m too: sqrt(1000^2 + 100^2) = 1004.988 m, ceil to mm) at 50 km/h.
     CHECK(g->arcs()[0].length_mm == 1004988);
     CHECK(g->arcs()[0].cost_ms == (1004988ull * 36 + 499) / 500);

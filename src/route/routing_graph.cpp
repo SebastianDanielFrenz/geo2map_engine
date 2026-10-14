@@ -105,8 +105,10 @@ const RouteConfig& default_route_config() {
             {"tertiary_link", 30, true},  {"unclassified", 40, true},  {"residential", 30, true},
             {"living_street", 7, true},   {"service", 15, true},       {"track", 15, true},
         };
-        c.zone_speeds = {{"DE:urban", 50}, {"DE:rural", 100}, {"DE:living_street", 7}, {"DE:zone30", 30},
-                         {"DE:zone:30", 30}, {"DE:bicycle_road", 30}, {"walk", 7}};
+        // Typed helper: pair's converting constructor from an int literal trips MSVC C4244 (warnings are errors).
+        const auto zone = [](const char* tag, std::uint16_t kmh) { return std::pair<std::string, std::uint16_t>{tag, kmh}; };
+        c.zone_speeds = {zone("DE:urban", 50), zone("DE:rural", 100), zone("DE:living_street", 7), zone("DE:zone30", 30),
+                         zone("DE:zone:30", 30), zone("DE:bicycle_road", 30), zone("walk", 7)};
         c.blocked_access = {"no", "private", "agricultural", "forestry", "emergency", "use_sidepath"};
         c.implied_oneway = {"motorway"};
         return c;
@@ -454,7 +456,7 @@ Result<RoutingGraph> build_routing_graph(const RoadGraph& graph, std::span<const
     // 5. Via-node rules, sorted by (node, from way, to way, kind).
     std::vector<std::pair<std::uint32_t, RouteRule>> rules;
     std::unordered_map<std::int64_t, char> used_way;
-    for (std::size_t w = 0; w < graph.ways.size(); ++w) if (use[w].used) used_way.emplace(graph.ways[w].osm_id, 1);
+    for (std::size_t w = 0; w < graph.ways.size(); ++w) if (use[w].used) used_way.emplace(graph.ways[w].osm_id, char{1});
     std::vector<std::pair<std::uint32_t, std::int64_t>> arrivals; // (head node, way) of every arc
     arrivals.reserve(arcs.size());
     for (const RouteArc& a : arcs) arrivals.emplace_back(a.to, a.way_id);
