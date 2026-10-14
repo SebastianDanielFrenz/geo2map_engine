@@ -63,10 +63,12 @@ RoadJunction junction_of(const Scene& s, std::int64_t node, JunctionBuildStats* 
     return std::move(*j);
 }
 double roadbed_half_width(const Scene& s, std::int64_t way) {
+    // No statement after an unconditional FAIL: MSVC flags it unreachable (C4702, warnings are errors).
+    const RoadGeomEntry* found = nullptr;
     for (const auto& e : s.tile.entries)
-        if (e.way_id == way && e.cross_section) return carve_footprint(*e.cross_section, 50.0).roadbed_left;
-    FAIL("no entry of way " << way);
-    return 0;
+        if (e.way_id == way && e.cross_section) { found = &e; break; }
+    if (found == nullptr) FAIL("no entry of way " << way);
+    return carve_footprint(*found->cross_section, 50.0).roadbed_left;
 }
 geom::PointMm node_pos(const Scene& s, std::int64_t id) {
     return std::find_if(s.graph.nodes.begin(), s.graph.nodes.end(), [&](const auto& n) { return n.osm_id == id; })->position;

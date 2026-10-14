@@ -13,6 +13,26 @@
 using namespace g2m;
 
 namespace {
+// fopen/getenv are deprecated under the MSVC CRT (C4996, warnings are errors); same pattern as
+// test_junction_gradient.cpp's env().
+std::FILE* open_for_write(const std::string& path) {
+#ifdef _MSC_VER
+    std::FILE* f = nullptr;
+    return fopen_s(&f, path.c_str(), "w") == 0 ? f : nullptr;
+#else
+    return std::fopen(path.c_str(), "w");
+#endif
+}
+std::string env(const char* k) {
+    std::string v;
+#ifdef _MSC_VER
+    char* p = nullptr; std::size_t n = 0;
+    if (_dupenv_s(&p, &n, k) == 0 && p) { v = p; std::free(p); }
+#else
+    if (const char* p = std::getenv(k)) v = p;
+#endif
+    return v;
+}
 void dump_fixture(const std::string& pbf, const std::string& out_path) {
     const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + pbf);
     const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
@@ -21,7 +41,7 @@ void dump_fixture(const std::string& pbf, const std::string& out_path) {
         const auto k = tile_key_at(g2m_test::kZone32N, 2, static_cast<double>(n.position.x) / 1000.0, static_cast<double>(n.position.y) / 1000.0);
         if (k) keys.insert(*k);
     }
-    std::FILE* f = std::fopen(out_path.c_str(), "w"); REQUIRE(f);
+    std::FILE* f = open_for_write(out_path); REQUIRE(f);
     std::fprintf(f, "{\"junctions\":[\n");
     bool first_j = true;
     std::set<std::pair<std::int64_t, std::uint32_t>> seen_entries;
@@ -99,7 +119,7 @@ void dump_fixture(const std::string& pbf, const std::string& out_path) {
 }
 
 TEST_CASE("Diag: dump the fixtures' served junction rings and approach edges", "[.][diag][junction_dump]") {
-    const char* dir = std::getenv("G2M_JUNCTION_DUMP");
-    if (!dir) SKIP("G2M_JUNCTION_DUMP not set");
-    for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) dump_fixture(pbf, std::string(dir) + "/" + pbf + ".json");
+    const std::string dir = env("G2M_JUNCTION_DUMP");
+    if (dir.empty()) SKIP("G2M_JUNCTION_DUMP not set");
+    for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) dump_fixture(pbf, dir + "/" + pbf + ".json");
 }
