@@ -2197,6 +2197,28 @@ rejected.
   `tools/junction_view/render.py`. The config text gains ` corner-fillet=1`; with the de.json change the roads.geom
   config hash and every release id containing roads.geom move; g3xs, g3j, g3d re-recorded (Linux; Windows to confirm).
 
+**D45. A single node whose offset rings break takes the star union of its approach strips, not the convex hull.**
+- Problem: the D34 hull fallback fills every concave wedge between the approaches, so a broken Y, a skewed X or a
+  merge with a short stub reads as a paved triangle far wider than any road (fixture audit: the hull rings were the
+  worst-looking junctions of both fixtures, 36 + 47 hull records).
+- Geometry (`star_union_ring`, single-node junctions with a valid face only): per layer, the union of the approach
+  strips (node to trim, the layer's left/right offsets sampled along the reference) and the node core (convex hull of
+  the sigma-0 edge points and the node). The boundary is the upper envelope in polar angle about the node: candidate
+  angles are every piece vertex and every crossing between pieces; each angular interval takes the farthest piece
+  segment. The result is star-shaped about the node, so simple; strips of the outer layers contain those of the inner,
+  so the rings nest by construction (checked anyway: simple, nested within 2 mm, vertex budget, else the hull as before).
+  A union whose area exceeds 1.02 x the summed piece area + 1 m^2 is rejected (an envelope that fills a shadow, e.g. a
+  roundabout arc approach seen from the node) and falls back to the hull.
+- The junction keeps the `HullFallback` flag (consumers treat it as fallback geometry); trims are unchanged.
+  `JunctionBuildStats::star_fallbacks`; `JunctionBuildOptions::star_union_fallback` = false is the pre-D45 build. Config
+  text gains ` star-union=1` (roads.geom config hash and release ids move).
+- Measured (fixture census): frankfurt_hoechst 20 of 36 hull records are star unions now, hoechst_a66 33 of 47; the rest
+  are clusters (one ring around several nodes, still the hull) and the shadow rejects. Tests: `test_road_junction.cpp`
+  "D45: ..." (valid, nested, reflex vertex on every layer, shares the trim vertices, deterministic); T3 and the 562041
+  case run hull-only. G3-D T12 (`test_terrain_carve.cpp`): the trim-line bound rises from 10 to 15 mm (worst 12.5 mm on
+  a66 node 507147, where the star ring's edge meets the trim at a different point than the hull's). g3xs and g3j
+  re-recorded (Linux; Windows to confirm); g3d unchanged.
+
 ---
 
 

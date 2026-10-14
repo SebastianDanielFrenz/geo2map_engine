@@ -3,6 +3,7 @@
 // G2M_JUNCTION_DUMP set to an output directory; one JSON file per fixture.
 #include "road_fixture.h"
 #include "g2m/layer/road_cross_section.h"
+#include "g2m/layer/road_furniture.h"
 #include "g2m/layer/road_junction.h"
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
@@ -24,7 +25,8 @@ void dump_fixture(const std::string& pbf, const std::string& out_path) {
     std::fprintf(f, "{\"junctions\":[\n");
     bool first_j = true;
     std::set<std::pair<std::int64_t, std::uint32_t>> seen_entries;
-    std::string entries_json;
+    std::string entries_json, furniture_json;
+    std::set<std::string> seen_furniture;
     for (const auto& key : keys) {
         const auto probe = select_road_graph_tile(*world, key);
         if (!probe || probe->owned_edges.empty()) continue;
@@ -48,6 +50,21 @@ void dump_fixture(const std::string& pbf, const std::string& out_path) {
                 std::fprintf(f, "]");
             }
             std::fprintf(f, "]}");
+        }
+        // Placed furniture as world quads (lines, crossings) and posts (signals), once per distinct record.
+        for (const auto& fu : g->furniture) {
+            if (fu.decline != FurnitureDecline::None) continue;
+            char buf[512];
+            if (fu.kind == FurnitureKind::Signal) {
+                const auto post = signal_post(*g, fu); if (!post) continue;
+                std::snprintf(buf, sizeof buf, "{\"kind\":3,\"post\":[%.3f,%.3f,%.3f,%.3f]}", post->x, post->y, post->face_x, post->face_y);
+            } else {
+                const auto q = furniture_quad(*g, fu); if (!q) continue;
+                std::snprintf(buf, sizeof buf, "{\"kind\":%d,\"quad\":[[%.3f,%.3f],[%.3f,%.3f],[%.3f,%.3f],[%.3f,%.3f]]}", static_cast<int>(fu.kind),
+                    (*q)[0].x, (*q)[0].y, (*q)[1].x, (*q)[1].y, (*q)[2].x, (*q)[2].y, (*q)[3].x, (*q)[3].y);
+            }
+            if (!seen_furniture.insert(buf).second) continue;
+            furniture_json += (furniture_json.empty() ? "" : ",\n"); furniture_json += buf;
         }
         for (const auto& e : g->entries) {
             if (!e.profile || !e.cross_section) continue;
@@ -76,7 +93,7 @@ void dump_fixture(const std::string& pbf, const std::string& out_path) {
             entries_json += "]}";
         }
     }
-    std::fprintf(f, "\n],\"entries\":[\n%s\n]}\n", entries_json.c_str());
+    std::fprintf(f, "\n],\"entries\":[\n%s\n],\"furniture\":[\n%s\n]}\n", entries_json.c_str(), furniture_json.c_str());
     std::fclose(f);
 }
 }
