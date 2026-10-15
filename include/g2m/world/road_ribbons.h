@@ -20,8 +20,8 @@ namespace g2m::world {
 // flags (bits, read by the consumer's road shader): 1 lane markings, 2 edge lines, 4 solid separator, 8 fast road,
 // 16 solid paint, 32 overlay (only the paint is drawn), 64 / 128 left / right edge line broken (a junction mouth),
 // 512 / 1024 left / right edge line not drawn, 2048 paving stones (no painted lines), 4096 concrete, 8192 unpaved (a
-// junction patch piece at a track's mouth, drawn like the terrain's dirt). Bit 256 is left free for the consumer (the
-// game's adapter sets it for a verge vertex).
+// junction patch piece at a track's mouth, drawn like the terrain's dirt), 16384 with 2048 = sett / cobblestone (natural
+// stone). Bit 256 is left free for the consumer (the game's adapter sets it for a verge vertex).
 // x, y: metres from the tile's south-west corner; z: absolute height. u: lateral offset from the centre of the counted
 // lanes, v: station, width: the counted lanes' width; verge 1 = the gravel strip beside the road bed (no asphalt, no
 // paint).
