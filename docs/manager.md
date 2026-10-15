@@ -14,7 +14,7 @@ Last updated: 2026-10-15.
 
 | Item | Where | State |
 |---|---|---|
-| Underpass mask with a deck limited to the crossing span (D53-D58) | #13 | Owner approved on racing_game #5 (2026-10-15). Built: decks served in roads.geom encoding 9. Three questions for the owner are in #13. Once it merges, racing_game needs its own `build_road_decks` to emit the inferred decks, together with a pin bump. |
+| Underpass mask with a deck limited to the crossing span (D53-D61) | #13 | Owner approved on racing_game #5 (2026-10-15). Built: decks served in roads.geom encoding 9, steep cutting walls (D59), and the owner's tag rules (D61): parking aisles and `level=*` ways never make a crossing, and a lower road that is all tunnel keeps the upper road on the ground. racing_game #16 is pinned to the head. Waiting on the owner's review. |
 
 ## Waiting on the owner
 
