@@ -1,6 +1,6 @@
 # Terrain migration plan: racing_game -> geo2map
 
-Status (2026-10-14): phases 0-2 done (game re-fit dropped; geo2map 6be9d3f phase 1, 6b6c621 phase 2, 8987291 msvc fix; racing_game switched to g2m::world::TerrainService). Phase 3a done (`StructureSet` / `RoadRibbonTile` builders in g2m_world, byte-pinned against the game; racing_game builds decks and ribbons through them); phase 3b (streamers, `BuildingSet`) is next. Owner answers to section 5 are at the end of this file. Originally written 2026-10-12 in geo2map out/ (gitignored); the files listed under Sources that live in out/ folders exist only on the original machine.
+Status (2026-10-15): phases 0-2 done (game re-fit dropped; geo2map 6be9d3f phase 1, 6b6c621 phase 2, 8987291 msvc fix; racing_game switched to g2m::world::TerrainService). Phase 3a done (`StructureSet` / `RoadRibbonTile` builders in g2m_world, byte-pinned against the game; racing_game builds decks and ribbons through them). Phase 3b done (`ViewStreamer`, `RingStreamer`, `BuildingSet` in g2m_world, pinned against the game's C++ and its GDScript stream policy; racing_game deleted its own streamer and building code and colours chunks by class id). Phase 4 is next. Owner answers to section 5 are at the end of this file. Originally written 2026-10-12 in geo2map out/ (gitignored); the files listed under Sources that live in out/ folders exist only on the original machine.
 
 Owner decision, 2026-10-12, verbatim: "move the ENTIRE terrain logic into geo2map. It is needed for future projects."
 
