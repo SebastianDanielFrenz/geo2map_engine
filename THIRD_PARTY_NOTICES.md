@@ -262,6 +262,47 @@ osm::PbfHandler` is g2m's own virtual-dispatch seam.
   vendored; no source committed to this repository.
 - Licence: BSL-1.0, at its upstream repository (`LICENSE`).
 
+## cpp-httplib - header-only, linked into `g2m_http` (G6)
+
+HTTP/1.1 client and server under `HttpTransport` and `HttpServer`
+(`src/http/http_transport.cpp`, `src/http/http_server.cpp` are the only
+files that include it; no httplib type appears in `include/g2m/http/`).
+Built without TLS (no `CPPHTTPLIB_OPENSSL_SUPPORT`) and without zlib/brotli.
+
+- Upstream: <https://github.com/yhirose/cpp-httplib>
+- Version: **v0.58.0**, commit `4f3f9ef19be83ae97a5d9a059432dc00e445b7ab`,
+  fetched via CMake `FetchContent` (`cmake/deps_http.cmake`, git clone of
+  that exact commit; its own CMakeLists is not used), exposed as the
+  `INTERFACE` target `g2m_dep_httplib` with a `SYSTEM` include dir, linked
+  PRIVATE. Only fetched when `G2M_BUILD_HTTP` is ON (default: only when
+  geo2map_engine is the top-level project). Not vendored; no source
+  committed to this repository.
+- Licence: MIT (upstream `LICENSE`):
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2017 yhirose
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Data
 
 Small derived cuts of third-party geodata are committed under

@@ -173,6 +173,92 @@ std::vector<Bytes> regions() {
     return out;
 }
 
+// ---- G6 HTTP binding seeds (built by hand, not through http_wire, so the
+// seed corpus does not depend on the code under test) ----
+
+std::vector<Bytes> pack_directories() {
+    const Bytes p = pack();
+    const g2m::PackDirectory dir = must(g2m::decode_pack(p), "decode_pack").dir;
+    g2m::PackDirectory empty;
+    empty.layer = "g2m.src.elev.dgm1";
+    empty.rid = rid_of(9);
+    empty.pack = g2m::pack_of(g2m_test::home_tile(-40, -300));
+    return {must(g2m::encode_pack_directory(dir), "encode_pack_directory"),
+            must(g2m::encode_pack_directory(empty), "encode_pack_directory")};
+}
+
+std::string api(const g2m::Request& r) { return "/g2m/v1" + g2m::to_path(r); }
+
+std::string quoted_hex(const g2m::ContentHash& h) { return "\"" + g2m::to_hex(h) + "\""; }
+
+std::vector<Bytes> http_requests() {
+    std::vector<Bytes> out;
+    const auto add = [&](std::uint8_t op, const std::string& line) {
+        Bytes b{op};
+        b.insert(b.end(), line.begin(), line.end());
+        out.push_back(std::move(b));
+    };
+    for (const Bytes& path : paths()) {
+        const std::string p(path.begin(), path.end());
+        add(0, "/g2m/v1" + p);           // GET
+        add(1, "/g2m/v1" + p);           // HEAD
+        add(8, "/maps/v/g2m/v1" + p);    // GET under a base path
+    }
+    const g2m::ReleaseId rid = rid_of(8);
+    g2m::ContentHash h{};
+    h[0] = 0x42;
+    h[31] = 0x17;
+    add(0, api(g2m::Request{g2m::TileRequest{rid, std::string(g2m::kSrcOsmLayer), g2m_test::home_tile(), std::nullopt}}) + "\n" +
+               quoted_hex(h));
+    add(2, "/g2m/v1/manifest");                 // POST -> 405
+    add(0, "/g2m/v1/manifest?x=1");             // query -> 400
+    add(0, "/elsewhere");                       // 404
+    add(0, "msg with %25 and %0A escapes");     // header text
+    return out;
+}
+
+Bytes http_response(const std::string& target, int status, const std::vector<std::string>& headers, const Bytes& body) {
+    std::string head = target + "\n" + std::to_string(status) + "\n";
+    for (const std::string& h : headers) head += h + "\n";
+    head += "\n";
+    Bytes out(head.begin(), head.end());
+    out.insert(out.end(), body.begin(), body.end());
+    return out;
+}
+
+std::vector<Bytes> http_responses() {
+    std::vector<Bytes> out;
+    const std::vector<Bytes> m = manifests();
+    const g2m::ReleaseManifest rel = must(g2m::release_manifest_from_json(std::string(m[0].begin(), m[0].end())), "manifest");
+    out.push_back(http_response(api(g2m::Request{g2m::ManifestRequest{}}), 200, {"Content-Type: application/json"}, m[1]));
+    out.push_back(http_response(api(g2m::Request{g2m::ReleaseManifestRequest{rel.rid}}), 200,
+                                {"Content-Type: application/json"}, m[0]));
+    const g2m::ReleaseId rid = rid_of(5);
+    const std::string lc(g2m::kSrcLandcoverLayer);
+    const g2m::TileKey k = g2m_test::home_tile();
+    const Bytes b = landcover_bodies().front();
+    const Bytes tile = container(lc, k, b, rid, 2);
+    const std::string tile_target = api(g2m::Request{g2m::TileRequest{rid, lc, k, std::nullopt}});
+    out.push_back(http_response(tile_target, 200,
+                                {"Content-Type: application/vnd.g2m.tile", "ETag: " + quoted_hex(g2m::content_hash(b))}, tile));
+    out.push_back(http_response(tile_target, 304, {"ETag: " + quoted_hex(g2m::content_hash(b))}, {}));
+    out.push_back(http_response(tile_target, 404, {"Content-Type: text/plain", "X-G2M-Message: outside coverage"},
+                                text("outside coverage")));
+    out.push_back(http_response(tile_target, 410, {"X-G2M-Newest-Rid: " + g2m::to_hex(rid_of(6))}, {}));
+    out.push_back(http_response(tile_target, 503, {"Retry-After: 7", "X-G2M-Message: busy (try later), 100%25 %E2%80%94 r%C3%BCckw%C3%A4rts"}, {}));
+    out.push_back(http_response(tile_target, 503, {"X-G2M-Degraded: 1"}, {}));
+    out.push_back(http_response(tile_target, 502, {}, text("bad gateway")));
+    out.push_back(http_response(tile_target, 418, {}, {}));
+    const Bytes p = pack();
+    const g2m::PackDirectory dir = must(g2m::decode_pack(p), "decode_pack").dir;
+    out.push_back(http_response(api(g2m::Request{g2m::PackRequest{rid, lc, dir.pack}}), 200,
+                                {"Content-Type: application/vnd.g2m.pack"}, p));
+    out.push_back(http_response(api(g2m::Request{g2m::HashesRequest{rid, lc, dir.pack}}), 200,
+                                {"Content-Type: application/vnd.g2m.hashes"},
+                                must(g2m::encode_pack_directory(dir), "encode_pack_directory")));
+    return out;
+}
+
 } // namespace
 
 std::vector<std::vector<std::uint8_t>> seeds(Target target) {
@@ -256,6 +342,9 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
     case Target::Manifest: return manifests();
     case Target::Path: return paths();
     case Target::Region: return regions();
+    case Target::PackDirectory: return pack_directories();
+    case Target::HttpRequest: return http_requests();
+    case Target::HttpResponse: return http_responses();
     }
     return {};
 }
