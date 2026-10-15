@@ -297,7 +297,9 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
     // Step 2a (D47, the game's tunnel step): tunnel floors. The DEM along the tunnel's own reference is the floor (the
     // lower road's ground; the roof is supplied by the road above, so a floor is never carved into the terrain). A
     // tunnel at least tunnel_chord_min_length_m long takes the straight chord between its two portal samples instead
-    // when that chord is within the grade bound (else the DEM floor, as below the threshold). A function of the entry's
+    // when that chord is within the grade bound (else the DEM floor, as below the threshold). D52 (owner ruling
+    // 2026-10-15, long tunnels follow straight lines): the served threshold is de.json's 200 m. The threshold is
+    // compared with the whole stretch's reference length, never with a tile's part of it. A function of the entry's
     // own way and the DEM along it (road_dem_dependencies), so tile-invariant.
     for (std::size_t i = 0; options.tunnel_floors && i < entries.size(); ++i) {
         auto& entry = entries[i]; if (entry.profile || !entry.decline) continue;

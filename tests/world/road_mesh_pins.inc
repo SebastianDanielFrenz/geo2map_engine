@@ -7,9 +7,11 @@
 // ways 4714670 paving_stones + 403881750 sett) and hoechst_a66.455.5420 with its .holed and .sep variants (owner nodes
 // 48070183, 48070192, 48070221: ways 5891811/5891812/5891813/5891814 sett + 34254246 paving_stones; node 48070238 is mixed
 // too but its patch is unchanged). Checked per junction: patch geometry differs only at those mixed junctions.
+// structure_scene (.holed/.sep) re-pinned for the straight-grade tunnels (D52: its 308 m and 250 m tunnels now take one
+// grade between their portals): regenerated with refgen from racing_game 945455a's mesh code over the new tiles.
 // {case, decks, deck hash, deck start_ref hash, ribbon vertices, ribbon indices, ribbon hash}  // bridges tunnels inferred
-{"structure_scene", 5, 0x5c1c4ddcd66de1cdull, 0xee85fafd354b0935ull, 53836, 128208, 0x6ef507b8a7de02f4ull},  // 1 2 2
-{"structure_scene.holed", 5, 0x5c1c4ddcd66de1cdull, 0xee85fafd354b0935ull, 48244, 114780, 0xad76e2785b6c062aull},  // 1 2 2
+{"structure_scene", 5, 0xbfacf6972f8cf9a6ull, 0xee85fafd354b0935ull, 53836, 128208, 0xd7c4788ea4f9b994ull},  // 1 2 2
+{"structure_scene.holed", 5, 0xbfacf6972f8cf9a6ull, 0xee85fafd354b0935ull, 48244, 114780, 0x04c664c0a568c92aull},  // 1 2 2
 {"junction_scene", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 37877, 93216, 0x4281c573a89ecc99ull},  // 0 0 0
 {"junction_scene.holed", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 33677, 83928, 0x310ecacdfcdfad54ull},  // 0 0 0
 {"frankfurt_hoechst.463.5427", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 1312, 3198, 0x80cd7abfadf07578ull},  // 0 0 0
@@ -50,7 +52,7 @@
 {"overpass.h10", 1, 0x9d1581150f8e5658ull, 0x4d25767f9dce13f5ull, 92128, 228918, 0x5190eb0a3da0cbccull},  // 1 0 0
 {"overpass.h25.sep", 1, 0xe17d6ab1108f3071ull, 0x4d25767f9dce13f5ull, 91728, 228192, 0xaa6b7e91a1edee07ull},  // 1 0 0
 {"overpass.h25", 1, 0xe17d6ab1108f3071ull, 0x4d25767f9dce13f5ull, 91728, 228192, 0xaa6b7e91a1edee07ull},  // 1 0 0
-{"structure_scene.sep", 5, 0x5c1c4ddcd66de1cdull, 0xee85fafd354b0935ull, 53836, 128208, 0x6ef507b8a7de02f4ull},  // 1 2 2
+{"structure_scene.sep", 5, 0xbfacf6972f8cf9a6ull, 0xee85fafd354b0935ull, 53836, 128208, 0xd7c4788ea4f9b994ull},  // 1 2 2
 {"hoechst_a66.452.5419.sep", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 48680, 116520, 0x2ce204f2a5ab4825ull},  // 0 0 0
 {"hoechst_a66.453.5420.sep", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 105934, 252714, 0x5febfb1d66798d22ull},  // 0 0 0
 {"hoechst_a66.454.5420.sep", 4, 0x1ee0985dd09a6027ull, 0x88201fb960ff6465ull, 120962, 292311, 0xd04f46b0d352810bull},  // 4 0 0

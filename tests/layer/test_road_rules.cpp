@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "1677d98b26f4647ed25fd904f4079d516c1885abcffb8b1e6c1c501efb84fc27");
+    CHECK(to_hex(digest) == "2a5997c55dbc4025b0b592873784800b65870e7017a4a2cd0a029082bbd3c4e4");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -198,4 +198,20 @@ TEST_CASE("The junction and furniture blocks are strict", "[layer][road_rules][j
     const auto good = load_text(embedded_text()); REQUIRE(good);
     CHECK(good->junction == builtin_road_rules_de().junction);
     CHECK(good->furniture == builtin_road_rules_de().furniture);
+}
+
+TEST_CASE("The tunnel block: the straight-grade threshold of long tunnels (owner ruling 2026-10-15)", "[layer][road_rules][tunnel]") {
+    CHECK(builtin_road_rules_de().tunnel.straight_grade_min_length_m == 200);
+    const std::string from = "\"tunnel\": { \"straight_grade_min_length_m\": 200 }";
+    CHECK_FALSE(load_text(mutated(from, "\"tunnelx\": { \"straight_grade_min_length_m\": 200 }")));          // the block is required
+    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { }")));                                                 // and its key
+    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 200, \"bogus\": 1 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": -1 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 100001 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 200.5 }")));         // integer metres
+    const auto never = load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 0 }"));       // 0 = never
+    REQUIRE(never); CHECK(never->tunnel.straight_grade_min_length_m == 0);
+    const auto other = load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 350 }"));
+    REQUIRE(other); CHECK(other->tunnel.straight_grade_min_length_m == 350);
+    CHECK(other->junction == builtin_road_rules_de().junction);
 }

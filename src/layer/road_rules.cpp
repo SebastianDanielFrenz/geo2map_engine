@@ -112,6 +112,13 @@ bool read_furniture_rules(Reader& rd, const json& root, FurnitureRules& out) {
            read_pattern_map(rd, *f, kPath, "crossing_kind", out.crossing_kind);
 }
 
+bool read_tunnel_rules(Reader& rd, const json& root, TunnelRules& out) {
+    const auto* t = rd.field(root, "root", "tunnel");
+    static constexpr const char* kPath = "tunnel";
+    return t && rd.keys(*t, kPath, {"straight_grade_min_length_m"}) &&
+           rd.integer(*t, kPath, "straight_grade_min_length_m", 0, 100000, out.straight_grade_min_length_m);
+}
+
 const CrossingPattern* find_pattern(const std::vector<CrossingPatternEntry>& table, std::string_view value) {
     const auto it = std::lower_bound(table.begin(), table.end(), value,
         [](const CrossingPatternEntry& e, std::string_view v) { return e.value < v; });
@@ -141,7 +148,7 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
     Reader rd;
     const auto fail = [&]() { return make_error(ErrorCode::InvalidArgument, "road rules: " + rd.err); };
     if (!rd.keys(j, "root", {"format", "country", "min_lane_mm", "added_lane_side", "cycle_lane_mm", "sidewalk_mm", "tagged_shoulder_mm",
-            "parking_mm", "traffic_calming", "junction", "furniture", "min_edge_radius_m", "classes", "sources"})) return fail();
+            "parking_mm", "traffic_calming", "junction", "furniture", "tunnel", "min_edge_radius_m", "classes", "sources"})) return fail();
     std::string format;
     if (!rd.text(j, "root", "format", format)) return fail();
     if (format != "g2m.road_rules/1") return make_error(ErrorCode::Unsupported, "road rules: format '" + format + "'");
@@ -176,7 +183,7 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
                 !rd.integer(*entry, path, "width_mm", 0, 100000, out.width_mm)) return fail();
         }
     }
-    if (!read_junction_rules(rd, j, rules.junction) || !read_furniture_rules(rd, j, rules.furniture)) return fail();
+    if (!read_junction_rules(rd, j, rules.junction) || !read_furniture_rules(rd, j, rules.furniture) || !read_tunnel_rules(rd, j, rules.tunnel)) return fail();
     const auto* sources = rd.field(j, "root", "sources");
     if (!sources || !rd.object(*sources, "sources")) return fail();
     for (auto it = sources->begin(); it != sources->end(); ++it)

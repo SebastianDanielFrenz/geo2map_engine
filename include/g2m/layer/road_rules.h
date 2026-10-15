@@ -80,6 +80,13 @@ struct FurnitureRules {
     const CrossingPattern* find_marking(std::string_view value) const;
     const CrossingPattern* find_kind(std::string_view value) const;
 };
+// Tunnel profiles (owner ruling 2026-10-15: long tunnels follow straight lines). A tunnel stretch at least
+// straight_grade_min_length_m long takes one constant grade between its two portal heights instead of the DEM floor
+// (served through RoadCompletionOptions::tunnel_chord_min_length_m, served_road_completion_options()); 0 = never.
+struct TunnelRules {
+    std::int32_t straight_grade_min_length_m = 0;
+    friend bool operator==(const TunnelRules&, const TunnelRules&) = default;
+};
 // Constants the junction block is validated against (design 5.2, 5.3): the widest carve blend and the radius
 // of roads.geom tiles a carved L0 tile reads.
 inline constexpr std::int32_t kCarveBlendMaxM = 15;
@@ -116,6 +123,7 @@ struct RoadRules {
     std::array<TrafficCalmingRules, kProfileFeatureKindCount> traffic_calming{}; // indexed by ProfileFeatureKind
     JunctionRules junction;
     FurnitureRules furniture;
+    TunnelRules tunnel;
     std::vector<RoadClassRules> classes;      // ascending highway value
     ContentHash content_sha256{};             // SHA-256 of the JSON bytes the rules were loaded from
 
@@ -129,7 +137,8 @@ struct RoadRules {
 // keys rejected, every highway class of the default RoadStyle present, widths
 // 0..20000 mm, tapers consistent with min_edge_radius_m, junction and furniture
 // blocks (P2) with every length in (0, 200] m and the cluster caps consistent
-// with reach_max_m and the carver radius.
+// with reach_max_m and the carver radius, and the tunnel block (straight-grade
+// threshold 0..100000 m, 0 = never).
 Result<RoadRules> load_road_rules(std::span<const std::byte> json);
 // The embedded data/road_rules/de.json, parsed once. A corrupt build aborts.
 const RoadRules& builtin_road_rules_de();

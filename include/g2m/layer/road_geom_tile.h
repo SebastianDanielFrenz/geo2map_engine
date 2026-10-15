@@ -73,7 +73,8 @@ struct RoadCompletionOptions {
     // tunnel_max_grade / tunnel_min_radius_m with the clamped first/last sample secants as end grades. A tunnel at
     // least tunnel_chord_min_length_m long is fitted to the straight chord between its two portal samples instead (the
     // DEM above a deep tunnel is the mountain, not the floor); 0 = never (every tunnel follows the DEM, the game's
-    // rule). Owner question Q1 is open: the threshold is configuration, the served default keeps the game's rule.
+    // rule, and this struct's default). Owner ruling 2026-10-15 (Q1): long tunnels follow straight lines; the served
+    // threshold is de.json's tunnel.straight_grade_min_length_m (200 m), see served_road_completion_options().
     bool tunnel_floors = true;
     double tunnel_spacing_m = 5;
     double tunnel_max_grade = 0.30;
@@ -87,10 +88,15 @@ struct RoadCompletionOptions {
 // The outer bounds of the tunnel options; the validator certifies a TunnelFloor profile against them.
 inline constexpr double kRoadCompletionMaxTunnelGrade = 0.30;
 inline constexpr double kRoadCompletionMinTunnelRadiusM = 20;
-// The completion options of the served roads.geom tiles: the tier on, every value at its default. RoadGeomDeriver
+// The completion options of the served roads.geom tiles: the tier on, every value at its default except the tunnel
+// straight-grade threshold, which comes from the embedded de.json (tunnel.straight_grade_min_length_m). RoadGeomDeriver
 // builds with them and writes each value into its config hash text; the goldens and the tests that mean "what the
 // deriver serves" use this function too.
-inline RoadCompletionOptions served_road_completion_options() { RoadCompletionOptions o; o.enabled = true; return o; }
+inline RoadCompletionOptions served_road_completion_options() {
+    RoadCompletionOptions o; o.enabled = true;
+    o.tunnel_chord_min_length_m = builtin_road_rules_de().tunnel.straight_grade_min_length_m;
+    return o;
+}
 // What the completion tier did, per kind (design 6.6; diagnostics only, never stored).
 struct RoadCompletionStats {
     std::size_t retry_candidates = 0, retry_accepted = 0;

@@ -1098,7 +1098,7 @@ Terrain migration phase 4 (design D47, 2026-10-15): `roads.geom` encoding 8 (`kR
 `LayerEncoding::RoadGeomTunnels`; the byte layout of 7, which still decodes and is written on request without tunnel floors).
 `complete_road_profiles` step 2a builds tunnel floors (`ProfileProvenance::TunnelFloor` = 4; the game's DEM-floor step,
 options `tunnel_floors`, `tunnel_spacing_m` 5, `tunnel_max_grade` 0.30, `tunnel_min_radius_m` 20,
-`tunnel_chord_min_length_m` 0 = never, owner Q1 open); tunnel profiles are never carved, never paint grip and stay `Tunnel`
+`tunnel_chord_min_length_m`, struct default 0 = never; served value from de.json since D52, see below); tunnel profiles are never carved, never paint grip and stay `Tunnel`
 approaches. `bridge_anchor_reuse`: the end plane of an accepted incident bridge stretch (recomputed tile-invariantly, one
 level) wins over the base anchor; a ground stretch at a bridging node with no accepted bridge ends on the DEM plane, and
 falls back to the base anchors when those planes leave no cubic (`ground_base_fallback`). `Walk::anchor` tries every incident
@@ -1146,13 +1146,21 @@ junction rings with a circular arc (rational quadratic Bezier), radius per highw
 `corner_oneway_pair_*`), concentric over the three layers; trims extend past the tangent points. A fillet that breaks
 simplicity, 2 mm nesting or the vertex budget is dropped per corner (full, half radius, then sharp).
 `JunctionBuildOptions::corner_fillets`, stats `fillets`/`filleted_junctions`/`fillet_fallbacks`. Config text
-` corner-fillet=1`; de.json SHA `1677d98b...fc27`. Tests `tests/layer/test_junction_fillets.cpp` ([fillet]); hidden
+` corner-fillet=1`; de.json SHA `1677d98b...fc27` (`2a5997c5...c4e4` since D52). Tests `tests/layer/test_junction_fillets.cpp` ([fillet]); hidden
 `[.][diag][junction_dump]` (`tests/layer/test_junction_dump.cpp`, env G2M_JUNCTION_DUMP) + `tools/junction_view/render.py`
 draw rings and approach edges as PNGs.
 
 Width tapers (design D46): `taper_corner` in `src/layer/road_junction.cpp` replaces the cap-corner step where a road
 continues at a different width with a straight 1:5 taper (at least 1 m) on every layer; `JunctionBuildOptions::width_tapers`,
 config text ` width-taper=5`, test `[taper]` in `tests/layer/test_junction_fillets.cpp`.
+
+Straight-grade tunnels (design D52, owner ruling 2026-10-15): `data/road_rules/de.json` block `tunnel`
+(`straight_grade_min_length_m` 200, `TunnelRules`, `RoadRules::tunnel`; de.json SHA `2a5997c5...c4e4`);
+`served_road_completion_options()` sets `tunnel_chord_min_length_m` from it, so a tunnel stretch of 200 m or more takes one
+constant grade between its portal samples (DEM floor below, or when steeper than 30 %). Config text `tunnel-floor=.../chord:200`
+(release id bump; no golden moved, the fixture tunnels are all under 60 m; phase-3a mesh pins of `structure_scene` regenerated
+with the game's mesh code). Tests `[tunnel]` in test_road_completion.cpp (tile edge invariance + controls, fixture measurement)
+and test_road_rules.cpp.
 
 ## G4 routing, slice 1 (2026-10-14)
 
