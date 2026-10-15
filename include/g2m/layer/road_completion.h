@@ -9,24 +9,29 @@
 // Tile invariance (decision D25). The result for one entry is a function of
 //   - the entry's own strict outcome and the strict pass's anchor at its two end nodes (road_strict_anchor, D30: the
 //     same reads the strict pass of this very entry makes, including P1's latent far-end read of a bridge span),
-//   - the context graph within 60 m of the entry's two end nodes, and
-//   - the DEM within 63.5 m per axis of those end nodes (60 m walk + 3 m footprint + 0.5 m to the far edge of a
-//     bilinear cell; at most 65 m with kRoadCompletionMaxAbutmentPathM) and along the entry's own way,
+//   - the context graph within abutment_path_m (served 200 m, D48) of the entry's two end nodes and of the far end
+//     nodes of the bridges incident to them (D47's accepted bridges), and
+//   - the DEM within abutment_path_m + 3.5 m per axis of those nodes (walk + 3 m footprint + 0.5 m to the far edge of
+//     a bilinear cell; at most 205 m with kRoadCompletionMaxAbutmentPathM) and along the entry's own way,
 // and of nothing else: not of other entries, not of their strict or completed outcome, not of the tile. The reads fit
-// what every tile holding the entry already has: a way incident to a node within 60 m of an end node n touches the
-// level-2 tile of n widened by the 128 m halo, so it is in the roads.graph tile of n, which road_context_dependencies
-// lists (n is a node of the entry's way); the DEM margin of road_dem_dependencies is 65 m around the way's segments.
+// what every tile holding the entry already has: every node the walk starts from is a node of a bridge way incident
+// to a node of the tile's ways, and road_bridge_dependencies (second discovery stage, D35) adds the DEM and roads.graph
+// tiles of a 205 m square around every node of those bridge ways (D48); a way incident to a node in that square lies
+// in that node's roads.graph tile.
 // Anchors are therefore NOT read from other entries' profiles (the game's anchor map, which would see a bridge only
 // in a tile that holds it) but recomputed from the node itself by the same pure function (road_bridge_anchor).
+#include "g2m/layer/road_dem_dependencies.h"
 #include "g2m/layer/road_geom_tile.h"
 namespace g2m {
-// The largest RoadCompletionOptions::abutment_path_m complete_road_profiles accepts (decision D29). The walk's support
-// point lies at most abutment_path_m from the end node (per axis too); junction_plane reads a 3 m footprint around it
-// and a bilinear sample reaches a cell whose square ends up to 0.5 m beyond the sample point per axis. 61.5 + 3 + 0.5
-// = 65 m, the road_dem_dependencies margin around the entry's own way, so every DEM cell the walk reads lies in a DEM
-// tile that every tile holding the entry loads. (Slice 6 accepted 62 m: such a walk reads up to 65.5 m away.)
-inline constexpr std::int64_t kRoadCompletionDemMarginMm = 65000;   // == road_dem_dependencies' default margin_mm
-inline constexpr double kRoadCompletionMaxAbutmentPathM = 61.5;
+// The largest RoadCompletionOptions::abutment_path_m complete_road_profiles accepts (decisions D29, D48). The walk's
+// support point lies at most abutment_path_m from its start node (per axis too); junction_plane reads a 3 m footprint
+// around it and a bilinear sample reaches a cell whose square ends up to 0.5 m beyond the sample point per axis. Every
+// start node is a node of a bridge way road_bridge_dependencies lists, and around each of those nodes it adds the DEM
+// and roads.graph tiles of a kRoadBridgeWalkMarginMm (205 m) square: 201.5 + 3 + 0.5 = 205 m, so every node and DEM
+// cell the walk reads is in an input every tile holding the entry loads. (D29's bound was 61.5 m against the 65 m
+// margin around the entry's own way; slice 6 accepted 62 m.)
+inline constexpr std::int64_t kRoadCompletionDemMarginMm = kRoadBridgeWalkMarginMm;
+inline constexpr double kRoadCompletionMaxAbutmentPathM = 201.5;
 static_assert(kRoadCompletionMaxAbutmentPathM + 3 + 0.5 <= static_cast<double>(kRoadCompletionDemMarginMm) / 1000.0);
 // What a bridge abutment plane at `node` is, as the completion tier computes it.
 struct RoadBridgeAnchor {

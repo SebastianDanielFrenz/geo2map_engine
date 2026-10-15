@@ -2264,6 +2264,26 @@ rejected.
   release ids move (and with them every terrain.carved id). Tests: `[D47]` in `tests/layer/test_road_completion.cpp`
   against `game_reference::complete_road_profiles_live` (the game's code, verbatim); goldens g3xs, g3j, g3d re-recorded.
 
+**D48. The abutment walk is bounded at 200 m; stage 2 lists the walk's squares (terrain migration phase 5).**
+- Problem (terrain migration plan O4, GAP 2b): the game's `abutment` walks through bridges with no total cap; D25/D29
+  bounded it at 60 m (61.5 m max) to keep the reads inside the 65 m margin of the entry's own way. Corridor bridges
+  needing more than 60 m: 39 of 63. Owner answer Q2: 200 m (48 of 63), no chain fit; the rest keep the relaxed secant
+  or stay declined.
+- `RoadCompletionOptions::abutment_path_m` served 200, `kRoadCompletionMaxAbutmentPathM` 201.5. The bound is no longer
+  the entry's own way margin: every walk starts at a node of a bridge way incident to a node of the tile's ways (an
+  entry end node, or the far end of an accepted incident bridge, D47), so `road_bridge_dependencies` (stage 2, D35) adds
+  around EVERY node of those bridge ways the elev.base and roads.graph tiles of a square of half-width
+  `kRoadBridgeWalkMarginMm` = 205 m (201.5 + 3 m footprint + 0.5 m bilinear reach; a way incident to a node in the square
+  lies in that node's roads.graph tile). The target tile itself is never listed. No third discovery stage: the start
+  nodes are known after stage 1. Config text ` bridge-walk-margin=205`, `completion-abutment=32/200`; release ids move.
+- Tests `[D48]`: the fence (paths 201.4 / 201.9 m at the bound give the same outcome with the tile's inputs and with a
+  hole-free DEM; a 203 m budget reads past the squares; the pre-D48 stage 2 misses a 199 m walk's support), walks of
+  58 / 190 / 480 m at 60 and 200 m, and the fixture cost (frankfurt_hoechst DEM inputs 303 -> 306, hoechst_a66 458 -> 467,
+  context graph tiles 105 -> 115; build time unchanged within noise; no fixture outcome or byte changes). The D47 bridge
+  chain now matches the game's node height (99.941 m both; 99.211 m at 60 m).
+- GAP 3 (retry way 285188051 on utm32n/2/464/5394, ground ways 25589596 and 320190187): an input diff needs the real
+  stores; not reproduced on the fixtures, open until the probe runs.
+
 ---
 
 

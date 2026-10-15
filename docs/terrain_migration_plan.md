@@ -1,6 +1,6 @@
 # Terrain migration plan: racing_game -> geo2map
 
-Status (2026-10-15): phases 0-2 done (game re-fit dropped; geo2map 6be9d3f phase 1, 6b6c621 phase 2, 8987291 msvc fix; racing_game switched to g2m::world::TerrainService). Phase 3a done (`StructureSet` / `RoadRibbonTile` builders in g2m_world, byte-pinned against the game; racing_game builds decks and ribbons through them). Phase 3b done (`ViewStreamer`, `RingStreamer`, `BuildingSet` in g2m_world, pinned against the game's C++ and its GDScript stream policy; racing_game deleted its own streamer and building code and colours chunks by class id). Phase 4 done in code (D47: roads.geom encoding 8, tunnel floors as provenance `TunnelFloor`, accepted-bridge anchors; fixture roadcmp: 0 game-only entries; the real-store probe is still to be run by the owner after warming the stores). Phase 5 is next. Owner answers to section 5 are at the end of this file. Originally written 2026-10-12 in geo2map out/ (gitignored); the files listed under Sources that live in out/ folders exist only on the original machine.
+Status (2026-10-15): phases 0-2 done (game re-fit dropped; geo2map 6be9d3f phase 1, 6b6c621 phase 2, 8987291 msvc fix; racing_game switched to g2m::world::TerrainService). Phase 3a done (`StructureSet` / `RoadRibbonTile` builders in g2m_world, byte-pinned against the game; racing_game builds decks and ribbons through them). Phase 3b done (`ViewStreamer`, `RingStreamer`, `BuildingSet` in g2m_world, pinned against the game's C++ and its GDScript stream policy; racing_game deleted its own streamer and building code and colours chunks by class id). Phase 4 done in code (D47: roads.geom encoding 8, tunnel floors as provenance `TunnelFloor`, accepted-bridge anchors; fixture roadcmp: 0 game-only entries; the real-store probe is still to be run by the owner after warming the stores). Phase 5 done in code (D48: 200 m abutment walk, 205 m stage-2 walk squares; release id bump #2); the game's completion stays until the probe shows zero game-only entries. Phase 6 is next. Owner answers to section 5 are at the end of this file. Originally written 2026-10-12 in geo2map out/ (gitignored); the files listed under Sources that live in out/ folders exist only on the original machine.
 
 Owner decision, 2026-10-12, verbatim: "move the ENTIRE terrain logic into geo2map. It is needed for future projects."
 
@@ -378,6 +378,7 @@ Split into two game PRs if needed.
   - Probe: zero game-only entries on both regions, which is the deletion gate.
   - Corridor and Hessen drive over the listed bridges (63 / 35 unique).
 - **Release id:** **bump.** Phases 4 and 5 can be one bump if the owner prefers fewer cold stores (Q3).
+- **As built (2026-10-15):** design D48. The "context halo" is not the roads.graph halo (unchanged at 128 m, so roads.graph ids stay): stage 2 lists the DEM and graph tiles of a 205 m square around every node of the incident bridges instead. Fixture cost +1-2 % DEM inputs. The deletion of the game's completion waits for the probe (not runnable without stores).
 
 ### Phase 6: served carve readiness (geo2map only, no game id change yet, M)
 

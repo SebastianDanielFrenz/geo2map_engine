@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -58,9 +59,10 @@ struct Env {
     RoadProfileLimits limits;
 };
 // The deriver's inputs (both discovery stages); `bridge_far_end` = false stops after stage 1 (the pre-D35 set).
-std::unique_ptr<Env> make_env(const RoadGraph& world, const TileKey& key, const Fn& height, bool bridge_far_end = true) {
+std::unique_ptr<Env> make_env(const RoadGraph& world, const TileKey& key, const Fn& height, bool bridge_far_end = true,
+        std::int64_t walk_margin_mm = kRoadBridgeWalkMarginMm) {
     auto env = std::make_unique<Env>();
-    auto in = g2m_test::road_geom_inputs(world, key, bridge_far_end); REQUIRE(in);
+    auto in = g2m_test::road_geom_inputs(world, key, bridge_far_end, walk_margin_mm); REQUIRE(in);
     env->tile = std::move(in->tile); env->context = std::move(in->context);
     env->heights.resize(in->dem_keys.size());
     std::vector<const HeightTile*> views;
@@ -530,40 +532,36 @@ std::unique_ptr<FullDem> full_dem(const RoadGraph& world, const Fn& height) {
     auto dem = RoadDemSampler::make(views); REQUIRE(dem); out->dem = std::move(*dem);
     return out;
 }
-// A bridge B (way 40) from the west tile 455 to node 5 at x = 702.7, 65.3 m west of the DEM tile edge at x = 768, outside
-// the 128 m halo of tile 455. From node 5 a second bridge (way 41, `span` m) and a ground road (way 31) run east, so the
-// walk from node 5 crosses `span` m of bridge and finds its support 32 m further: path span + 32. Tile 455's DEM
-// dependencies end at x = 768 (65 m beyond B's last segment); tile 455 does not hold ways 41 and 31 (its context does).
-// The fence is built on the stage-1 dependency set (make_env(..., false)): D29 bounds the walk by the entry's OWN way
-// margin, which every tile holding the entry loads. D35's second stage adds the DEM around incident bridges (way 41
-// here), which would hide the control's missing cell, so it is left out to keep the bound itself under test.
-RoadGraph fence_world(double span) {
-    return world_of({{1, 300, 0}, {2, 400, 0}, {3, 500, 0}, {4, 600, 0}, {5, 702.7, 0}, {6, 702.7 + span, 0}, {7, 802.7 + span, 0}},
-        {{30, {1, 2, 3}}, {40, {3, 4, 5}, kBridge}, {41, {5, 6}, kBridge}, {31, {6, 7}}});
+// D48 fence (terrain migration phase 5). A bridge B (way 40) from the west tile 455 to node 5 at x = 817.9, outside the
+// 128 m halo of tile 455; a 1 m bridge (way 41) to node 6 at 818.9, a second bridge (way 42, `span` m) and a ground road
+// (way 31) run east, so the walk from node 5 crosses 1 + `span` m of bridge and finds its support 32 m further: path
+// span + 33. Ways 40 and 41 are the bridges incident to tile nodes (stage 2, D35); their nodes' 205 m squares end at
+// x = 1023.9, just short of the DEM tile edge at x = 1024. Way 42 is not incident to a tile node: only the squares
+// cover the walk beyond way 41's own 65 m margin.
+RoadGraph fence_world(double span, double x5 = 817.9) {
+    return world_of({{1, 300, 0}, {2, 400, 0}, {3, 500, 0}, {4, 600, 0}, {5, x5, 0}, {6, x5 + 1, 0}, {7, x5 + 1 + span, 0}, {8, x5 + 101 + span, 0}},
+        {{30, {1, 2, 3}}, {40, {3, 4, 5}, kBridge}, {41, {5, 6}, kBridge}, {42, {6, 7}, kBridge}, {31, {7, 8}}});
 }
 }
 
-TEST_CASE("completion: the walk budget bound keeps every DEM read inside the entry's DEM dependencies (D29)", "[layer][roads][completion][invariance]") {
+TEST_CASE("completion: the walk budget bound keeps every DEM read inside the stage-2 walk squares (D29, D48)", "[layer][roads][completion][invariance][D48]") {
     RoadCompletionOptions opts; opts.enabled = true;
-    // The bound itself: 61.5 m accepted, anything beyond refused before any work.
+    // The bound itself: 201.5 m accepted, anything beyond refused before any work.
     {
-        const auto env = make_env(fence_world(29.4), kTile, rolling, false);
+        const auto env = make_env(fence_world(168.4), kTile, rolling);
         const auto builder = RoadReferenceBuilder::make(env->context); REQUIRE(builder);
         auto entries = build(*env, false).entries; std::vector<RoadProfileOrigin> origins;
         opts.abutment_path_m = kRoadCompletionMaxAbutmentPathM;
         CHECK(complete_road_profiles(entries, origins, *builder, *env->dem, zone, env->limits, opts));
         opts.abutment_path_m = kRoadCompletionMaxAbutmentPathM + 0.1;
-        const auto refused = complete_road_profiles(entries, origins, *builder, *env->dem, zone, env->limits, opts);
-        CHECK_FALSE(refused);
-        opts.abutment_path_m = 62;   // slice 6's bound
         CHECK_FALSE(complete_road_profiles(entries, origins, *builder, *env->dem, zone, env->limits, opts));
     }
     opts.abutment_path_m = kRoadCompletionMaxAbutmentPathM;
-    // Paths 61.4 m (inside the bound) and 61.9 m (beyond it): the tile's own DEM dependencies and a DEM without holes give
+    // Paths 201.4 m (inside the bound) and 201.9 m (beyond it): the tile's own dependencies and a DEM without holes give
     // the same tier result for every entry.
-    for (const double span : {29.4, 29.9}) {
+    for (const double span : {168.4, 168.9}) {
         const auto world = fence_world(span);
-        const auto env = make_env(world, kTile, rolling, false); const auto full = full_dem(world, rolling);
+        const auto env = make_env(world, kTile, rolling); const auto full = full_dem(world, rolling);
         const auto builder = RoadReferenceBuilder::make(env->context); REQUIRE(builder);
         const auto strict = build(*env, false);
         const auto bridge = index_of(strict, 40, 0); REQUIRE_FALSE(strict.entries[bridge].profile);   // two bridges meet at node 5
@@ -572,18 +570,53 @@ TEST_CASE("completion: the walk budget bound keeps every DEM read inside the ent
         REQUIRE(complete_road_profiles(open, oo, *builder, *full->dem, zone, env->limits, opts));
         for (std::size_t i = 0; i < fenced.size(); ++i) CHECK(same_outcome(fenced[i], fo[i], open[i], oo[i]));
         const bool completed = oo[bridge].provenance == ProfileProvenance::BridgeCompleted;
-        std::printf("D29 fence, walk path %.1f m at budget %.1f m: bridge completed %d (fenced DEM and full DEM agree)\n", span + 32, opts.abutment_path_m, completed);
-        CHECK(completed == (span + 32 <= opts.abutment_path_m));
+        const auto a = road_bridge_anchor(env->context, *env->dem, zone, 5, opts);
+        std::printf("D48 fence, walk path %.1f m at budget %.1f m: abutment at node 5 %d, bridge completed %d (fenced DEM and full DEM agree)\n",
+            span + 33, opts.abutment_path_m, a.plane.has_value(), completed);
+        CHECK(a.plane.has_value() == (span + 33 <= opts.abutment_path_m));
     }
-    // Control: slice 6's 62 m budget reads beyond the DEM dependencies at path 61.9 m: the tile's DEM misses the cell the
-    // full DEM has, so the abutment exists in one and not the other.
+    // Control 1: a 203 m budget at path 202.9 m reads beyond the squares: the tile's DEM misses the cell the full DEM has.
     {
-        const auto world = fence_world(29.9);
-        const auto env = make_env(world, kTile, rolling, false); const auto full = full_dem(world, rolling);
-        RoadCompletionOptions wide; wide.abutment_path_m = 62;
+        const auto world = fence_world(169.9);
+        const auto env = make_env(world, kTile, rolling); const auto full = full_dem(world, rolling);
+        RoadCompletionOptions wide; wide.abutment_path_m = 203;
         const auto fenced = road_bridge_anchor(env->context, *env->dem, zone, 5, wide), open = road_bridge_anchor(env->context, *full->dem, zone, 5, wide);
-        std::printf("D29 control, 62 m budget at path 61.9 m: abutment with the tile's DEM %d, with the full DEM %d\n", fenced.plane.has_value(), open.plane.has_value());
+        std::printf("D48 control, 203 m budget at path 202.9 m: abutment with the tile's DEM %d, with the full DEM %d\n", fenced.plane.has_value(), open.plane.has_value());
         CHECK_FALSE(fenced.plane.has_value()); CHECK(open.plane.has_value());
+    }
+    // Control 2: the pre-D48 stage 2 (no squares) misses way 42's ground support at a served 200 m walk. Node 5 at
+    // x = 830: the support at x = 1029 lies in the DEM tile beyond x = 1024, which only the squares (to 1036) list.
+    {
+        const auto world = fence_world(166, 830);
+        const auto env = make_env(world, kTile, rolling, true, 0); const auto full = full_dem(world, rolling);
+        const auto served = served_road_completion_options();
+        const auto fenced = road_bridge_anchor(env->context, *env->dem, zone, 5, served), open = road_bridge_anchor(env->context, *full->dem, zone, 5, served);
+        std::printf("D48 control, no walk squares at path 199 m: abutment with the tile's DEM %d, with the full DEM %d\n", fenced.plane.has_value(), open.plane.has_value());
+        CHECK_FALSE(fenced.plane.has_value()); CHECK(open.plane.has_value());
+        const auto squared = make_env(world, kTile, rolling);
+        CHECK(road_bridge_anchor(squared->context, *squared->dem, zone, 5, served).plane.has_value());
+    }
+}
+
+TEST_CASE("completion: walks of 60, 200 and 500 m at the 60 m and the served 200 m budget (D48)", "[layer][roads][completion][D48]") {
+    // fence_world(span) needs a walk of span + 33 m from node 5.
+    for (const double path : {58.0, 190.0, 480.0}) {
+        const auto world = fence_world(path - 33);
+        const auto env = make_env(world, kTile, rolling); const auto full = full_dem(world, rolling);
+        for (const double budget : {60.0, 200.0}) {
+            RoadCompletionOptions o = served_road_completion_options(); o.abutment_path_m = budget;
+            const auto fenced = road_bridge_anchor(env->context, *env->dem, zone, 5, o), open = road_bridge_anchor(env->context, *full->dem, zone, 5, o);
+            REQUIRE(fenced.bridging);
+            CHECK(fenced.plane.has_value() == open.plane.has_value());
+            if (fenced.plane && open.plane) CHECK(fenced.plane->height == open.plane->height);
+            CHECK(fenced.plane.has_value() == (path <= budget));
+            RoadCompletionStats stats; auto g = build_road_geom_tile(env->tile, *env->dem, env->limits, &env->context, builtin_road_rules_de(), o, &stats); REQUIRE(g);
+            const auto i = index_of(*g, 40, 0);
+            std::printf("D48 walk %.0f m at budget %.0f m: abutment %d, bridge 40 %s\n", path, budget, fenced.plane.has_value(),
+                g->entries[i].profile ? (g->origins[i].provenance == ProfileProvenance::BridgeCompleted ? "completed" : "profiled") : "declined");
+            // Without support at node 5 the span has no second abutment: it stays declined (the relaxed secant needs both).
+            CHECK(g->entries[i].profile.has_value() == (path <= budget));
+        }
     }
 }
 
@@ -806,7 +839,10 @@ TEST_CASE("completion: fixtures against a world reference (whole world as contex
 namespace {
 const Tags kTunnel = {{"highway", "primary"}, {"tunnel", "yes"}, {"layer", "-1"}};
 // What the release before phase 4 served: the tier without tunnel floors and without D47's anchors.
-RoadCompletionOptions previous_served() { auto o = served_road_completion_options(); o.tunnel_floors = false; o.bridge_anchor_reuse = false; return o; }
+// The completion of the release before terrain migration phase 4: no tunnel floors, no accepted-bridge anchors, 60 m walk.
+RoadCompletionOptions previous_served() { auto o = served_road_completion_options(); o.tunnel_floors = false; o.bridge_anchor_reuse = false; o.abutment_path_m = 60; return o; }
+// Phase 4's release (D47 at the 60 m walk), before D48.
+RoadCompletionOptions phase4_served() { auto o = served_road_completion_options(); o.abutment_path_m = 60; return o; }
 RoadGeomTile build_with(const Env& env, const RoadCompletionOptions& o, RoadCompletionStats* stats = nullptr) {
     auto g = build_road_geom_tile(env.tile, *env.dem, env.limits, &env.context, builtin_road_rules_de(), o, stats); REQUIRE(g);
     return std::move(*g);
@@ -977,22 +1013,28 @@ TEST_CASE("bridge anchors: a short bridge way next to a long one is supported ov
     const auto strict = build(*env, false);
     const auto a = index_of(strict, 20, 0), b = index_of(strict, 21, 0);
     REQUIRE_FALSE(strict.entries[a].profile); REQUIRE_FALSE(strict.entries[b].profile);
-    RoadCompletionStats stats; const auto lib = build(*env, true, &stats);
+    // At phase 4's 60 m walk (D48 later raised it to 200 m, see below).
+    RoadCompletionStats stats; const auto lib = build_with(*env, phase4_served(), &stats);
     REQUIRE(lib.entries[a].profile); REQUIRE(lib.entries[b].profile);
     CHECK(lib.origins[a].provenance == ProfileProvenance::BridgeCompleted); CHECK(lib.origins[b].provenance == ProfileProvenance::BridgeCompleted);
     CHECK(std::fabs(end_height(lib, a, true) - end_height(lib, b, false)) <= 1.0 / 256.0);
     CHECK(stats.walk_other_side >= 1);
-    const auto walk = road_bridge_anchor(env->context, *env->dem, zone, 5); CHECK(walk.plane.has_value());
+    const auto walk = road_bridge_anchor(env->context, *env->dem, zone, 5, phase4_served()); CHECK(walk.plane.has_value());
     // Control: D25 (bridge_anchor_reuse off) finds no support at node 5 for either span.
     RoadCompletionStats old_stats; const auto old = build_with(*env, previous_served(), &old_stats);
     CHECK_FALSE(old.entries[a].profile); CHECK_FALSE(old.entries[b].profile);
-    RoadCompletionOptions d25; d25.bridge_anchor_reuse = false;
+    RoadCompletionOptions d25 = previous_served();
     CHECK_FALSE(road_bridge_anchor(env->context, *env->dem, zone, 5, d25).plane.has_value());
+    // D48: the served 200 m walk crosses the 120 m span as the game does; the first-edge walk now finds support too.
+    d25.abutment_path_m = 200; CHECK(road_bridge_anchor(env->context, *env->dem, zone, 5, d25).plane.has_value());
+    const auto served = build(*env, true);
+    REQUIRE(served.entries[a].profile); REQUIRE(served.entries[b].profile);
     // The game (unbounded walk, anchor map) completes both on what the previous release served.
     auto game = old; g2m_test::game_reference::complete_road_profiles_live(game, *env->dem);
     REQUIRE(game.entries[a].profile); REQUIRE(game.entries[b].profile);
-    std::printf("D47 bridge chain: node 5 at %.3f m (library, walk over the 15 m span) vs %.3f m (game, unbounded walk over the 120 m span)\n",
-        end_height(lib, b, false), end_height(game, b, false));
+    std::printf("D47/D48 bridge chain: node 5 at %.3f m (60 m walk over the 15 m span), %.3f m (served 200 m walk) vs %.3f m (game, unbounded walk over the 120 m span)\n",
+        end_height(lib, b, false), end_height(served, b, false), end_height(game, b, false));
+    CHECK(std::fabs(end_height(served, b, false) - end_height(game, b, false)) <= 1.0 / 256.0);
     // The game-only completions of this scene are gone (GAP 2a/2b of the migration plan).
     std::size_t game_only = 0;
     for (std::size_t i = 0; i < game.entries.size(); ++i) if (game.entries[i].profile && !lib.entries[i].profile) ++game_only;
@@ -1081,5 +1123,40 @@ TEST_CASE("completion: fixture tiles derive the same bytes on 1 and 4 threads; g
             pbf, keys.size(), differ, static_cast<unsigned long long>(hash.value()), game_tunnels, game_bridges_old, new_tunnels, game_only, game_bridges_new);
         CHECK(differ == 0);
         CHECK(game_only == 0);  // owner rule: no game-only profile before the game's completion code is deleted
+    }
+}
+
+TEST_CASE("completion: release cost of the 200 m walk on the fixtures (D48)", "[layer][roads][completion][D48][cost]") {
+    // The deriver's input set and the tier's outcome per fixture tile, pre-D48 (no walk squares, 60 m) against D48. A
+    // measurement: only the outcome direction is checked (the longer walk never loses a completed bridge).
+    for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
+        const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + pbf);
+        const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
+        std::set<TileKey> keys;
+        for (const auto& n : world->nodes) if (const auto k = tile_key_at(g2m_test::kZone32N, 2, static_cast<double>(n.position.x) / 1000.0, static_cast<double>(n.position.y) / 1000.0)) keys.insert(*k);
+        struct Mode { const char* name; std::int64_t margin; double path; std::size_t dem = 0, graph = 0, bridges = 0, ground = 0; double ms = 0; };
+        Mode modes[] = {{"pre-D48 (60 m, no squares)", 0, 60}, {"D48 (200 m, 205 m squares)", kRoadBridgeWalkMarginMm, 200}};
+        for (auto& m : modes) {
+            for (const auto& key : keys) {
+                const auto in = g2m_test::road_geom_inputs(*world, key, true, m.margin); REQUIRE(in);
+                m.dem += in->dem_keys.size();
+                const auto graph_deps = road_context_dependencies(in->context, key.zone, &key); REQUIRE(graph_deps);
+                m.graph += graph_deps->size();
+                std::vector<HeightTile> heights(in->dem_keys.size()); std::vector<const HeightTile*> views;
+                for (std::size_t i = 0; i < heights.size(); ++i) { heights[i].key = in->dem_keys[i]; g2m_test::fill_dem(heights[i], tilted_fixture_dem); views.push_back(&heights[i]); }
+                const auto dem = RoadDemSampler::make(views); REQUIRE(dem);
+                RoadProfileLimits limits; limits.reference.allow_curvature_exceptions = true;
+                auto o = served_road_completion_options(); o.abutment_path_m = m.path;
+                RoadCompletionStats stats;
+                const auto t0 = std::chrono::steady_clock::now();
+                const auto g = build_road_geom_tile(in->tile, *dem, limits, &in->context, builtin_road_rules_de(), o, &stats); REQUIRE(g);
+                m.ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                m.bridges += stats.bridge_completed; m.ground += stats.ground_completed;
+            }
+            std::printf("[D48 cost] %s %s: %zu tiles, DEM inputs %zu (%.1f MiB raw), context graph tiles %zu, bridges completed %zu, ground completed %zu, build %.0f ms\n",
+                pbf, m.name, keys.size(), m.dem, static_cast<double>(m.dem) * 65536.0 * 4.0 / 1048576.0, m.graph, m.bridges, m.ground, m.ms);
+        }
+        CHECK(modes[1].bridges >= modes[0].bridges);
+        CHECK(modes[1].dem >= modes[0].dem);
     }
 }
