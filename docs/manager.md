@@ -14,7 +14,6 @@ Last updated: 2026-10-15.
 
 | Item | Where | State |
 |---|---|---|
-| Underpass mask with a deck limited to the crossing span (D53-D61) | #13 | Owner approved on racing_game #5 (2026-10-15). Built: decks served in roads.geom encoding 9, steep cutting walls (D59), and the owner's tag rules (D61): parking aisles and `level=*` ways never make a crossing, and a lower road that is all tunnel keeps the upper road on the ground. racing_game #16 is pinned to the head. Waiting on the owner's review. |
 
 ## Waiting on the owner
 
@@ -52,6 +51,7 @@ These items are open in [pipeline/README.md](pipeline/README.md) section 9:
 
 | Date | Item | PR |
 |---|---|---|
+| 2026-10-15 | Underpass decks over lower roads in a cutting, steep walls, tag rules for parking structures and covered tunnels (D53-D61); racing_game #16 pinned to main | #13 |
 | 2026-10-15 | Long tunnels follow one straight grade between their portals (D52, threshold 200 m) | #11 |
 | 2026-10-15 | Junction patches split between sett and paving-stone arms; sett ribbon flag | #9, #10 |
 | 2026-10-15 | G6: protocol v1 over HTTP and the `g2m_server` sidecar | #8 |
