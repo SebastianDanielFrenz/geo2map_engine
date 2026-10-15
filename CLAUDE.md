@@ -174,7 +174,15 @@ geo2map_engine/
                                       (Pending/Ready/Absent/Failed/Cancelled), Ticket<T> (state()/value()
                                       lock-free reads, wait_for for tools, cancel = drop of the last copy)
     products.h                       Outcome<T>, RoadSegmentsTile, RawTile, phase-3 payload placeholders
-                                      (StructureSet, RoadRibbonTile, BuildingSet)
+                                      (BuildingSet; StructureSet and RoadRibbonTile are the phase-3a
+                                      types below)
+    road_structures.h                (phase 3a) RoadDeck (incl. start_ref), road_deck_height, build_road_decks
+                                      (bridge / tunnel-floor decks + inferred tunnel roofs, client-side until
+                                      served, owner Q4; + approach decks of grade-separated crossings under the
+                                      caller's RoadSeparation), StructureSet + build_structure_set(RoadGeomTile)
+    road_ribbons.h                   (phase 3a) RoadRibbonVertex/RoadRibbonTile, build_road_ribbons(geometry,
+                                      key, ground fn, lift) incl. junction surfaces and markings,
+                                      add_junction_surfaces, road_priority_rank (StVO 18(3) rank)
     terrain_service.h                TerrainService (terrain migration phase 2): open (stores, layer opt-ins,
                                       release, in-process server, ONE worker pool), async height/road_geom/
                                       road_segments/source_osm/raw_tile/structures/road_ribbons/buildings ->
@@ -182,7 +190,8 @@ geo2map_engine/
                                       resident tiles, warm() -> WarmJob, physics_fetch() -> PhysicsFetch
                                       (IHeightTileFetch; blocks on the caller, which is a loader thread),
                                       product<T>(kind, key, ...) + ProductContext for caller producers
-  src/world/                          g2m_world implementation: terrain_service.cpp, job_scheduler.{h,cpp}
+  src/world/                          g2m_world implementation: road_structures.cpp, road_ribbons.cpp (phase 3a,
+                                      ported from racing_game 0c027dc + 945455a, libm -> det), terrain_service.cpp, job_scheduler.{h,cpp}
                                       (internal: priority queue, per-job registry, interest counting, nested
                                       join / inline run), tile_cache.h (internal: byte-weighted LRU of
                                       decoded tiles), tile_fetch.cpp, height_sampler.cpp,
@@ -505,6 +514,16 @@ end of `CMakeLists.txt`):
   `test_server.cpp` "concurrent cold requests derive each tile exactly once").
   `g2m_terrain_service_bench` (tests/world/bench_terrain_service.cpp, not a
   CTest test): cold-store throughput, serial server vs pool vs warm.
+  Phase 3a (`road_structures`, `road_ribbons`): tests `test_road_meshes.cpp`
+  (tags `[road_structures]`, `[road_ribbons]`, `[junction]`): deck and ribbon
+  bytes of 55 cases (`road_mesh_test_data.h`: three synthetic scenes incl. a
+  motorway overpass, every tile of both OSM fixtures, smooth and holed ground,
+  grade separation off and on) equal `road_mesh_pins.inc`, recorded from
+  racing_game 945455a's own code (the cases without separation are unchanged
+  from 0c027dc) (`refgen/extract_mesh_ref.sh` +
+  `refgen/refgen_meshes.cpp`, target `g2m_world_mesh_refgen` only with
+  `-DG2M_WORLD_MESH_REFGEN_DIR=<dir>`), plus the game's two junction-surface
+  tests. g2m_world_tests links `g2m_decode` and reads the OSM fixtures.
 - `g2m_ps_bridge` (STATIC, `bridges/physics_sim/`, PLAN.md R2.2 section 1b,
   G5/G6): `src/version.cpp`, `src/g2m_terrain_source.cpp`; PUBLIC `ps_core`
   (physics_sim's own target, embedded via `G2M_PS_SOURCE_DIR` - see "CMake

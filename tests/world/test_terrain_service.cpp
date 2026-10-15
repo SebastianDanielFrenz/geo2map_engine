@@ -780,7 +780,7 @@ TEST_CASE("service: phase-3 products fail until a producer is installed", "[worl
         calls++;
         const auto segs = ctx.road_segments(k);
         if (!segs.ready()) return Outcome<StructureSet>::failed("no roads");
-        return Outcome<StructureSet>::ready(std::make_shared<const StructureSet>(StructureSet{k}), 16);
+        return Outcome<StructureSet>::ready(std::make_shared<const StructureSet>(StructureSet{k, {}}), 16);
     });
     auto a = svc->structures(l2(0, 0), Priority::Render);
     auto b = svc->structures(l2(0, 0), Priority::Prefetch);
@@ -796,7 +796,7 @@ TEST_CASE("service: phase-3 products fail until a producer is installed", "[worl
     // Options are part of the identity of a ribbon/building product.
     svc->set_road_ribbons_producer([&](ProductContext&, const TileKey& k) {
         calls++;
-        return Outcome<RoadRibbonTile>::ready(std::make_shared<const RoadRibbonTile>(RoadRibbonTile{k}), 16);
+        return Outcome<RoadRibbonTile>::ready(std::make_shared<const RoadRibbonTile>(RoadRibbonTile{k, {}, {}}), 16);
     });
     auto r1 = svc->road_ribbons(l2(0, 0), Priority::Render, RibbonOptions{1});
     auto r2 = svc->road_ribbons(l2(0, 0), Priority::Render, RibbonOptions{2});
