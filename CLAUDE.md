@@ -1061,6 +1061,12 @@ bridge edge. Config text `enc=8 ... tunnel-floor=5/0.29999999999999999/20/chord:
 terrain.carved names `roads.geom enc=8`. Tests `[D47]` (test_road_completion.cpp, against the game's live completion in
 `tests/support/road_completion_reference.h` `complete_road_profiles_live`; roadcmp on both fixtures 0 game-only entries).
 
+Terrain migration phase 5 (design D48, 2026-10-15): the completion's abutment walk is served at 200 m
+(`kRoadCompletionMaxAbutmentPathM` 201.5); `road_bridge_dependencies(..., walk_margin_mm = kRoadBridgeWalkMarginMm)` (205 m)
+adds, in the second discovery stage, the elev.base and roads.graph tiles of a 205 m square around every node of every bridge
+incident to the tile's nodes (0 = the pre-D48 set). Config text `completion-abutment=32/200 ... bridge-walk-margin=205`
+(release id bump #2). Tests `[D48]` (fence, 60/200/500 m walks, fixture cost) in test_road_completion.cpp.
+
 Junction gradient (design D42, after slice 9): the junction surface blends v_i = b_i + phi_i (p_i - b_i) + psi_i (z_i - p_i)
 instead of z_i (b base, p paved band only, z full approach surface; `junction_approach_heights` returns all three), with
 phi over l_i = clamp(2 relief_i / slope, min, max) and psi over the verge fade (<= min, so z_J stays convex). Parameters:

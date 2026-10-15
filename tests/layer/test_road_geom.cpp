@@ -177,8 +177,9 @@ TEST_CASE("roads.geom discovers the far end of an incident bridge in a second st
     CHECK(a.stage2.size() > a.stage1.size());
     CHECK(std::includes(a.stage2.begin(), a.stage2.end(), a.stage1.begin(), a.stage1.end()));
     REQUIRE(a.result);
-    // The east tile holds the bridge itself: its stage 1 is already complete, stage 2 adds nothing.
-    const auto b = run(east, true); CHECK(b.stage2 == b.stage1); REQUIRE(b.result);
+    // The east tile holds the bridge itself: its stage 1 already names the far end; stage 2 adds only the D48 walk
+    // squares (DEM and graph tiles within 205 m of the bridge's nodes).
+    const auto b = run(east, true); CHECK(std::includes(b.stage2.begin(), b.stage2.end(), b.stage1.begin(), b.stage1.end())); REQUIRE(b.result);
     const auto entry_of = [](const DeriveResult& r) {
         const auto geometry = decode_road_geom(*decode_body(r.body)); REQUIRE(geometry);
         for (const auto& e : geometry->entries) if (e.way_id == 10) return e;

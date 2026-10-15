@@ -60,7 +60,7 @@ private:
 // bridges can be split over several OSM ways, so the walk continues along the most aligned ground approach and
 // through bridge edges. Differences from the game: libm-free (det::sqrt), and the TOTAL path (bridge edges included)
 // is bounded by options.abutment_path_m, so every node read and every DEM sample lies within that distance of `node`
-// (the 65 m margin of road_dem_dependencies and the 128 m halo of the node tiles in the context cover it).
+// (the 205 m squares road_bridge_dependencies adds around every node of the incident bridges cover it, D48).
 std::optional<RoadJunctionPlane> Walk::abutment(std::int64_t node, double out_x, double out_y) {
     const auto origin = position(node);
     auto current = node; std::int64_t previous = 0;

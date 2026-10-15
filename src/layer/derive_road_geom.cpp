@@ -103,7 +103,10 @@ std::string road_geom_config_text() {
         // for every length) and the accepted-bridge anchors with the walk over every incident bridge edge.
         " tunnel-floor=" + std::string(c.tunnel_floors ? "" : "off/") + option_value(c.tunnel_spacing_m) + "/" + option_value(c.tunnel_max_grade) + "/" + option_value(c.tunnel_min_radius_m) +
         "/chord:" + option_value(c.tunnel_chord_min_length_m) +
-        " bridge-anchor-reuse=" + (c.bridge_anchor_reuse ? "1" : "0");
+        " bridge-anchor-reuse=" + (c.bridge_anchor_reuse ? "1" : "0") +
+        // D48 (terrain migration phase 5): the walk budget above is 200 m; its DEM and graph reads are covered by the
+        // stage-2 squares of this half-width around every node of the incident bridges.
+        " bridge-walk-margin=" + std::to_string(kRoadBridgeWalkMarginMm / 1000);
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {

@@ -89,7 +89,9 @@ struct RoadGeomInputs {
     g2m::RoadGraph context;
     std::vector<g2m::TileKey> dem_keys;
 };
-inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world, const g2m::TileKey& key, bool bridge_far_end = true) {
+// `walk_margin_mm`: the D48 squares of road_bridge_dependencies (0 = the pre-D48 stage 2, a negative control).
+inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world, const g2m::TileKey& key, bool bridge_far_end = true,
+        std::int64_t walk_margin_mm = g2m::kRoadBridgeWalkMarginMm) {
     using namespace g2m;
     RoadGeomInputs in;
     auto tile = select_road_graph_tile(world, key); if (!tile) return tile.error();
@@ -107,7 +109,7 @@ inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world,
     };
     auto context = merge(); if (!context) return context.error();
     if (bridge_far_end) {
-        const auto bridges = road_bridge_dependencies(in.tile.graph, *context, key.zone, &key); if (!bridges) return bridges.error();
+        const auto bridges = road_bridge_dependencies(in.tile.graph, *context, key.zone, &key, walk_margin_mm); if (!bridges) return bridges.error();
         for (const auto& d : *bridges) (d.layer == kRoadGraphLayer ? graph_keys : dem_keys).insert(d.key);
         context = merge(); if (!context) return context.error();
     }

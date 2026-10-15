@@ -66,7 +66,7 @@ struct RoadCompletionOptions {
     double retry_spacing_m = 20;          // step 1: the game's retry
     int retry_iterations = 16384;
     double abutment_ground_m = 32;        // ground path to a support point (game: 32 m)
-    double abutment_path_m = 60;          // total walk, bridge edges included (design D25: DEM and graph locality)
+    double abutment_path_m = 200;         // total walk, bridge edges included (D25 locality; 200 m since D48, owner Q2)
     double ground_spacing_m = 40;         // step 3 samples
     double ground_ramp_m = 32;            // step 3 anchor ramps
     // Tunnel floors (D47, the game's tunnel step): DEM samples every tunnel_spacing_m along the reference, fitted at

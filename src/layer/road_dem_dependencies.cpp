@@ -45,7 +45,8 @@ Result<std::vector<InputTileRef>> road_dem_dependencies(const RoadGraph& graph,
     return out;
 }
 Result<std::vector<InputTileRef>> road_bridge_dependencies(const RoadGraph& tile_graph, const RoadGraph& context,
-    geo::UtmZone zone, const TileKey* exclude) {
+    geo::UtmZone zone, const TileKey* exclude, std::int64_t walk_margin_mm) {
+    if (walk_margin_mm < 0 || walk_margin_mm > 1000000) return make_error(ErrorCode::InvalidArgument, "road bridge dependencies: invalid walk margin");
     const auto valid_tile = validate_road_graph(tile_graph); if (!valid_tile) return valid_tile.error();
     const auto valid_context = validate_road_graph(context); if (!valid_context) return valid_context.error();
     std::set<std::int64_t> tile_nodes;
@@ -67,6 +68,29 @@ Result<std::vector<InputTileRef>> road_bridge_dependencies(const RoadGraph& tile
     auto dem = road_dem_dependencies(bridges, zone); if (!dem) return dem.error();
     auto graph = road_context_dependencies(bridges, zone, exclude); if (!graph) return graph.error();
     dem->insert(dem->end(), graph->begin(), graph->end());
+    if (walk_margin_mm > 0) {
+        // D48: the squares the abutment walk from any node of a listed bridge can read (DEM cells and node tiles).
+        std::set<TileKey> squares;
+        const auto add = [&](const geom::PointMm& p, int level) -> Result<void> {
+            TileKey key{zone, level, 0, 0}; const auto size = key.size_m() * 1000;
+            const auto x0 = floor_div(p.x - walk_margin_mm - 1, size), x1 = floor_div(p.x + walk_margin_mm, size);
+            const auto y0 = floor_div(p.y - walk_margin_mm - 1, size), y1 = floor_div(p.y + walk_margin_mm, size);
+            if (x0 < TileKey::kIndexMin || x1 > TileKey::kIndexMax || y0 < TileKey::kIndexMin || y1 > TileKey::kIndexMax)
+                return make_error(ErrorCode::LimitExceeded, "road bridge dependencies: coordinates outside tile grid");
+            for (auto y = y0; y <= y1; ++y) for (auto x = x0; x <= x1; ++x) {
+                key.x = static_cast<std::int32_t>(x); key.y = static_cast<std::int32_t>(y);
+                if (level == 2 && exclude && key == *exclude) continue;
+                squares.insert(key);
+                if (squares.size() > 4096) return make_error(ErrorCode::LimitExceeded, "road bridge dependencies: walk tile budget");
+            }
+            return {};
+        };
+        for (const auto& node : bridges.nodes) {
+            if (auto r = add(node.position, 0); !r) return r.error();
+            if (auto r = add(node.position, 2); !r) return r.error();
+        }
+        for (const auto& key : squares) dem->push_back({std::string(key.level == 0 ? kElevBaseLayer : kRoadGraphLayer), key});
+    }
     std::sort(dem->begin(), dem->end()); dem->erase(std::unique(dem->begin(), dem->end()), dem->end());
     return dem;
 }
