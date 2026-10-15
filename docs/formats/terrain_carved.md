@@ -18,7 +18,7 @@ cell-registered, row 0 = south, NoData = `INT32_MIN` (`encode_height_tile` / `de
 | Encoding | 1 (SrcElev), encoding version 1 |
 | Header datum | level 0: the datum of the `g2m.elev.base` inputs (DHHN2016 or EGM2008; mixed datums, or a `roads.geom` tile in another datum, are rejected); levels 1-6: DHHN2016, as `g2m.terrain.height` |
 | Header height offset | 0 (input offsets are applied once, before carving) |
-| Config hash | SHA-256 of `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 carve=<sha256 of data/carve/carve_default.json>; L1-L6 mean-of-4 half-even` (`terrain_carved_config_text()`) |
+| Config hash | SHA-256 of `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 carve=<sha256 of data/carve/carve_default.json>; L1-L6 mean-of-4 half-even` (`terrain_carved_config_text()`) |
 
 ## Inputs
 
@@ -55,7 +55,8 @@ Level 0, per cell with centre (E + 0.5, N + 0.5) in zone metres:
 
 Bridges and tunnels are never carved. Neither is the span of a roads.geom encoding-9 underpass deck (D58): the ground
 stretch is carved only outside its decks, and each deck is a bridge line of its own (deck clamp from the deck's ends), so
-the lower road keeps its cutting under it. Parameters (kernel, strength, blend widths per class, deck clearance) come from
+the lower road keeps its cutting under it; no ground blend reaches more than 1 m past a deck's end planes either (D59, steep walls).
+Parameters (kernel, strength, blend widths per class, deck clearance) come from
 `data/carve/carve_default.json`; its SHA-256 is part of the config hash. Every value is a function of the world position,
 so neighbouring tiles agree at their shared edge without sharing samples.
 

@@ -8,7 +8,7 @@ Back to [pipeline overview](README.md). Code: `include/g2m/layer/{terrain_layers
 |---|---|---|---|---|---|
 | `g2m.elev.base` | 1 | 0 | 1 (SrcElev) | `g2m.src.elev.dgm1` (the one level-2 ancestor tile) | `g2m.elev.base/1 dgm1-only` |
 | `g2m.terrain.height` | 1 | 0 to 6 | 1 (SrcElev) | L0: `g2m.elev.base` same key. L1 to L6: the 4 children of the same layer one level down | `g2m.terrain.height/2 L0-passthrough-of-elev.base; L1-L6 mean-of-4 half-even pyramid` |
-| `g2m.terrain.carved` | 1 | 0 to 6 | 1 (SrcElev) | L0: `g2m.elev.base` 3 x 3 neighbourhood + `g2m.roads.geom` L2 tiles within 192 m. L1 to L6: the 4 children of the same layer | `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 carve=<sha256>; L1-L6 mean-of-4 half-even` ([format](../formats/terrain_carved.md)) |
+| `g2m.terrain.carved` | 1 | 0 to 6 | 1 (SrcElev) | L0: `g2m.elev.base` 3 x 3 neighbourhood + `g2m.roads.geom` L2 tiles within 192 m. L1 to L6: the 4 children of the same layer | `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 carve=<sha256>; L1-L6 mean-of-4 half-even` ([format](../formats/terrain_carved.md)) |
 | `g2m.terrain.class` | 1 | 0 to 6 | 7 (TerrainClass) | L0: the carved L0 inputs + `g2m.src.landcover` L2 tiles holding any of its nodes. L1 to L6: the 4 x 4 same-layer tiles of level L-1 around the children (D49) | `g2m.terrain.class/1 nodes=257 L0 carve-ownership ...; L1-L6 rank-max 3x3 centre-then-row-major window=4x4` ([format](../formats/terrain_class.md)) |
 
 ```mermaid

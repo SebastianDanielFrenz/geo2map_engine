@@ -202,7 +202,7 @@ std::vector<TileKey> terrain_class_landcover_keys(const TileKey& level0) {
 std::string terrain_class_config_text() {
     const auto& carve = builtin_carve_default().content_sha256;
     const auto table = builtin_esa_worldcover_classifier().table_hash();
-    return "g2m.terrain.class/1 nodes=257 L0 carve-ownership roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 carve=" +
+    return "g2m.terrain.class/1 nodes=257 L0 carve-ownership roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 carve=" +
         to_hex(std::span<const std::uint8_t>(carve.data(), carve.size())) + " classifier=" +
         to_hex(std::span<const std::uint8_t>(table.data(), table.size())) +
         " scheme=g2m.landclass.v1 landcover=floor sidewalk=paving_stones; L1-L6 rank-max 3x3 centre-then-row-major window=4x4";

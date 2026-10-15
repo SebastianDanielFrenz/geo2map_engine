@@ -17,6 +17,8 @@
 
 namespace g2m {
 namespace {
+// D59: past an underpass deck's end plane a ground blend fades to the terrain over this distance (continuous, steep).
+constexpr double kUnderpassWallFadeM = 1.0;
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr std::size_t kNone = std::numeric_limits<std::size_t>::max();
 // Stations of the approach polylines are generated only over the reference segments within this distance of the
@@ -124,6 +126,10 @@ struct Station {
     double outer_left = 0, outer_right = 0;
     double b_left = kNaN, b_right = kNaN;
     bool connects_next = false, global_first = false, global_last = false;
+    // D59: the end planes of the underpass decks bounding this station's ground piece (point, unit normal into the
+    // deck); a ground blend never reaches past them, so the terrain under a deck keeps the cutting's own walls.
+    struct DeckPlane { bool on = false; double x = 0, y = 0, nx = 0, ny = 0; };
+    DeckPlane deck_lo, deck_hi;
 };
 // One carved ground entry or one bridge entry (the deck clamp).
 struct Line {
@@ -522,6 +528,12 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
             if (!pose) return make_error(ErrorCode::Malformed, "carve: reference station " + pose.error().message);
             Station st; st.s = s; st.x = pose->x; st.y = pose->y;
             st.global_first = g == 0; st.global_last = g + 1 == all.size();
+            for (const auto& [d0, d1] : decks)
+                if (s == d0 || s == d1) {   // into the deck: forward at its start, backward at its end
+                    const double sign = s == d0 ? 1.0 : -1.0;
+                    auto& plane = s == d0 ? st.deck_hi : st.deck_lo;
+                    plane = {true, pose->x, pose->y, sign * det::cos(pose->heading), sign * det::sin(pose->heading)};
+                }
             const CarveFootprint f = carve_footprint(*entry.cross_section, s);
             st.outer_left = f.outer_left; st.outer_right = f.outer_right;
             if (!line.stations.empty() && prev_global + 1 == g) line.stations.back().connects_next = true;
@@ -552,6 +564,14 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
             if (deck.stations.size() >= 2) deck_lines.push_back(std::move(deck));
         }
         if (stats) stats->underpass_decks += decks.size();
+        // D59: every station of a ground piece carries the deck planes at the piece's two ends.
+        for (std::size_t lo = 0; lo < line.stations.size();) {
+            std::size_t hi = lo;
+            while (hi + 1 < line.stations.size() && line.stations[hi].connects_next) ++hi;
+            const auto plane_lo = line.stations[lo].deck_lo, plane_hi = line.stations[hi].deck_hi;
+            for (std::size_t k = lo; k <= hi; ++k) { line.stations[k].deck_lo = plane_lo; line.stations[k].deck_hi = plane_hi; }
+            lo = hi + 1;
+        }
         if (line.stations.size() >= 2) {
             if (!bridge)
                 for (auto& st : line.stations) {
@@ -772,6 +792,16 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
                 const double vx = x - a.x, vy = y - a.y;
                 const double u = (vx * dx + vy * dy) / len2;
                 const double uc = std::clamp(u, u_lo, u_hi);
+                // D59 (owner 2026-10-15: steep walls): no blend past the end plane of an underpass deck bounding this
+                // ground piece, so the terrain under the deck keeps the cutting's own walls (no abutment slope).
+                double wall = 1.0;   // D59: fades the blend to the terrain over kUnderpassWallFadeM past a deck end plane
+                if (m.options.underpass_steep_walls) {
+                    double past = 0.0;
+                    for (const Station::DeckPlane* q : {&a.deck_lo, &a.deck_hi})
+                        if (q->on) past = std::max(past, (x - q->x) * q->nx + (y - q->y) * q->ny);
+                    if (past >= kUnderpassWallFadeM) continue;
+                    if (past > 0.0) wall = 1.0 - road_smooth_step(past / kUnderpassWallFadeM);
+                }
                 const double fx = a.x + uc * dx - x, fy = a.y + uc * dy - y;
                 const double reach = std::max({-a.outer_right, a.outer_left, -b.outer_right, b.outer_left}) + m.blend_max;
                 if (!(fx * fx + fy * fy < reach * reach)) continue;
@@ -790,9 +820,10 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
                 if (!(d2 < width * width)) continue;
                 const double d = d2 > 0.0 ? det::sqrt(d2) : 0.0;
                 const double S = road_smooth_step(d / width);
-                if (have_blend && !first && 1.0 - S < blend_w) continue;
+                const double w = (1.0 - S) * wall;
+                if (have_blend && !first && w < blend_w) continue;
                 const double z_b = road_surface_height_m(m.core, line.entry, s_foot, tl, m.surface);
-                offer_blend(z_b + (T_blend - z_b) * S, 1.0 - S, line.entry, CarveOwner::ApproachBlend);
+                offer_blend(T_blend + (z_b - T_blend) * w, w, line.entry, CarveOwner::ApproachBlend);
             }
         }
         if (have_core) { out.z = core_z; out.owner = CarveOwner::ApproachCore; out.element = core_el; out.weight = 1; }
@@ -1013,7 +1044,7 @@ LayerDesc terrain_carved_desc() {
 
 std::string terrain_carved_config_text() {
     const auto& sha = builtin_carve_default().content_sha256;
-    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 carve=" +
+    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 carve=" +
         to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even";
 }
 

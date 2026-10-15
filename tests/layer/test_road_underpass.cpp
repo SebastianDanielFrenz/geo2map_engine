@@ -491,6 +491,65 @@ TEST_CASE("underpass deck (D58): the carve keeps the cutting under the deck; no 
     (void)deck_without;
 }
 
+TEST_CASE("underpass deck (D59): steep cutting walls under the deck, no abutment slope from the deck ends",
+          "[layer][underpass][deck][carve][walls]") {
+    // Owner 2026-10-15 ("steep walls"): under a deck the carved terrain is the (smoothed) DEM's cutting, walls included;
+    // the upper road's blend fades out within 1 m past the deck's end planes. Measured along the upper centreline and
+    // 3 m either side of it, every 0.25 m over the deck span less that metre at each end: the samples the upper road owns, the fill above the smoothed terrain T, and
+    // the width of the cutting at mid depth (97 m) in the carve against T's (a sloped wall narrows it).
+    const RoadGraph world = underpass_scene();
+    const Dem dem = tilted_cutting();
+    g2m_test::CarveFixture fx(world, dem);
+    const auto tile = build(world, kUnderpassTile, dem);
+    REQUIRE(tile); REQUIRE(tile->underpasses.size() == 1);
+    const auto& u = tile->underpasses.front();
+    const std::size_t upper = entry_at(*tile, 100, 0.5);
+    const RoadProfile& p = *tile->entries[upper].profile;
+    const auto key0 = tile_key_at(kUnderpassTile.zone, 0, kUnderpassE0 + 0.5, g2m_test::kUnderpassN0);
+    REQUIRE(key0);
+    struct Walls { std::size_t upper_cells = 0, samples = 0; double max_fill = 0, mean_fill = 0, width = 0, terrain_width = 0; };
+    const auto measure = [&](bool steep) {
+        CarveOptions options; options.underpass_steep_walls = steep;
+        auto m = fx.model(*key0, options);
+        const CarveModel& model = *m.model;
+        std::size_t upper_merged = 0;
+        for (std::size_t i = 0; i < model.kept_tile().entries.size(); ++i) {
+            const auto& e = model.kept_tile().entries[i];
+            if (e.way_id == 100 && e.stretch.start_ref == tile->entries[upper].stretch.start_ref) upper_merged = i;
+        }
+        Walls w;
+        for (const double t : {-3.0, 0.0, 3.0}) {
+            // The first metre past each deck end is the D59 fade (the ground blend reaches the terrain there).
+            for (double s = u.start_m + 1.125; s < u.end_m - 1.0; s += 0.25) {
+                const auto pose = p.reference.at(s); REQUIRE(pose);
+                const double x = pose->x - t * std::sin(pose->heading), y = pose->y + t * std::cos(pose->heading);
+                const auto c = model.evaluate(x, y);
+                if ((c.owner == CarveOwner::ApproachCore || c.owner == CarveOwner::ApproachBlend) && c.element == upper_merged) ++w.upper_cells;
+                ++w.samples;
+                w.max_fill = std::max(w.max_fill, c.z - c.terrain);
+                w.mean_fill += c.z - c.terrain;
+                if (c.z < 97.0) w.width += 0.25 / 3;
+                if (c.terrain < 97.0) w.terrain_width += 0.25 / 3;
+            }
+        }
+        w.mean_fill /= static_cast<double>(w.samples);
+        std::printf("D59 walls %s: deck %.1f m, upper-owned samples %zu of %zu, fill above T max %.3f mean %.3f m, "
+                    "cutting width at 97 m %.2f m (terrain %.2f m)\n", steep ? "steep" : "sabotage (abutment slope)",
+                    u.end_m - u.start_m, w.upper_cells, w.samples, w.max_fill, w.mean_fill, w.width, w.terrain_width);
+        return w;
+    };
+    const Walls steep = measure(true);
+    CHECK(steep.upper_cells == 0);                                      // nothing of the upper road under its deck
+    CHECK(steep.max_fill < 0.05);                                       // nothing raised above the cutting (the lower road's own profile: mm)
+    CHECK(std::fabs(steep.width - steep.terrain_width) < 0.26);         // the walls stand where the DEM's do
+    CHECK(steep.terrain_width > 10.0);
+    // Sabotage (the D58 carve): the ground ends' blend caps reach into the deck, fill the cutting and narrow it.
+    const Walls slope = measure(false);
+    CHECK(slope.upper_cells > 0);
+    CHECK(slope.max_fill > 2.0);
+    CHECK(slope.width < slope.terrain_width - 3.0);
+}
+
 // The side profile of the PR's example 4 (hidden diag): the A 66 fixture's way 24504840 over the service way 52405506
 // with its tunnel tag removed (an untagged underpass), on a flat 100 m DEM with a 5.3 m cutting 16 m wide (4 m smooth
 // shoulders) along the lower way. Writes `s_rel,dem_cut,profile_today,carve_today,profile_served,carve_served,deck` to
@@ -578,4 +637,46 @@ TEST_CASE("underpass deck: example 4 side profile (diag CSV)", "[.][diag][underp
     std::fclose(f);
     std::printf("example 4: deck [%.2f, %.2f] m (%.1f m) around the crossing at %.2f m, depth %d mm\n", deck->start_m, deck->end_m,
                 deck->end_m - deck->start_m, s_c, static_cast<int>(deck->depth_mm));
+}
+
+// Where the fixtures' grade-separated crossings are on a map (hidden diag): every pair of ways whose node polylines
+// cross without a shared node, one of them on a lower OSM layer or tagged tunnel (never a bridge), with the
+// intersection in WGS84 (GRS80 UTM 32N reverse; the two ellipsoids differ by far less than the printed 1e-6 deg).
+TEST_CASE("underpass crossings: WGS84 coordinates in both fixtures (diag)", "[.][diag][underpass]") {
+    const geo::Utm utm;
+    for (const char* file : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
+        const RoadGraph world = g2m_test::fixture_world(file);
+        const auto node = [&](std::int64_t id) -> const RoadGraphNode* {
+            const auto it = std::lower_bound(world.nodes.begin(), world.nodes.end(), id, [](const auto& n, auto v) { return n.osm_id < v; });
+            return it != world.nodes.end() && it->osm_id == id ? &*it : nullptr;
+        };
+        const auto tag = [](const RoadGraphWay& w, std::string_view k) -> std::string {
+            for (const auto& [key, value] : w.tags) if (key == k) return value;
+            return {};
+        };
+        const auto layer = [&](const RoadGraphWay& w) { const auto v = tag(w, "layer"); return v.empty() ? 0 : std::atoi(v.c_str()); };
+        for (const auto& up : world.ways) {
+            if (tag(up, "bridge") == "yes" || tag(up, "tunnel") == "yes") continue;
+            for (const auto& lo : world.ways) {
+                if (lo.osm_id == up.osm_id || tag(lo, "bridge") == "yes") continue;
+                if (!(tag(lo, "tunnel") == "yes" || layer(lo) < layer(up))) continue;
+                for (std::size_t i = 0; i + 1 < up.node_ids.size(); ++i)
+                    for (std::size_t k = 0; k + 1 < lo.node_ids.size(); ++k) {
+                        const auto *a = node(up.node_ids[i]), *b = node(up.node_ids[i + 1]), *c = node(lo.node_ids[k]), *d = node(lo.node_ids[k + 1]);
+                        if (!a || !b || !c || !d) continue;
+                        if (a->osm_id == c->osm_id || a->osm_id == d->osm_id || b->osm_id == c->osm_id || b->osm_id == d->osm_id) continue;
+                        if (!geom::segments_intersect(a->position, b->position, c->position, d->position)) continue;
+                        const double ax = a->position.x / 1000.0, ay = a->position.y / 1000.0, bx = b->position.x / 1000.0, by = b->position.y / 1000.0;
+                        const double cx = c->position.x / 1000.0, cy = c->position.y / 1000.0, dx = d->position.x / 1000.0, dy = d->position.y / 1000.0;
+                        const double den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
+                        const double t = den != 0 ? ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den : 0.0;
+                        const double x = ax + t * (bx - ax), y = ay + t * (by - ay);
+                        const auto g = utm.reverse(geo::UtmZone{32, geo::Hemisphere::North}, x, y);
+                        std::printf("crossing %s: upper way %lld (%s, layer %d) over way %lld (%s, layer %d%s) at %.6f N, %.6f E\n", file,
+                                    static_cast<long long>(up.osm_id), tag(up, "highway").c_str(), layer(up), static_cast<long long>(lo.osm_id),
+                                    tag(lo, "highway").c_str(), layer(lo), tag(lo, "tunnel") == "yes" ? ", tunnel" : "", g.lat, g.lon);
+                    }
+            }
+        }
+    }
 }

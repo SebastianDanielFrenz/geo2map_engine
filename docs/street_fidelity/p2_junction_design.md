@@ -2426,7 +2426,8 @@ deck clamp measured from those ends), so the terrain under the deck keeps the cu
 level) and the upper road's core is never carved across it. `CarveOptions::underpass_decks` = false is the sabotage:
 the masked profile is carved across the cutting at rim height and the lower road cuts a 6.2 m slot into it (test
 `[carve]`: 0 upper core cells in the deck with decks, a 6.17 m core step without). The road envelope marks capsules over
-a deck as bridge (no ground grip). Config text of terrain.carved and terrain.class: `underpass-deck=1`.
+a deck as bridge (no ground grip). Config text of terrain.carved and terrain.class: `underpass-deck=1` (D59 adds
+  `underpass-walls=steep/1`).
 - Release ids: the de.json bytes and the roads.geom config text (`enc=9 ... underpass=1 crossing-context=1`) move the
   roads.geom release id; the carved and class config texts move theirs. Goldens re-recorded with `g2m_golden_dump`:
   `g3xs` (flat DEM, no cutting, no deck) moves only because every served body is now encoding 9 with an empty section 8
@@ -2439,7 +2440,34 @@ a deck as bridge (no ground grip). Config text of terrain.carved and terrain.cla
   removed, a flat 100 m DEM with a 5.3 m, 16 m wide cutting along the lower way. Before: profile sag 1.1 m, the lower
   road cuts a slot through the carved A 66. After: profile 100.00 m everywhere (within 2 mm), a 26 m deck centred on
   the crossing, the carved terrain under it falls from the deck ends to the lower road (the ground core's end blend,
-  as at a bridge abutment).
+  as at a bridge abutment). Superseded by D59: the walls under the deck now stay steep.
+
+**D59. Steep cutting walls under an underpass deck (owner answer 2026-10-15 on geo2map PR #13: "Steep walls").**
+- The D58 carve let a ground piece's blend wrap round its end into the deck span (the D38 end cap, up to the 15 m blend
+  maximum), so the terrain under the deck sloped from the deck ends down to the lower road like a bridge abutment.
+  Now every station of a ground piece carries the end planes of the underpass decks bounding that piece (the plane
+  through the deck-end station, normal along the reference tangent into the deck). Past such a plane a ground blend's
+  weight is multiplied by 1 - S(p / 1 m) (p the distance past the plane, S the road smooth step) and is gone from 1 m
+  on, so under and beside the deck the upper road shapes nothing: the carve there is the smoothed DEM (the cutting's
+  own walls) with the lower road's own core and blend, which D58 already left alone.
+- Why a 1 m fade and not a hard cut: a hard cut leaves a step along the end plane beyond the road's outer edges, where
+  the ground blend meets the terrain; on the bumpy tilted test DEM that step was 0.42 m (T12's blend-to-terrain
+  continuity bound is 5 mm). The fade keeps T12 at its bound and a wall 1 m wide instead of the up-to-15 m slope.
+  `kUnderpassWallFadeM` in `terrain_carve.cpp`, part of the config text.
+- Only underpass decks: a ground stretch's ends at a real bridge, a junction or a stretch end keep their caps (D38).
+- `CarveOptions::underpass_steep_walls` (default true) is the sabotage switch; config text of terrain.carved and
+  terrain.class: `underpass-deck=1 underpass-walls=steep/1` (release ids move again; roads.geom unchanged).
+- Test `[walls]` in `tests/layer/test_road_underpass.cpp` (scene: 6 m cutting, 2 % grade, 24 m deck), every 0.25 m over
+  the deck less the 1 m fade at each end, on the centreline and 3 m either side: upper-road samples 0 of 264, fill above
+  the smoothed terrain at most 0.014 m (the lower road's own profile), cutting width at mid depth (97 m) 20.00 m in the
+  carve and in the terrain. Sabotage (the D58 carve): 114 upper-road samples, up to 4.38 m of fill, width 14.00 m.
+- Goldens: `g3d` and `g3c` move again in the one hoechst_a66 tile with a deck (1820/21684 and its L1 parent);
+  `g3xs` and `g3j` unchanged.
+
+**D60. The underpass parameters stay as served (owner decision 2026-10-15, geo2map PR #13: "Let's try those values,
+you can tune them when I spot issues while driving").** `min_depth_mm` 1000, `window_m` 50, `sag_radius_m` 300,
+`max_span_m` 80, `abutment_mm` 2000, `depth_tol_mm` 100, `lower_margin_mm` 1000, `end_clearance_mm` 1000 in
+`data/road_rules/de.json`. No cap as a share of the stretch. Tuning follows the owner's reports from driving.
 
 ---
 

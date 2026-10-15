@@ -1173,10 +1173,12 @@ rim chord over the span, applied via `RoadProfileLimits::underpass` in strict/Re
 (`kRoadGeomEncoding`, 8 = `kRoadGeomEncodingTunnels` still written when asked, no decks): section 8 `RoadGeomTile::underpasses`
 (`RoadUnderpass{entry_index, start_m, end_m, depth_mm, flags, lower_ways}`). Consumers: terrain.carved skips deck spans
 on the ground line and adds a bridge line per deck (`CarveOptions::underpass_decks` sabotage), the road envelope marks
-deck capsules bridge, `g2m::world::build_road_decks` adds an inferred deck per span (no tunnel roof under it). Config
-texts: roads.geom `enc=9 ... underpass=1 crossing-context=1`, carved/class `enc=9 ... underpass-deck=1`. Tests
+deck capsules bridge, `g2m::world::build_road_decks` adds an inferred deck per span (no tunnel roof under it). D59 (owner: steep walls): ground
+blends fade out within 1 m past the deck end planes (`Station::deck_lo/deck_hi`, `kUnderpassWallFadeM`, sabotage `CarveOptions::underpass_steep_walls`), so the cutting
+keeps its own walls under the deck. D60: parameters kept as served (owner 2026-10-15). Config
+texts: roads.geom `enc=9 ... underpass=1 crossing-context=1`, carved/class `enc=9 ... underpass-deck=1 underpass-walls=steep/1`. Tests
 `tests/layer/test_road_underpass.cpp` (`[underpass][deck]`: bounds + ground outside, non-deck controls, near end,
-tile invariance + negative control, encoding 9 round trip/validation, carve no-slot + sabotage; hidden `[.][diag]` example-4
+tile invariance + negative control, encoding 9 round trip/validation, carve no-slot + sabotage, `[walls]` steep walls + sabotage; hidden `[.][diag]` WGS84 crossing list and `[.][diag]` example-4
 CSV), `tests/world/test_road_meshes.cpp` (D56 deck), scene `tests/support/underpass_scene.h`.
 
 ## G4 routing, slice 1 (2026-10-14)
