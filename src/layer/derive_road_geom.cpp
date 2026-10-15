@@ -122,7 +122,7 @@ std::string road_geom_config_text() {
         " bridge-walk-margin=" + std::to_string(kRoadBridgeWalkMarginMm / 1000) +
         // D53-D58: underpass decks (encoding 9, section 8); the parameters are de.json's underpass block (in the rules
         // hash above); crossing-context=1: the roads.graph tiles of every way crossing a tile way's segment (D57).
-        " underpass=" + std::string(builtin_road_rules_de().underpass.enabled ? "1" : "off") + " crossing-context=1";
+        " underpass=" + std::string(builtin_road_rules_de().underpass.enabled ? "1" : "off") + " crossing-context=1 underpass-tags=D61";
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {

@@ -63,6 +63,14 @@ UnderpassCensus road_underpass_census(const RoadGeomTile& tile, const UnderpassC
 //      d > depth_tol_mm, widened by abutment_mm on each side, clipped to [a, b]; longer than max_span_m: `too_long`;
 //      closer than end_clearance_mm to a stretch end: `reaches_end` (the deck must never be the whole stretch);
 //   6. overlapping decks of one stretch merge (`merged`); the mask over a merged deck takes the highest chord.
+// Tag rules (D61, owner answers on geo2map PR #13):
+//   - a parking-structure storey is never an upper road nor a lower road (`in_structure`): a way tagged
+//     service=parking_aisle or carrying a level=* tag. Its OSM layer describes the storey, not the ground, and the
+//     bare-earth DEM holds neither the deck nor the space under it (the Kalbach and Main-Taunus-Zentrum car parks);
+//   - a span whose lower ways are all tagged tunnel (any value but "no") is `covered`: the upper road stays on the
+//     ground, so the profile is still masked over a DEM cutting, but no deck is served and the carve fills over the
+//     tunnel (its floor and roof come from the tunnel itself; the A 66 over the continuous service tunnel). One lower
+//     way that is not a tunnel makes the span a deck.
 // A pure function of the stretch's reference, the crossing ways (complete in `crossings`, road_crossing_dependencies)
 // and the DEM within window_m + 3 m of the stretch's own way (inside the 65 m DEM margin), so tile-invariant.
 struct RoadUnderpassStats {
@@ -72,6 +80,8 @@ struct RoadUnderpassStats {
     std::size_t shallow = 0, no_rim = 0, too_long = 0, reaches_end = 0, dem_missing = 0;
     std::size_t merged = 0;         // decks merged into the previous one of the same stretch
     std::size_t decks = 0;          // decks stored (after merging)
+    std::size_t covered = 0;        // D61: spans whose lower ways are all tunnels: masked, no deck (ground covers them)
+    std::size_t in_structure = 0;   // D61: upper stretches and lower crossings skipped as parking-structure storeys
 };
 struct RoadUnderpassChord { double from_m = 0, to_m = 0, from_height_m = 0, to_height_m = 0; };
 struct RoadUnderpassSpanFit {
@@ -79,6 +89,7 @@ struct RoadUnderpassSpanFit {
     std::int32_t depth_mm = 0;
     std::vector<std::int64_t> lower_ways;    // ascending, unique
     std::vector<RoadUnderpassChord> chords;  // one per crossing, the rim chord its mask uses
+    bool covered = false;                    // D61: every lower way is a tunnel - mask only, no deck
 };
 class RoadUnderpassFinder {
 public:

@@ -284,6 +284,19 @@ TEST_CASE("Underpass decks (D56): the served span becomes an inferred deck, noth
         g2m_test::GeomOptions o; o.height_m = dem; o.completion = served_road_completion_options(); o.underpass = true;
         const auto tile = g2m_test::geometry_in_tile_with(g2m_test::underpass_scene(scene), g2m_test::kUnderpassTile, o);
         REQUIRE(tile);
+        if (tunnel) {
+            // D61: a lower road tagged tunnel is covered - no served deck; the upper road stays on the ground (masked
+            // profile at the rim chord), and any deck over the tunnel is the pre-D53 inferred roof on that profile.
+            CHECK(tile->underpasses.empty());
+            for (const auto& d : world::build_road_decks(*tile)) {
+                if (d->way_id != 100) continue;
+                CHECK(d->inferred);
+                const double mid = 0.5 * (d->start_station + d->end_station);
+                const auto h = world::road_deck_height(*d, mid, 0.0); REQUIRE(h);
+                CHECK(*h > 99.5);
+            }
+            continue;
+        }
         REQUIRE(tile->underpasses.size() == 1);
         const auto& u = tile->underpasses.front();
         const auto& entry = tile->entries[u.entry_index];
@@ -312,7 +325,6 @@ TEST_CASE("Underpass decks (D56): the served span becomes an inferred deck, noth
             CHECK_FALSE(world::road_deck_height(*d, u.start_m - 0.5, 0.0));
             CHECK_FALSE(world::road_deck_height(*d, u.end_m + 0.5, 0.0));
         }
-        // One deck: with the lower road tagged tunnel, the inferred roof over it is not added on top of the served deck.
         CHECK(upper == 1);
     }
 }

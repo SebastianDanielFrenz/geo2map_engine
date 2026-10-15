@@ -363,6 +363,7 @@ Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const Road
         const auto& entry = result.entries[index];
         if (!entry.profile || entry.profile->attributes.bridge || entry.profile->attributes.tunnel) continue;
         for (auto& fit : finder->spans(entry.way_id, entry.stretch, entry.profile->reference, underpass.stats)) {
+            if (fit.covered) continue;   // D61: masked, no deck
             if (result.underpasses.size() == kMaxUnderpasses) return make_error(ErrorCode::LimitExceeded, "roads.geom: underpass budget");
             RoadUnderpass u; u.entry_index = index; u.start_m = fit.start_m; u.end_m = fit.end_m; u.depth_mm = fit.depth_mm;
             u.lower_ways = std::move(fit.lower_ways);

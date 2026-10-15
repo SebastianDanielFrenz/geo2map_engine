@@ -32,6 +32,15 @@ bool tag_is_yes(const RoadGraphWay& way, std::string_view key) {
         if (k == key) return v != "no";
     return false;
 }
+// D61: a way that is a storey of a parking structure (a parking aisle, or any way with a level=* tag). Its OSM layer
+// says nothing about the ground; the bare-earth DEM shows neither the deck nor the space under it.
+bool in_structure(const RoadGraphWay& way) {
+    for (const auto& [k, v] : way.tags) {
+        if (k == "service" && v == "parking_aisle") return true;
+        if (k == "level") return true;
+    }
+    return false;
+}
 const RoadGraphNode* node_of(const RoadGraph& g, std::int64_t id) {
     const auto it = std::lower_bound(g.nodes.begin(), g.nodes.end(), id, [](const RoadGraphNode& n, std::int64_t v) { return n.osm_id < v; });
     return it != g.nodes.end() && it->osm_id == id ? &*it : nullptr;
@@ -193,12 +202,13 @@ std::vector<RoadUnderpassSpanFit> RoadUnderpassFinder::spans(std::int64_t way_id
     const auto upper_attrs = resolve_road_attributes(*upper);
     if (!upper_attrs || upper_attrs->bridge || upper_attrs->tunnel) return out;
     RoadUnderpassStats local; if (!stats) stats = &local;
+    if (in_structure(*upper)) { ++stats->in_structure; return out; }   // D61
     ++stats->entries;
     const int upper_layer = layer_of(*upper);
     const double L = ref.length_m;
 
     // The lower crossings of the stretch's node polyline: (station, lower way, segment direction, lower width).
-    struct Crossing { double station; std::int64_t way; double dx, dy; std::int32_t width_mm; };
+    struct Crossing { double station; std::int64_t way; double dx, dy; std::int32_t width_mm; bool covered; };
     std::vector<Crossing> found;
     std::vector<Seg> candidates;
     for (std::uint32_t i = stretch.start_ref; i < stretch.end_ref; ++i) {
@@ -227,7 +237,8 @@ std::vector<RoadUnderpassSpanFit> RoadUnderpassFinder::spans(std::int64_t way_id
             if (tag_is_yes(lower, "bridge")) continue;
             const bool tunnel = tag_is_yes(lower, "tunnel");
             if (!tunnel && layer_of(lower) >= upper_layer) continue;
-            Crossing x; x.way = lower.osm_id;
+            if (in_structure(lower)) { ++stats->in_structure; continue; }   // D61
+            Crossing x; x.way = lower.osm_id; x.covered = tunnel;
             double px = 0, py = 0; intersection_m(a->position, b->position, c->position, d->position, px, py);
             x.station = nearest_station(ref, px, py);
             x.dx = static_cast<double>(d->position.x - c->position.x) / 1000; x.dy = static_cast<double>(d->position.y - c->position.y) / 1000;
@@ -306,6 +317,7 @@ std::vector<RoadUnderpassSpanFit> RoadUnderpassFinder::spans(std::int64_t way_id
         if (fit.start_m < clear || fit.end_m > L - clear) { ++stats->reaches_end; continue; }
         fit.depth_mm = static_cast<std::int32_t>(std::llround(d0 * 1000.0 / 256.0));
         fit.lower_ways = {x.way};
+        fit.covered = x.covered;
         fit.chords.push_back({x.station + a, x.station + b, ha / 256.0, hb / 256.0});
         ++stats->served;
         fits.push_back(std::move(fit));
@@ -319,6 +331,7 @@ std::vector<RoadUnderpassSpanFit> RoadUnderpassFinder::spans(std::int64_t way_id
             auto& m = out.back();
             m.end_m = std::max(m.end_m, fit.end_m);
             m.depth_mm = std::max(m.depth_mm, fit.depth_mm);
+            m.covered = m.covered && fit.covered;   // one open lower road makes the span a deck
             m.lower_ways.insert(m.lower_ways.end(), fit.lower_ways.begin(), fit.lower_ways.end());
             m.chords.insert(m.chords.end(), fit.chords.begin(), fit.chords.end());
             ++stats->merged;
@@ -335,7 +348,7 @@ std::vector<RoadUnderpassSpanFit> RoadUnderpassFinder::spans(std::int64_t way_id
         if (m.end_m - m.start_m <= static_cast<double>(rules_.max_span_m)) return false;
         ++stats->too_long; return true;
     });
-    stats->decks += out.size();
+    for (const auto& m : out) { if (m.covered) ++stats->covered; else ++stats->decks; }
     return out;
 }
 

@@ -15,8 +15,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <climits>
+#include <cstdint>
 #include <cstdlib>
 #include <map>
+#include <optional>
 #include <cstdio>
 #include <functional>
 #include <set>
@@ -639,6 +642,167 @@ TEST_CASE("underpass deck: example 4 side profile (diag CSV)", "[.][diag][underp
                 deck->end_m - deck->start_m, s_c, static_cast<int>(deck->depth_mm));
 }
 
+// ---- D61: tag rules (owner answers on geo2map PR #13) ----
+
+TEST_CASE("underpass deck (D61): a tunnel under the road is covered - masked, no deck", "[layer][underpass][deck][d61]") {
+    const Dem dem = tilted_cutting();
+    UnderpassSceneOptions tunnel; tunnel.lower_tags = {{"layer", "-1"}, {"tunnel", "yes"}};
+    const RoadGraph world = underpass_scene(tunnel);
+    RoadUnderpassStats stats;
+    const auto tile = build(world, kUnderpassTile, dem, true, &stats);
+    REQUIRE(tile);
+    CHECK(tile->underpasses.empty());
+    CHECK(stats.crossings == 1); CHECK(stats.served == 1); CHECK(stats.covered == 1); CHECK(stats.decks == 0);
+    // The road stays on the ground over the tunnel: the profile is still masked at the rim chord, not in the cutting.
+    double s_c = 0;
+    const auto& p = *tile->entries[entry_at(*tile, 100, 0.5, &s_c)].profile;
+    const auto z = p.at(s_c); REQUIRE(z);
+    CHECK(z->height_m > 100.0 - 0.1);
+    // Negative control: the same crossing without the tunnel tag is a deck.
+    RoadUnderpassStats open_stats;
+    const auto open = build(underpass_scene(), kUnderpassTile, dem, true, &open_stats);
+    REQUIRE(open); CHECK(open->underpasses.size() == 1); CHECK(open_stats.covered == 0);
+}
+
+TEST_CASE("underpass deck (D61): parking-structure storeys are neither upper nor lower roads", "[layer][underpass][deck][d61]") {
+    const Dem dem = tilted_cutting();
+    // A lower storey way is counted twice: as a lower crossing of way 100 and as an upper stretch of its own.
+    struct Case { const char* name; UnderpassSceneOptions scene; std::size_t in_structure; };
+    UnderpassSceneOptions lower_aisle; lower_aisle.lower_tags = {{"layer", "-1"}, {"service", "parking_aisle"}};
+    UnderpassSceneOptions lower_level; lower_level.lower_tags = {{"layer", "-1"}, {"level", "-1"}};
+    UnderpassSceneOptions upper_aisle; upper_aisle.upper_tags = {{"service", "parking_aisle"}};
+    UnderpassSceneOptions upper_level; upper_level.upper_tags = {{"level", "1"}};
+    for (const Case& c : {Case{"lower parking aisle", lower_aisle, 2}, Case{"lower level", lower_level, 2},
+                          Case{"upper parking aisle", upper_aisle, 1}, Case{"upper level", upper_level, 1}}) {
+        CAPTURE(c.name);
+        RoadUnderpassStats stats;
+        const auto tile = build(underpass_scene(c.scene), kUnderpassTile, dem, true, &stats);
+        REQUIRE(tile);
+        CHECK(tile->underpasses.empty());
+        CHECK(stats.crossings == 0); CHECK(stats.in_structure == c.in_structure);
+        // No mask either: the profile follows the DEM as before D53.
+        double s_c = 0;
+        const auto z = tile->entries[entry_at(*tile, 100, 0.5, &s_c)].profile->at(s_c); REQUIRE(z);
+        CHECK(z->height_m < 100.0 - 0.3);
+    }
+}
+
+namespace {
+// The owner's crossings in the fixtures (PR #13): the intersection of the two ways' node polylines, metres.
+bool crossing_point(const RoadGraph& world, std::int64_t upper, std::int64_t lower, double& x, double& y) {
+    const auto node = [&](std::int64_t id) -> const RoadGraphNode* {
+        const auto it = std::lower_bound(world.nodes.begin(), world.nodes.end(), id, [](const auto& n, auto v) { return n.osm_id < v; });
+        return it != world.nodes.end() && it->osm_id == id ? &*it : nullptr;
+    };
+    const auto way = [&](std::int64_t id) -> const RoadGraphWay* {
+        for (const auto& w : world.ways) if (w.osm_id == id) return &w;
+        return nullptr;
+    };
+    const auto *u = way(upper), *l = way(lower);
+    if (!u || !l) return false;
+    for (std::size_t i = 0; i + 1 < u->node_ids.size(); ++i)
+        for (std::size_t k = 0; k + 1 < l->node_ids.size(); ++k) {
+            const auto *a = node(u->node_ids[i]), *b = node(u->node_ids[i + 1]), *c = node(l->node_ids[k]), *d = node(l->node_ids[k + 1]);
+            if (!a || !b || !c || !d || !geom::segments_intersect(a->position, b->position, c->position, d->position)) continue;
+            const double ax = a->position.x / 1000.0, ay = a->position.y / 1000.0, bx = b->position.x / 1000.0, by = b->position.y / 1000.0;
+            const double cx = c->position.x / 1000.0, cy = c->position.y / 1000.0, dx = d->position.x / 1000.0, dy = d->position.y / 1000.0;
+            const double den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
+            const double t = den != 0 ? ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den : 0.0;
+            x = ax + t * (bx - ax); y = ay + t * (by - ay);
+            return true;
+        }
+    return false;
+}
+// A 6 m cutting 16 m wide (4 m smooth sides) centred on the crossing point, running along the lower way's direction
+// (approximated as a disc of the same radius: the fixture lower ways are short).
+Dem cutting_at(double cx, double cy) {
+    return [=](double e, double n) {
+        const double d = std::hypot(e - cx, n - cy);
+        if (d <= 8) return 94.0;
+        if (d >= 12) return 100.0;
+        const double t = (d - 8) / 4;
+        return 94.0 + 6.0 * t * t * (3 - 2 * t);
+    };
+}
+} // namespace
+
+TEST_CASE("underpass deck (D61): the owner's crossings in the fixtures", "[layer][underpass][deck][d61]") {
+    // Kalbach: two parking aisles of a multi-storey car park under a parking aisle (no deck, not a crossing). A 66: the
+    // motorway over the continuous service tunnel 52405506 (covered: masked, no deck). Main-Taunus-Zentrum: the level-1
+    // aisle of the two-level car park over the tunnel-tagged ground-level aisle (no deck, not a crossing). Each crossing
+    // gets a synthetic 6 m DEM cutting so the D53-D58 rules alone would act there; the negative control strips the
+    // D61 tags (service, level, tunnel) from both ways and shows the crossing is then examined.
+    struct Case { const char* file; std::int64_t upper, lower; bool covered; };
+    const Case cases[] = {{"frankfurt_hoechst.osm.pbf", 402193257, 402193252, false}, {"frankfurt_hoechst.osm.pbf", 402193257, 1160921224, false},
+                          {"hoechst_a66.osm.pbf", 24504840, 52405506, true}, {"hoechst_a66.osm.pbf", 313879329, 52405506, true},
+                          {"hoechst_a66.osm.pbf", 199241226, 1529362865, false}};
+    for (const auto& c : cases) {
+        CAPTURE(c.file, c.upper, c.lower);
+        RoadGraph world = g2m_test::fixture_world(c.file);
+        double x = 0, y = 0;
+        REQUIRE(crossing_point(world, c.upper, c.lower, x, y));
+        const Dem dem = cutting_at(x, y);
+        // The tile holding the upper stretch over the crossing (an L2 neighbour of the crossing's tile near a border).
+        const auto holds_upper = [&](const RoadGeomTile& t) {
+            for (const auto& e : t.entries) {
+                if (e.way_id != c.upper || !e.profile) continue;
+                for (double s = 0; s <= e.profile->reference.length_m; s += 1)
+                    if (const auto xy = e.profile->reference.at(s); xy && std::hypot(xy->x - x, xy->y - y) < 5) return true;
+            }
+            return false;
+        };
+        std::optional<TileKey> found;
+        for (int dy = -1; dy <= 1 && !found; ++dy) for (int dx = -1; dx <= 1 && !found; ++dx) {
+            const TileKey k{geo::UtmZone{32, geo::Hemisphere::North}, 2, static_cast<std::int32_t>(std::floor(x / 1024.0)) + dx,
+                            static_cast<std::int32_t>(std::floor(y / 1024.0)) + dy};
+            const auto t = build(world, k, dem, false);
+            if (t && holds_upper(*t)) found = k;
+        }
+        REQUIRE(found);
+        const TileKey key = *found;
+        const auto decked = [&](const RoadGeomTile& t) {
+            for (const auto& u : t.underpasses)
+                if (t.entries[u.entry_index].way_id == c.upper && std::binary_search(u.lower_ways.begin(), u.lower_ways.end(), c.lower)) return true;
+            return false;
+        };
+        // The finder on every stretch of the upper way (whether or not the profile fit succeeds on the synthetic DEM).
+        const auto finder_crossings = [&](const RoadGraph& w) {
+            const auto in = g2m_test::road_geom_inputs(w, key); REQUIRE(in);
+            std::vector<HeightTile> heights(in->dem_keys.size());
+            std::vector<const HeightTile*> views;
+            for (std::size_t i = 0; i < heights.size(); ++i) { heights[i].key = in->dem_keys[i]; g2m_test::fill_dem(heights[i], dem); views.push_back(&heights[i]); }
+            const auto sampler = RoadDemSampler::make(views); REQUIRE(sampler);
+            const auto builder = RoadReferenceBuilder::make(in->context); REQUIRE(builder);
+            const auto stretches = builder->stretches(c.upper); REQUIRE(stretches);
+            const RoadUnderpassFinder finder(in->crossings, *sampler, key.zone, builtin_road_rules_de().underpass);
+            RoadUnderpassStats st;
+            ReferenceFitLimits fit; fit.allow_curvature_exceptions = true;
+            for (const auto& stretch : *stretches)
+                if (const auto ref = builder->fit_stretch(c.upper, stretch, fit)) (void)finder.spans(c.upper, stretch, *ref, &st);
+            return st.crossings;
+        };
+        RoadUnderpassStats stats;
+        const auto tile = build(world, key, dem, true, &stats);
+        REQUIRE(tile);
+        CHECK_FALSE(decked(*tile));
+        const std::size_t tagged_crossings = finder_crossings(world);
+        if (c.covered) CHECK(stats.covered >= 1); else CHECK(stats.in_structure >= 1);
+        // Negative control: without the D61 tags the crossing is examined (and served, or declined only by geometry).
+        for (auto& w : world.ways)
+            if (w.osm_id == c.upper || w.osm_id == c.lower)
+                std::erase_if(w.tags, [](const auto& t) { return t.first == "service" || t.first == "level" || t.first == "tunnel"; });
+        RoadUnderpassStats control;
+        const auto plain = build(world, key, dem, true, &control);
+        REQUIRE(plain);
+        const std::size_t plain_crossings = finder_crossings(world);
+        std::printf("D61 %s %lld over %lld: upper-way crossings %zu -> %zu without the tags, deck %d -> %d, covered %zu, in_structure %zu\n", c.file,
+                    static_cast<long long>(c.upper), static_cast<long long>(c.lower), tagged_crossings, plain_crossings,
+                    static_cast<int>(decked(*tile)), static_cast<int>(decked(*plain)), stats.covered, stats.in_structure);
+        if (c.covered) CHECK(decked(*plain));
+        else CHECK(plain_crossings > tagged_crossings);
+    }
+}
+
 // Where the fixtures' grade-separated crossings are on a map (hidden diag): every pair of ways whose node polylines
 // cross without a shared node, one of them on a lower OSM layer or tagged tunnel (never a bridge), with the
 // intersection in WGS84 (GRS80 UTM 32N reverse; the two ellipsoids differ by far less than the printed 1e-6 deg).
@@ -677,6 +841,84 @@ TEST_CASE("underpass crossings: WGS84 coordinates in both fixtures (diag)", "[.]
                                     tag(lo, "highway").c_str(), layer(lo), tag(lo, "tunnel") == "yes" ? ", tunnel" : "", g.lat, g.lon);
                     }
             }
+        }
+    }
+}
+
+// The owner's crossings (PR #13): every tag of the upper and lower ways, and every other OSM way (area or not) with a
+// parking/building/covered/tunnel tag whose node bbox holds a crossing point (hidden diag).
+TEST_CASE("underpass crossings: OSM tags of the owner's crossings (diag)", "[.][diag][underpass][tags]") {
+    struct Case { const char* file; std::int64_t upper, lower; };
+    const Case cases[] = {{"frankfurt_hoechst.osm.pbf", 402193257, 402193252}, {"frankfurt_hoechst.osm.pbf", 402193257, 1160921224},
+                          {"hoechst_a66.osm.pbf", 24504840, 52405506}, {"hoechst_a66.osm.pbf", 313879329, 52405506},
+                          {"hoechst_a66.osm.pbf", 199241226, 1529362865}, {"frankfurt_hoechst.osm.pbf", 199241226, 1529362865}};
+    for (const auto& c : cases) {
+        const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + c.file);
+        std::printf("== %s upper %lld lower %lld\n", c.file, static_cast<long long>(c.upper), static_cast<long long>(c.lower));
+        std::int32_t lat0 = 0, lon0 = 0;
+        for (const std::int64_t id : {c.upper, c.lower}) {
+            const auto* w = data.find_way(id);
+            if (!w) { std::printf("  way %lld: absent\n", static_cast<long long>(id)); continue; }
+            std::printf("  way %lld (%u nodes):", static_cast<long long>(id), w->refs_count);
+            for (const auto& t : data.tags_of(*w)) std::printf(" %.*s=%.*s", static_cast<int>(data.str(t.key).size()), data.str(t.key).data(),
+                                                              static_cast<int>(data.str(t.value).size()), data.str(t.value).data());
+            std::printf("\n");
+            if (id == c.lower) {
+                const auto refs = data.refs_of(*w);
+                if (const auto* n = data.find_node(refs[refs.size() / 2])) { lat0 = n->lat; lon0 = n->lon; }
+            }
+        }
+        if (lat0 == 0) continue;
+        for (const auto& w : data.ways) {
+            bool interesting = false;
+            for (const auto& t : data.tags_of(w)) {
+                const auto k = data.str(t.key), v = data.str(t.value);
+                if (k == "amenity" && v == "parking") interesting = true;
+                if (k == "building" && (v == "parking" || v == "garage" || v == "garages")) interesting = true;
+                if (k == "parking" || k == "covered" || k == "building:levels" || (k == "tunnel" && w.id != c.lower)) interesting = true;
+            }
+            if (!interesting) continue;
+            std::int32_t a = INT32_MAX, b = INT32_MIN, e = INT32_MAX, f = INT32_MIN;
+            for (const auto r : data.refs_of(w)) if (const auto* n = data.find_node(r)) { a = std::min(a, n->lat); b = std::max(b, n->lat); e = std::min(e, n->lon); f = std::max(f, n->lon); }
+            if (lat0 < a - 3000 || lat0 > b + 3000 || lon0 < e - 5000 || lon0 > f + 5000) continue;   // ~30 m margin
+            std::printf("    near way %lld:", static_cast<long long>(w.id));
+            for (const auto& t : data.tags_of(w)) std::printf(" %.*s=%.*s", static_cast<int>(data.str(t.key).size()), data.str(t.key).data(),
+                                                             static_cast<int>(data.str(t.value).size()), data.str(t.value).data());
+            std::printf("\n");
+        }
+    }
+}
+
+// D61 on the golden DEM (hidden diag): every served deck and every covered span of both fixtures over
+// g2m_test::carve_tilted_dem (the g3c/g3d golden DEM), and the D61 skip counters per tile.
+TEST_CASE("underpass deck (D61): decks and covered spans of both fixtures on the golden DEM (diag)", "[.][diag][underpass][d61]") {
+    for (const char* file : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
+        const RoadGraph world = g2m_test::fixture_world(file);
+        std::set<TileKey> keys;
+        for (const auto& n : world.nodes)
+            keys.insert(TileKey{geo::UtmZone{32, geo::Hemisphere::North}, 2, static_cast<std::int32_t>(floor_div(n.position.x, 1024000)),
+                                static_cast<std::int32_t>(floor_div(n.position.y, 1024000))});
+        for (const auto& key : keys) {
+            RoadUnderpassStats stats;
+            const auto tile = build(world, key, g2m_test::carve_tilted_dem, true, &stats);
+            REQUIRE(tile);
+            for (const auto& u : tile->underpasses)
+                std::printf("  %s tile %d/%d deck: way %lld [%.2f, %.2f] m, depth %d mm, lower %lld\n", file, key.x, key.y,
+                            static_cast<long long>(tile->entries[u.entry_index].way_id), u.start_m, u.end_m, static_cast<int>(u.depth_mm),
+                            static_cast<long long>(u.lower_ways.front()));
+            if (stats.crossings || stats.in_structure)
+                std::printf("D61 %s tile %d/%d: crossings %zu, served %zu, decks %zu, covered %zu, in_structure %zu\n", file, key.x, key.y,
+                            stats.crossings, stats.served, stats.decks, stats.covered, stats.in_structure);
+            // Before D61 a covered span was a deck: the same tile with the lower ways' tunnel tags stripped.
+            if (!stats.covered) continue;
+            RoadGraph open = world;
+            for (auto& w : open.ways) std::erase_if(w.tags, [](const auto& t) { return t.first == "tunnel"; });
+            const auto before = build(open, key, g2m_test::carve_tilted_dem, true);
+            REQUIRE(before);
+            for (const auto& u : before->underpasses)
+                std::printf("  %s tile %d/%d deck without tunnel tags: way %lld [%.2f, %.2f] m, depth %d mm, lower %lld\n", file, key.x, key.y,
+                            static_cast<long long>(before->entries[u.entry_index].way_id), u.start_m, u.end_m, static_cast<int>(u.depth_mm),
+                            static_cast<long long>(u.lower_ways.front()));
         }
     }
 }

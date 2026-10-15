@@ -2469,6 +2469,37 @@ you can tune them when I spot issues while driving").** `min_depth_mm` 1000, `wi
 `max_span_m` 80, `abutment_mm` 2000, `depth_tol_mm` 100, `lower_margin_mm` 1000, `end_clearance_mm` 1000 in
 `data/road_rules/de.json`. No cap as a share of the stretch. Tuning follows the owner's reports from driving.
 
+**D61. Tag rules for underpass crossings (owner answers 2026-10-15, geo2map PR #13 comment 6200110029).** The owner
+identified the fixtures' crossings: 52405506 is one continuous tunnel under the A 66; 402193252 and 1160921224 are
+parking under a parking deck (Kalbach); 1529362865 is the ground floor under the second storey of a two-level car park
+(Main-Taunus-Zentrum). The OSM tags:
+
+| crossing | upper way | lower way | D53-D58 | D61 |
+|---|---|---|---|---|
+| Kalbach | 402193257 `service=parking_aisle` | 402193252 `service=parking_aisle layer=-1 level=-1`, inside `parking=multi-storey` | examined, deck where the DEM dips | not a crossing (in_structure) |
+| Kalbach | 402193257 | 1160921224 (same tags) | same | not a crossing |
+| A 66 | 24504840 / 313879329 `highway=motorway` | 52405506 `highway=service tunnel=yes layer=-1` | deck over a DEM cutting | covered: masked, no deck |
+| MTZ | 199241226 `service=parking_aisle level=1` (no layer) | 1529362865 `service=parking_aisle tunnel=yes layer=-1`, under `building=parking` | deck where the DEM dips | not a crossing |
+
+Rules:
+1. *Structure storeys.* A way tagged `service=parking_aisle` or carrying any `level=*` tag is neither an upper road nor
+   a lower road of the finder (`RoadUnderpassStats::in_structure` counts both). Its `layer`/`level` describes the storey
+   of a building, not the ground, and the bare-earth DEM holds neither the deck nor the space under it. The MTZ upper
+   aisle has no layer at all, so its OSM layer (0) put it above the tunnel-tagged ground floor - the wrong way round.
+   What such an aisle should stand on (a deck of the car park) is a separate structure question, not an underpass.
+2. *Covered tunnels.* A span whose lower ways are all tagged `tunnel` (any value but "no") is `covered`
+   (`RoadUnderpassSpanFit::covered`, `RoadUnderpassStats::covered`): the mask still holds the profile at the rim chord
+   where the DEM dips (a DEM can lose the fill over a culvert-like tunnel), but no deck is served, so the carve fills the
+   ground over the tunnel and `g2m::world::build_road_decks` builds its inferred tunnel roof as before D53. One lower
+   way that is not a tunnel in a merged span makes the span a deck. No length threshold: an OSM tunnel tag already says
+   the lower road is covered; an untagged lower road (the B 8 case, vault G2M-011) is still decked.
+Config text: roads.geom `underpass-tags=D61`. Tests `[d61]` in `tests/layer/test_road_underpass.cpp`: the synthetic
+scene with a tunnel lower road (masked, no deck; the untagged control is a deck) and four storey variants (no crossing,
+no mask), and the owner's five fixture crossings each over a synthetic 6 m DEM cutting (no deck; A 66 covered), with
+controls that strip `service`/`level`/`tunnel` from both ways (A 66: a deck; the parking cases: the crossing is
+examined again). On the golden DEM (`carve_tilted_dem`) the one deck the fixtures served before D61, way 24504840
+over 52405506 (37.0 m, 1.7 m deep), is now covered; g3c and g3d change in that one hoechst_a66 tile (1820/21684) only.
+
 ---
 
 

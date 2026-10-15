@@ -1175,11 +1175,13 @@ rim chord over the span, applied via `RoadProfileLimits::underpass` in strict/Re
 on the ground line and adds a bridge line per deck (`CarveOptions::underpass_decks` sabotage), the road envelope marks
 deck capsules bridge, `g2m::world::build_road_decks` adds an inferred deck per span (no tunnel roof under it). D59 (owner: steep walls): ground
 blends fade out within 1 m past the deck end planes (`Station::deck_lo/deck_hi`, `kUnderpassWallFadeM`, sabotage `CarveOptions::underpass_steep_walls`), so the cutting
-keeps its own walls under the deck. D60: parameters kept as served (owner 2026-10-15). Config
-texts: roads.geom `enc=9 ... underpass=1 crossing-context=1`, carved/class `enc=9 ... underpass-deck=1 underpass-walls=steep/1`. Tests
+keeps its own walls under the deck. D60: parameters kept as served (owner 2026-10-15). D61 (owner's tag answers): parking-structure storeys
+(`service=parking_aisle`, `level=*`) are neither upper nor lower roads (`RoadUnderpassStats::in_structure`); a span over tunnel lower ways only is
+`covered` (`RoadUnderpassSpanFit::covered`: masked, no deck). Config
+texts: roads.geom `enc=9 ... underpass=1 crossing-context=1 underpass-tags=D61`, carved/class `enc=9 ... underpass-deck=1 underpass-walls=steep/1`. Tests
 `tests/layer/test_road_underpass.cpp` (`[underpass][deck]`: bounds + ground outside, non-deck controls, near end,
-tile invariance + negative control, encoding 9 round trip/validation, carve no-slot + sabotage, `[walls]` steep walls + sabotage; hidden `[.][diag]` WGS84 crossing list and `[.][diag]` example-4
-CSV), `tests/world/test_road_meshes.cpp` (D56 deck), scene `tests/support/underpass_scene.h`.
+tile invariance + negative control, encoding 9 round trip/validation, carve no-slot + sabotage, `[walls]` steep walls + sabotage, `[d61]` tag rules on the scene and on the owner's five fixture crossings with tag-stripped controls; hidden `[.][diag][tags]` OSM tags at those crossings, hidden `[.][diag][d61]` decks/covered spans of both fixtures on the golden DEM, `[.][diag]` WGS84 crossing list and `[.][diag]` example-4
+CSV), `tests/world/test_road_meshes.cpp` (D56 deck; D61: a tunnel lower road gets no served deck), scene `tests/support/underpass_scene.h`.
 
 ## G4 routing, slice 1 (2026-10-14)
 
