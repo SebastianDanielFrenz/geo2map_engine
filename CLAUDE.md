@@ -1049,6 +1049,18 @@ without it unchanged. Decisions D36-D41 in `docs/street_fidelity/p2_junction_des
 `fixture_world`, `carve_tilted_dem`); golden `g3d` (`tests/golden/golden_g3d.cpp`, `testdata/golden/g3d_golden.txt`, 4 tiles,
 1 vs 4 workers checked, Windows = Linux).
 
+Terrain migration phase 4 (design D47, 2026-10-15): `roads.geom` encoding 8 (`kRoadGeomEncoding` 8,
+`LayerEncoding::RoadGeomTunnels`; the byte layout of 7, which still decodes and is written on request without tunnel floors).
+`complete_road_profiles` step 2a builds tunnel floors (`ProfileProvenance::TunnelFloor` = 4; the game's DEM-floor step,
+options `tunnel_floors`, `tunnel_spacing_m` 5, `tunnel_max_grade` 0.30, `tunnel_min_radius_m` 20,
+`tunnel_chord_min_length_m` 0 = never, owner Q1 open); tunnel profiles are never carved, never paint grip and stay `Tunnel`
+approaches. `bridge_anchor_reuse`: the end plane of an accepted incident bridge stretch (recomputed tile-invariantly, one
+level) wins over the base anchor; a ground stretch at a bridging node with no accepted bridge ends on the DEM plane, and
+falls back to the base anchors when those planes leave no cubic (`ground_base_fallback`). `Walk::anchor` tries every incident
+bridge edge. Config text `enc=8 ... tunnel-floor=5/0.29999999999999999/20/chord:0 bridge-anchor-reuse=1` (release id bump);
+terrain.carved names `roads.geom enc=8`. Tests `[D47]` (test_road_completion.cpp, against the game's live completion in
+`tests/support/road_completion_reference.h` `complete_road_profiles_live`; roadcmp on both fixtures 0 game-only entries).
+
 Junction gradient (design D42, after slice 9): the junction surface blends v_i = b_i + phi_i (p_i - b_i) + psi_i (z_i - p_i)
 instead of z_i (b base, p paved band only, z full approach surface; `junction_approach_heights` returns all three), with
 phi over l_i = clamp(2 relief_i / slope, min, max) and psi over the verge fade (<= min, so z_J stays convex). Parameters:

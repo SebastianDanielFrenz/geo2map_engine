@@ -2222,6 +2222,48 @@ rejected.
   config hash and release ids move; g3xs, g3j, g3d re-recorded (Linux). Test `[taper]` in
   `tests/layer/test_junction_fillets.cpp`.
 
+### Decisions made for terrain migration phase 4 (completion parity)
+
+**D47. Tunnel floors and the game's accepted-bridge anchors are served (roads.geom encoding 8).**
+- Problem (terrain migration plan O2, O3): the game still completed what the served tier left declined. Every tunnel
+  (the tier skipped them, `tunnel_skipped`) and bridges whose end node only the game's anchor map, filled from the
+  tile's accepted bridges in entry order, could support.
+- Tunnel floors (step 2a of `complete_road_profiles`, provenance `TunnelFloor` = 4): the game's tunnel step ported as
+  is. `fit_stretch` with curvature exceptions over the context, skip under 0.5 m, `max(1, ceil(L / spacing))` intervals
+  (decline over 2047), `RoadDemSampler::sample` at every station (decline when one is missing), `fit_vertical_profile`
+  at `tunnel_max_grade` (0.30) / `tunnel_min_radius_m` (20 m) / 16384 iterations with the first and last interval
+  secants, clamped, as end grades. Byte-identical to racing_game ef4ce25 on the test scenes (no libm in that step).
+  A function of the entry's own way and the DEM along it: tile-invariant. Owner question Q1 (deep tunnels) is open: a
+  tunnel at least `tunnel_chord_min_length_m` long takes the straight chord between its two portal samples (a constant
+  grade along the curved reference; skipped when the chord exceeds the grade bound) instead. The served value is 0
+  (never), the game's rule; curved and sloped tunnels work in both modes (test `[tunnel]`).
+- A tunnel profile is never carved (`terrain_carve` skips tunnel entries), never paints grip (`envelope_road_segments`
+  skips it) and stays a `Tunnel` junction approach. The validator certifies TunnelFloor profiles at the outer option
+  bounds (30 %, 20 m), accepts a tunnel profile only as TunnelFloor and a Tunnel approach with one.
+- Encoding 8: encoding 7's decoder rejects provenance 4, so the encoding moves (the byte layout is 7's). 7 still decodes
+  and is written on request when no tunnel floor is in the tile.
+- Accepted-bridge anchors (`bridge_anchor_reuse`): at a bridging end node the end plane of an accepted bridge stretch
+  ending there (height, end grade along its end heading: what the game's map holds for a served bridge) takes
+  precedence over the base anchor (D30 strict anchor, else the walk). To stay tile-invariant (D25) the accepted
+  outcome of each incident bridge stretch is recomputed from the node: strict, else the retry, else the step-2 span
+  between the base anchors of its two end nodes; one level (an accepted plane never feeds another), the last in
+  (way id, start ref) order wins as in the game's entry-ordered map, the asking stretch excluded. The incident bridges
+  are in the context with their DEM and node graph tiles (D35). The gain is mostly the grade: a ground stretch beside
+  a span that fell back to the secant grade now continues it instead of kinking by the approach plane's grade.
+- Ground stretches (step 3) at a bridging node where no incident bridge stretch is accepted end on the DEM junction
+  plane there, as in the game (its map holds accepted bridges only), not on the walk plane of an unprofiled structure.
+  Where these planes leave no cubic (solver or endpoint-curvature failure, after the D43 ease), the base anchors of the
+  previous release are tried (`ground_base_fallback`), so the tier never declines a ground stretch the previous
+  release completed. roadcmp on both OSM fixtures: entries the game's live code profiles that the new tier leaves
+  declined = 0 (was 6 / 25 with the planes alone, 3 / 26 with the DEM-plane rule but no fallback).
+- Walk over every incident bridge edge: `Walk::anchor` walks away from each incident bridge edge in order until one
+  finds support (D25 tried the first only). Two bridge ways meeting at a node, the first a short one: D25 crossed the
+  long one and ran out of its 60 m budget, the game supported both ends (its own walks and its map). Still a pure
+  function of the node.
+- Config text gains ` tunnel-floor=5/0.29999999999999999/20/chord:0 bridge-anchor-reuse=1` and `enc=8`; roads.geom
+  release ids move (and with them every terrain.carved id). Tests: `[D47]` in `tests/layer/test_road_completion.cpp`
+  against `game_reference::complete_road_profiles_live` (the game's code, verbatim); goldens g3xs, g3j, g3d re-recorded.
+
 ---
 
 

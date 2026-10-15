@@ -150,7 +150,9 @@ Result<void> validate_junctions(const RoadGeomTile& tile) {
             const auto& e = tile.entries[a.entry_index];
             switch (a.status) {
             case JunctionApproachStatus::Used: if (!e.profile || !e.cross_section) return invalid("junction approach status"); break;
-            case JunctionApproachStatus::NoProfile: case JunctionApproachStatus::Tunnel: if (e.profile) return invalid("junction approach status"); break;
+            case JunctionApproachStatus::NoProfile: if (e.profile) return invalid("junction approach status"); break;
+            // A tunnel approach is declined, or (encoding 8) carries its TunnelFloor profile (D47).
+            case JunctionApproachStatus::Tunnel: if (e.profile && !e.profile->attributes.tunnel) return invalid("junction approach status"); break;
             case JunctionApproachStatus::NoCrossSection: if (!e.profile || e.cross_section) return invalid("junction approach status"); break;
             default: return invalid("junction approach status");
             }
@@ -316,8 +318,12 @@ Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const Road
 }
 Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
     const auto graph_valid = validate_road_graph_tile(tile.source); if (!graph_valid) return graph_valid.error();
-    if (tile.encoding != kRoadGeomEncoding && tile.encoding != kRoadGeomEncodingPrevious && tile.encoding != kRoadGeomEncodingLegacy) return invalid("encoding");
-    const bool legacy = tile.encoding == kRoadGeomEncodingLegacy, current = tile.encoding == kRoadGeomEncoding;
+    if (tile.encoding != kRoadGeomEncoding && tile.encoding != kRoadGeomEncodingJunctions && tile.encoding != kRoadGeomEncodingPrevious &&
+        tile.encoding != kRoadGeomEncodingLegacy) return invalid("encoding");
+    // `current`: encodings 8 and 7 (junctions, furniture, provenance); provenance 4 (TunnelFloor) only in 8.
+    const bool legacy = tile.encoding == kRoadGeomEncodingLegacy,
+        current = tile.encoding == kRoadGeomEncoding || tile.encoding == kRoadGeomEncodingJunctions;
+    const unsigned max_provenance = tile.encoding == kRoadGeomEncoding ? 4 : 3;
     if (tile.entries.size() > kMaxEntries) return invalid("entry budget");
     if (legacy && !tile.features.empty()) return invalid("legacy tile carries features");
     if (!current && (!tile.junctions.empty() || !tile.furniture.empty())) return invalid("encoding 6/5 tile carries junctions or furniture");
@@ -341,7 +347,7 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
             RoadProfileOrigin origin;
             if (!tile.origins.empty()) {
                 origin = tile.origins[index - 1];
-                if (static_cast<unsigned>(origin.provenance) > 3) return invalid("provenance");
+                if (static_cast<unsigned>(origin.provenance) > max_provenance) return invalid("provenance");
                 if (origin.provenance == ProfileProvenance::Strict ? origin.strict_decline_code != 0
                     : (!entry.profile || origin.strict_decline_code < 1 || origin.strict_decline_code > static_cast<unsigned>(ErrorCode::ReadOnly)))
                     return invalid("provenance record");
@@ -359,7 +365,8 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
             const auto& p = *entry.profile;
             const auto attrs = resolve_road_attributes(way); if (!attrs) return attrs.error();
             const auto& ref = p.reference;
-            if (p.attributes != *attrs || p.attributes.tunnel || p.stretch.start_ref != stretch.start_ref || p.stretch.end_ref != stretch.end_ref ||
+            // A tunnel carries a profile only as a TunnelFloor completion, and a TunnelFloor profile only on a tunnel (D47).
+            if (p.attributes != *attrs || p.attributes.tunnel != (origin.provenance == ProfileProvenance::TunnelFloor) || p.stretch.start_ref != stretch.start_ref || p.stretch.end_ref != stretch.end_ref ||
                 ref.way_id != way.osm_id || !finite(ref.length_m) || ref.length_m < 0.5 || ref.length_m > 100000 ||
                 !finite(ref.requested_min_radius_m) || ref.requested_min_radius_m < 1 || !finite(ref.fitted_min_radius_m) || ref.fitted_min_radius_m < 1 ||
                 (ref.curvature_exception ? ref.fitted_min_radius_m >= ref.requested_min_radius_m : ref.fitted_min_radius_m != ref.requested_min_radius_m) ||
@@ -404,6 +411,7 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
             double grade = attrs->max_grade_per_mille / 1000.0, radius = attrs->min_vertical_radius_m;
             if (origin.provenance == ProfileProvenance::BridgeCompleted) { grade = std::max(0.12, grade); radius = std::min(250.0, radius); }
             if (origin.provenance == ProfileProvenance::GroundCompleted) { grade = std::max(0.12, grade); radius = std::min(500.0, radius); }
+            if (origin.provenance == ProfileProvenance::TunnelFloor) { grade = kRoadCompletionMaxTunnelGrade; radius = kRoadCompletionMinTunnelRadiusM; }
             const double curvature = 1.0 / radius;
             for (const auto& s : p.vertical.segments) {
                 if (!finite(s.station_m) || std::fabs(s.station_m - station) > 1e-7 || !finite(s.length_m) || s.length_m < 0.5 ||
@@ -426,12 +434,14 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
     return validate_furniture(tile);
 }
 Result<TileBody> encode_road_geom(const RoadGeomTile& tile) {
-    if (tile.encoding != kRoadGeomEncoding && tile.encoding != kRoadGeomEncodingPrevious)
-        return make_error(ErrorCode::InvalidArgument, "roads.geom: only encodings 7 and 6 are written");
+    if (tile.encoding != kRoadGeomEncoding && tile.encoding != kRoadGeomEncodingJunctions && tile.encoding != kRoadGeomEncodingPrevious)
+        return make_error(ErrorCode::InvalidArgument, "roads.geom: only encodings 8, 7 and 6 are written");
+    if (tile.encoding == kRoadGeomEncodingJunctions) for (const auto& o : tile.origins) if (o.provenance == ProfileProvenance::TunnelFloor)
+        return make_error(ErrorCode::InvalidArgument, "roads.geom: encoding 7 cannot carry a tunnel floor");
     if (tile.encoding == kRoadGeomEncodingPrevious) for (const auto& o : tile.origins) if (o.provenance != ProfileProvenance::Strict)
         return make_error(ErrorCode::InvalidArgument, "roads.geom: encoding 6 cannot carry a completed profile");
     const auto valid = validate_road_geom_tile(tile); if (!valid) return valid.error();
-    // Encodings 6 and 7 embed the encoding-5 graph section (with node tags), byte for byte.
+    // Encodings 6, 7 and 8 embed the encoding-5 graph section (with node tags), byte for byte.
     const auto graph = encode_road_graph(tile.source, kRoadGraphEncoding); if (!graph) return graph.error();
     ByteWriter w; w.varint(tile.entries.size());
     for (const auto& entry : tile.entries) {
@@ -528,9 +538,12 @@ Result<TileBody> encode_road_geom(const RoadGeomTile& tile) {
     return body;
 }
 Result<RoadGeomTile> decode_road_geom(const TileBody& body) {
-    if ((body.encoding != kRoadGeomEncoding && body.encoding != kRoadGeomEncodingPrevious && body.encoding != kRoadGeomEncodingLegacy) || body.encoding_version != 1)
+    if ((body.encoding != kRoadGeomEncoding && body.encoding != kRoadGeomEncodingJunctions && body.encoding != kRoadGeomEncodingPrevious &&
+         body.encoding != kRoadGeomEncodingLegacy) || body.encoding_version != 1)
         return make_error(ErrorCode::Unsupported, "roads.geom: encoding/version");
-    const bool legacy = body.encoding == kRoadGeomEncodingLegacy, current = body.encoding == kRoadGeomEncoding;
+    const bool legacy = body.encoding == kRoadGeomEncodingLegacy,
+        current = body.encoding == kRoadGeomEncoding || body.encoding == kRoadGeomEncodingJunctions;
+    const unsigned max_provenance = body.encoding == kRoadGeomEncoding ? 4 : 3;
     const std::size_t section_count = legacy ? 2 : current ? 7 : 4;
     if (body.sections.size() != section_count) return invalid("sections");
     for (std::size_t i = 0; i < section_count; ++i) if (body.sections[i].type != i + 1) return invalid("sections");
@@ -693,7 +706,7 @@ Result<RoadGeomTile> decode_road_geom(const TileBody& body) {
         const auto origins = pr.varint(); if (!pr.ok() || origins != tile.entries.size() || origins > pr.remaining() / 3) return invalid("provenance count");
         for (std::uint64_t i = 0; i < origins; ++i) {
             const auto provenance = pr.u8(); const auto code = pr.u16();
-            if (!pr.ok() || provenance > 3) return invalid("provenance record");
+            if (!pr.ok() || provenance > max_provenance) return invalid("provenance record");
             tile.origins.push_back({static_cast<ProfileProvenance>(provenance), code});
         }
         if (!pr.at_end()) return invalid("truncated or trailing provenance bytes");

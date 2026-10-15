@@ -1,7 +1,10 @@
 #pragma once
 // Street fidelity P2 slice 6: the profile completion tier of design 6.6, a port of racing_game's
 // complete_road_profiles and its 20 m retry that runs after the strict pass of build_road_geom_tile and flags every
-// profile it adds (ProfileProvenance). No tunnel completion (not carved, not drivable).
+// profile it adds (ProfileProvenance). Terrain migration phase 4 (decision D47) adds the game's tunnel floors
+// (TunnelFloor: DEM floor, or the portal chord above RoadCompletionOptions::tunnel_chord_min_length_m; never carved)
+// and the game's accepted-bridge anchors (an accepted bridge stretch's end plane ahead of the walk, recomputed from
+// the node so the result stays tile-invariant), plus a walk that tries every incident bridge edge.
 //
 // Tile invariance (decision D25). The result for one entry is a function of
 //   - the entry's own strict outcome and the strict pass's anchor at its two end nodes (road_strict_anchor, D30: the
@@ -32,12 +35,13 @@ struct RoadBridgeAnchor {
 };
 // The anchor of a node, a pure function of the node: the walk of racing_game's `abutment` (the most aligned ground
 // edge, dot > 0.25, on through bridge edges, support 32 m of ground away, bounded by options.abutment_path_m of
-// total path) starting AWAY from the first incident bridge edge in (way id, segment index) order, so that two bridge
-// stretches meeting at the node read the same plane whichever asks. The plane is the DEM plane at the support point
+// total path) starting AWAY from each incident bridge edge in (way id, segment index) order until one finds support
+// (D47; with options.bridge_anchor_reuse = false only the first, D25), so that two bridge stretches meeting at the
+// node read the same plane whichever asks. The plane is the DEM plane at the support point
 // carried back to the node. `graph` must hold every way incident to every node within the walk budget of `node`.
 RoadBridgeAnchor road_bridge_anchor(const RoadGraph& graph, const RoadDemSampler& dem, geo::UtmZone zone,
     std::int64_t node, const RoadCompletionOptions& options = {});
-// Steps 1-3 of design 6.6 over entries that carry only their strict outcome (profile or decline, no cross-section
+// Steps 1-3 of design 6.6 (step 2a: tunnel floors, D47) over entries that carry only their strict outcome (profile or decline, no cross-section
 // yet). Fills `origins` (one per entry). `builder` is built over the context graph. Declined entries only are
 // changed; accepted strict profiles are never touched (decision D26).
 Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::vector<RoadProfileOrigin>& origins,

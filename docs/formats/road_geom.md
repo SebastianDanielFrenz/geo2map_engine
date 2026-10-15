@@ -1,11 +1,17 @@
-# g2m.roads.geom encoding 7 / version 1
+# g2m.roads.geom encoding 8 / version 1
 
 Level-2 baked geometry, explicitly selected. Complete original topology and
 midpoint ownership are retained. Every canonical graph stretch has exactly
 one accepted parametric profile or explicit declined outcome. A geometry tile
 does not promise every road is driveable; consumers must inspect declines.
 
-Encoding 7 (street fidelity P2 slice 8, the deriver writes it) adds junction
+Encoding 8 (terrain migration phase 4, decision D47, the deriver writes it) has
+the byte layout of encoding 7; it adds provenance 4 (TunnelFloor) to section 7,
+and a tunnel stretch may then carry a profile (its tunnel floor). Encoding 7
+still decodes (provenance 0..3, no tunnel profile) and is written when a tile
+asks for it and holds no tunnel floor.
+
+Encoding 7 (street fidelity P2 slice 8) adds junction
 polygons, junction furniture and the profile provenance of the completion tier
 (sections 5-7) to encoding 6. Encoding 6 (P1 slice 5: lane-aware cross-sections
 and profile features) still decodes, with no junctions, furniture or origins
@@ -164,7 +170,8 @@ junction's approach trims.
 ## Section 7: provenance (encoding 7)
 
 `varint count` (equals the entry count), then per entry `u8 provenance`
-(0 Strict, 1 Retry, 2 BridgeCompleted, 3 GroundCompleted) and `u16
+(0 Strict, 1 Retry, 2 BridgeCompleted, 3 GroundCompleted, encoding 8 also 4
+TunnelFloor) and `u16
 strict_decline_code` (0 for Strict; for a completed profile the ErrorCode of the
 strict pass's decline, 1..ReadOnly).
 
@@ -178,7 +185,8 @@ Hard errors (design 9.2), each with its own rejection test
   excepted); Cluster flag iff more than one node; a ClusterTooLarge record has at
   least two nodes; flags and decline in range.
 - **Approaches.** 1..4096; entry index < entries; status consistent with the entry
-  (Used: profile and cross-section; NoProfile/Tunnel: no profile; NoCrossSection:
+  (Used: profile and cross-section; NoProfile: no profile; Tunnel: no profile or
+  a tunnel profile (encoding 8); NoCrossSection:
   profile without cross-section); the junction-side end node is one of the
   junction's nodes; no (entry, end) twice; trim finite in [0, max(0, L - 0.5)] (0
   without a profile); absorbed entries ascending, both ends held, not an approach.
@@ -201,7 +209,10 @@ Hard errors (design 9.2), each with its own rejection test
   from the cross-section (`furniture_lane_groups`, mm-rounded: the acceptance rule
   of design 7.2, enforced at decode); a signal has t_from == t_to and length 0.
 - **Provenance.** One record per entry; a Strict record names no decline, a
-  completed one a decline code and its entry has a profile.
+  completed one a decline code and its entry has a profile. A profile on a
+  tunnel stretch is TunnelFloor and a TunnelFloor profile is on a tunnel; it is
+  certified at 30 % grade and a 20 m vertical radius (the outer bounds of the
+  tunnel options).
 
 ## Cross-section validation
 

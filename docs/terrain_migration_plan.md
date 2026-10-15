@@ -1,6 +1,6 @@
 # Terrain migration plan: racing_game -> geo2map
 
-Status (2026-10-15): phases 0-2 done (game re-fit dropped; geo2map 6be9d3f phase 1, 6b6c621 phase 2, 8987291 msvc fix; racing_game switched to g2m::world::TerrainService). Phase 3a done (`StructureSet` / `RoadRibbonTile` builders in g2m_world, byte-pinned against the game; racing_game builds decks and ribbons through them). Phase 3b done (`ViewStreamer`, `RingStreamer`, `BuildingSet` in g2m_world, pinned against the game's C++ and its GDScript stream policy; racing_game deleted its own streamer and building code and colours chunks by class id). Phase 4 is next. Owner answers to section 5 are at the end of this file. Originally written 2026-10-12 in geo2map out/ (gitignored); the files listed under Sources that live in out/ folders exist only on the original machine.
+Status (2026-10-15): phases 0-2 done (game re-fit dropped; geo2map 6be9d3f phase 1, 6b6c621 phase 2, 8987291 msvc fix; racing_game switched to g2m::world::TerrainService). Phase 3a done (`StructureSet` / `RoadRibbonTile` builders in g2m_world, byte-pinned against the game; racing_game builds decks and ribbons through them). Phase 3b done (`ViewStreamer`, `RingStreamer`, `BuildingSet` in g2m_world, pinned against the game's C++ and its GDScript stream policy; racing_game deleted its own streamer and building code and colours chunks by class id). Phase 4 done in code (D47: roads.geom encoding 8, tunnel floors as provenance `TunnelFloor`, accepted-bridge anchors; fixture roadcmp: 0 game-only entries; the real-store probe is still to be run by the owner after warming the stores). Phase 5 is next. Owner answers to section 5 are at the end of this file. Originally written 2026-10-12 in geo2map out/ (gitignored); the files listed under Sources that live in out/ folders exist only on the original machine.
 
 Owner decision, 2026-10-12, verbatim: "move the ENTIRE terrain logic into geo2map. It is needed for future projects."
 
@@ -359,6 +359,7 @@ Split into two game PRs if needed.
   - GAP 2 count drops by 24 (14).
   - The game-only list contains only GAP 2b and GAP 3 cases.
 - **Release id:** **bump.** The corridor and Hessen derived stores go cold for roads.geom and its dependents. Warm with `warm()` (phase 2) or the geo2map bake tooling before the test drive.
+- **As built (2026-10-15):** design D47 (`docs/street_fidelity/p2_junction_design.md`). Q1 stays open: `RoadCompletionOptions::tunnel_chord_min_length_m` (0 = never, the game's DEM floor; served value 0) switches long tunnels to the portal chord. Ground stretches fall back to the previous release's anchors where the accepted planes leave no cubic, so no stretch the previous release completed is declined. Tests `[D47]` in tests/layer/test_road_completion.cpp; goldens g3xs/g3j/g3d and the phase-3a mesh pins (regenerated with the game's 945455a mesh code) re-recorded.
 
 ### Phase 5: abutment walk length + margin (id bump #2, M)
 

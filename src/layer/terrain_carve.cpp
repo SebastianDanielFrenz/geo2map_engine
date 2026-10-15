@@ -893,7 +893,7 @@ LayerDesc terrain_carved_desc() {
 
 std::string terrain_carved_config_text() {
     const auto& sha = builtin_carve_default().content_sha256;
-    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 junction=D42 carve=" +
+    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=8 radius=192 junction=D42 carve=" +
         to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even";
 }
 
