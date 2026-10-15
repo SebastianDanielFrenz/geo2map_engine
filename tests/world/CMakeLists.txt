@@ -41,10 +41,11 @@ add_executable(g2m_terrain_service_bench bench_terrain_service.cpp)
 target_link_libraries(g2m_terrain_service_bench PRIVATE g2m_world g2m_layers g2m_server g2m_headless_env g2m_warnings g2m_options)
 
 # Phase-3a mesh reference generator (NOT part of any normal build, needs a racing_game checkout): runs racing_game
-# 0c027dc's own road_structures.cpp / road_visual.cpp over road_mesh_test_data.h's cases and prints road_mesh_pins.inc.
+# 945455a's own road_structures.cpp / road_visual.cpp over road_mesh_test_data.h's cases and prints road_mesh_pins.inc
+# (2>/dev/null: the game code logs RG_STRUCTURE lines to stderr).
 #   bash tests/world/refgen/extract_mesh_ref.sh <racing_game> <dir>
 #   cmake --preset linux-release -DG2M_WORLD_MESH_REFGEN_DIR=<dir>
-#   cmake --build <build> --target g2m_world_mesh_refgen && <build>/tests/world/g2m_world_mesh_refgen > tests/world/road_mesh_pins.inc
+#   cmake --build <build> --target g2m_world_mesh_refgen && <build>/tests/world/g2m_world_mesh_refgen 2>/dev/null > tests/world/road_mesh_pins.inc
 if(G2M_WORLD_MESH_REFGEN_DIR)
   add_executable(g2m_world_mesh_refgen refgen/refgen_meshes.cpp ${G2M_WORLD_MESH_REFGEN_DIR}/road_structures.cpp
     ${G2M_WORLD_MESH_REFGEN_DIR}/road_visual.cpp ${G2M_WORLD_MESH_REFGEN_DIR}/traffic_rank.cpp)

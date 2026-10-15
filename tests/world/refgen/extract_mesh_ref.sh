@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Writes the racing_game 0c027dc sources the phase-3a mesh pins (tests/world/road_mesh_pins.inc) were recorded from,
+# Writes the racing_game 945455a sources (grade separation; 0c027dc for the cases without it gives the same pins) the phase-3a mesh pins (tests/world/road_mesh_pins.inc) were recorded from,
 # extracted VERBATIM from the commit (not the working tree) into <out dir>:
 #   rg/road_structures.h, rg/road_visual.h, road_structures.cpp, road_visual.cpp (whole files),
 #   rg/npc_traffic.h (a stub declaring traffic_road_rank) and traffic_rank.cpp (npc_traffic.cpp's tag() and
@@ -9,7 +9,7 @@
 set -euo pipefail
 GAME="$1"
 OUT="$2"
-REV=0c027dc
+REV=945455a
 show() { git -C "$GAME" show "$REV:$1"; }
 mkdir -p "$OUT/rg"
 show core/include/rg/road_structures.h > "$OUT/rg/road_structures.h"

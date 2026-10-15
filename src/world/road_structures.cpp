@@ -1,5 +1,5 @@
 // g2m/world/road_structures.cpp - see include/g2m/world/road_structures.h. Ported from racing_game
-// core/src/road_structures.cpp (0c027dc) statement for statement; libm calls are det math (std::sqrt is IEEE-exact).
+// core/src/road_structures.cpp (0c027dc, approach decks from 945455a) statement for statement; libm calls are det math (std::sqrt is IEEE-exact).
 // tests/world/test_road_meshes.cpp pins the output byte for byte against meshes recorded from the game's own code.
 #include "g2m/world/road_structures.h"
 
@@ -7,6 +7,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <set>
+#include <utility>
 
 namespace g2m::world {
 
@@ -31,10 +34,12 @@ int osm_layer(const RoadGraphWay& w) {
     return 0;
 }
 
-std::shared_ptr<const RoadDeck> deck(const RoadProfile& profile, std::int64_t id, double from, double to, bool inferred) {
+std::shared_ptr<const RoadDeck> deck(const RoadProfile& profile, std::int64_t id, std::uint32_t start_ref, double from, double to,
+                                     bool inferred) {
     if (to - from < .5 || to - from > 1000) return {};
     auto output = std::make_shared<RoadDeck>();
     output->way_id = id;
+    output->start_ref = start_ref;
     output->start_station = from;
     output->end_station = to;
     output->vertical = profile.vertical.segments;
@@ -111,6 +116,91 @@ std::shared_ptr<const RoadDeck> deck(const RoadProfile& profile, std::int64_t id
     return output;
 }
 
+// A bridge continued onto its ground approach (see RoadSeparation). Every paved ground stretch is sampled at 1 m
+// (position, surface height, half width + shoulder); an approach stretch (one end on a bridge way's end node) is walked
+// from that end and the deck covers it up to the last station whose footprint overlaps a road more than clearance_m
+// below it. The inferred deck carries the approach's own profile, so its heights do not change, only what supports them.
+void add_approach_decks(const RoadGeomTile& geometry, const RoadSeparation& sep, std::vector<std::shared_ptr<const RoadDeck>>& result) {
+    const auto& graph = geometry.source.graph;
+    std::set<std::int64_t> bridge_ends;
+    for (const auto& w : graph.ways) {
+        auto attrs = resolve_road_attributes(w);
+        if (attrs && attrs->bridge && !w.node_ids.empty()) {
+            bridge_ends.insert(w.node_ids.front());
+            bridge_ends.insert(w.node_ids.back());
+        }
+    }
+    if (bridge_ends.empty()) return;
+    const auto ground = [](const RoadGeomEntry& e) {
+        return e.profile && !e.profile->attributes.bridge && !e.profile->attributes.tunnel && e.profile->attributes.land_class == LandClass::PavedRoad;
+    };
+    struct Sample {
+        double x, y, z, core;
+        std::size_t entry;
+    };
+    std::vector<Sample> samples;
+    std::map<std::pair<int, int>, std::vector<std::size_t>> bins;
+    constexpr double bin_m = 16;
+    const auto bin = [](double v) { return static_cast<int>(std::floor(v / bin_m)); };
+    for (std::size_t i = 0; i < geometry.entries.size(); ++i) {
+        const auto& e = geometry.entries[i];
+        if (!ground(e)) continue;
+        const auto& p = *e.profile;
+        const double core = p.attributes.width_mm / 2000.0 + p.attributes.shoulder_mm / 1000.0;
+        const int count = std::max(1, static_cast<int>(std::ceil(p.reference.length_m)));
+        for (int k = 0; k <= count; ++k) {
+            const double station = k == count ? p.reference.length_m : p.reference.length_m * k / count;
+            auto xy = p.reference.at(station);
+            auto z = p.at(station);
+            if (!xy || !z) continue;
+            bins[{bin(xy->x), bin(xy->y)}].push_back(samples.size());
+            samples.push_back({xy->x, xy->y, z->height_m, core, i});
+        }
+    }
+    double reach_core = 0;
+    for (const auto& s : samples) reach_core = std::max(reach_core, s.core);
+    for (std::size_t i = 0; i < geometry.entries.size(); ++i) {
+        const auto& e = geometry.entries[i];
+        if (!ground(e)) continue;
+        const auto* w = find_way(graph, e.way_id);
+        if (!w || e.stretch.end_ref >= w->node_ids.size()) continue;
+        const auto& p = *e.profile;
+        const double length = p.reference.length_m;
+        const double core = p.attributes.width_mm / 2000.0 + p.attributes.shoulder_mm / 1000.0, radius = core + reach_core + sep.margin_m;
+        for (int end = 0; end < 2; ++end) {
+            if (!bridge_ends.contains(w->node_ids[end ? e.stretch.end_ref : e.stretch.start_ref])) continue;
+            const int steps = static_cast<int>(std::floor(std::min(sep.approach_reach_m, length)));
+            double covered = -1;
+            for (int k = 0; k <= steps; ++k) {
+                const double station = end ? length - k : static_cast<double>(k);
+                auto xy = p.reference.at(station);
+                auto z = p.at(station);
+                if (!xy || !z) continue;
+                bool overlap = false;
+                for (int by = bin(xy->y - radius); by <= bin(xy->y + radius) && !overlap; ++by)
+                    for (int bx = bin(xy->x - radius); bx <= bin(xy->x + radius) && !overlap; ++bx) {
+                        const auto it = bins.find({bx, by});
+                        if (it == bins.end()) continue;
+                        for (const auto index : it->second) {
+                            const auto& s = samples[index];
+                            if (s.entry == i) continue;
+                            if (z->height_m - s.z <= sep.clearance_m) continue;
+                            if (det::hypot(xy->x - s.x, xy->y - s.y) <= core + s.core + sep.margin_m) {
+                                overlap = true;
+                                break;
+                            }
+                        }
+                    }
+                if (overlap) covered = k;
+            }
+            if (covered < 0) continue;
+            const double reach = std::min(length, covered + 1.0); // the sample spacing: the overlap may lie up to 1 m beyond
+            if (auto d = end ? deck(p, e.way_id, e.stretch.start_ref, length - reach, length, true) : deck(p, e.way_id, e.stretch.start_ref, 0, reach, true))
+                result.push_back(std::move(d));
+        }
+    }
+}
+
 } // namespace
 
 std::optional<double> road_deck_height(const RoadDeck& deck, double station, double lateral) {
@@ -123,11 +213,11 @@ std::optional<double> road_deck_height(const RoadDeck& deck, double station, dou
     return pose->height_m - deck.crown * (det::sqrt(lateral * lateral + .25) - .5);
 }
 
-std::vector<std::shared_ptr<const RoadDeck>> build_road_decks(const RoadGeomTile& geometry) {
+std::vector<std::shared_ptr<const RoadDeck>> build_road_decks(const RoadGeomTile& geometry, const RoadSeparation& separation) {
     std::vector<std::shared_ptr<const RoadDeck>> result;
     for (const auto& entry : geometry.entries)
         if (entry.profile && (entry.profile->attributes.bridge || entry.profile->attributes.tunnel)) {
-            if (auto d = deck(*entry.profile, entry.way_id, 0, entry.profile->reference.length_m, false)) result.push_back(std::move(d));
+            if (auto d = deck(*entry.profile, entry.way_id, entry.stretch.start_ref, 0, entry.profile->reference.length_m, false)) result.push_back(std::move(d));
         }
     const auto& graph = geometry.source.graph;
     for (const auto& lower : graph.ways) {
@@ -161,18 +251,19 @@ std::vector<std::shared_ptr<const RoadDeck>> build_road_decks(const RoadGeomTile
                     // Preserve approach grade as well as height: a straight roof inserted into a sloping profile
                     // creates a wheel-impact kink.
                     upper_profile.vertical.segments = {{from, to - from, z0->height_m, z1->height_m, z0->grade, z1->grade}};
-                    if (auto d = deck(upper_profile, entry.way_id, from, to, true)) result.push_back(std::move(d));
+                    if (auto d = deck(upper_profile, entry.way_id, entry.stretch.start_ref, from, to, true)) result.push_back(std::move(d));
                 }
             }
         }
     }
+    if (separation.enabled) add_approach_decks(geometry, separation, result);
     return result;
 }
 
-StructureSet build_structure_set(const RoadGeomTile& geometry) {
+StructureSet build_structure_set(const RoadGeomTile& geometry, const RoadSeparation& separation) {
     StructureSet set;
     set.key = geometry.source.key;
-    set.decks = build_road_decks(geometry);
+    set.decks = build_road_decks(geometry, separation);
     return set;
 }
 

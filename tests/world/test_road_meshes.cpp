@@ -25,6 +25,7 @@ struct MeshPin {
     const char* name;
     std::size_t decks;
     std::uint64_t deck_hash;
+    std::uint64_t deck_ref_hash;
     std::size_t ribbon_vertices;
     std::size_t ribbon_indices;
     std::uint64_t ribbon_hash;
@@ -40,34 +41,69 @@ const std::vector<g2m_mesh_test::MeshCase>& cases() {
 
 } // namespace
 
-TEST_CASE("Structure decks and road ribbons equal racing_game 0c027dc's meshes byte for byte", "[world][road_structures][road_ribbons]") {
+g2m::world::RoadSeparation separation_of(const g2m_mesh_test::MeshCase& c) {
+    g2m::world::RoadSeparation s;
+    s.enabled = c.separated;
+    return s;
+}
+
+TEST_CASE("Structure decks and road ribbons equal racing_game's meshes byte for byte", "[world][road_structures][road_ribbons]") {
     const auto& all = cases();
     REQUIRE(all.size() == std::size(kPins));
-    int bridges = 0, inferred = 0;
+    int bridges = 0, inferred = 0, separated_extra = 0;
     for (std::size_t i = 0; i < all.size(); ++i) {
         const auto& c = all[i];
         const auto& pin = kPins[i];
         INFO(c.name);
         REQUIRE(c.name == pin.name);
-        const auto set = g2m::world::build_structure_set(c.tile);
+        const auto separation = separation_of(c);
+        const auto set = g2m::world::build_structure_set(c.tile, separation);
         CHECK(set.key == c.tile.source.key);
-        g2m::Fnv1a64 h;
+        g2m::Fnv1a64 h, refs;
         for (const auto& d : set.decks) {
             g2m_mesh_test::hash_deck(h, *d, [](const g2m::world::RoadDeck& deck, double s, double t) { return g2m::world::road_deck_height(deck, s, t); });
+            refs.u32(d->start_ref);
             inferred += d->inferred;
             bridges += !d->inferred && !d->tunnel_floor;
         }
+        if (c.separated) separated_extra += static_cast<int>(set.decks.size() - g2m::world::build_road_decks(c.tile, g2m::world::RoadSeparation{2.5, 3.0, 60.0, false}).size());
         CHECK(set.decks.size() == pin.decks);
         CHECK(h.value() == pin.deck_hash);
-        const auto ribbon = g2m::world::build_road_ribbons(c.tile, c.key, [&](double e, double n) { return g2m_mesh_test::case_ground(c, e, n); }, c.lift);
+        CHECK(refs.value() == pin.deck_ref_hash);
+        const auto ribbon = g2m::world::build_road_ribbons(c.tile, c.key, [&](double e, double n) { return g2m_mesh_test::case_ground(c, e, n); }, c.lift, separation);
         CHECK(ribbon.key == c.key);
         CHECK(ribbon.vertices.size() == pin.ribbon_vertices);
         CHECK(ribbon.indices.size() == pin.ribbon_indices);
         CHECK(g2m_mesh_test::hash_ribbon(ribbon) == pin.ribbon_hash);
     }
-    // The cases exercise bridges and inferred roofs (the pins would also pass on an empty deck list otherwise).
+    // The cases exercise bridges, inferred roofs and approach decks (the pins would also pass on an empty deck list).
     CHECK(bridges > 0);
     CHECK(inferred > 0);
+    CHECK(separated_extra > 0);
+}
+
+TEST_CASE("Approach decks: a short span's approach is carried over the motorway, a long span's is not", "[world][road_structures]") {
+    const auto find = [](const std::string& name) -> const g2m_mesh_test::MeshCase& {
+        for (const auto& c : cases()) if (c.name == name) return c;
+        throw std::runtime_error(name);
+    };
+    const auto& short_span = find("overpass.h10.sep");
+    const auto on = g2m::world::build_road_decks(short_span.tile);
+    const auto off = g2m::world::build_road_decks(short_span.tile, g2m::world::RoadSeparation{2.5, 3.0, 60.0, false});
+    REQUIRE(off.size() == 1); // the OSM bridge way
+    REQUIRE(on.size() == 3);  // plus one approach deck at each end
+    for (std::size_t i = 1; i < on.size(); ++i) {
+        INFO(on[i]->way_id);
+        CHECK(on[i]->inferred);
+        CHECK_FALSE(on[i]->tunnel_floor);
+        CHECK((on[i]->way_id == 200 || on[i]->way_id == 202));
+        CHECK(on[i]->end_station - on[i]->start_station <= 61.0);
+    }
+    // The reach caps the deck: with approach_reach_m = 0 only the stations at the bridge end are tested.
+    CHECK(g2m::world::build_road_decks(short_span.tile, g2m::world::RoadSeparation{2.5, 3.0, 0.0, true}).size() <= on.size());
+    // A clearance above the embankment height (7.5 m) leaves no road "below": no approach deck.
+    CHECK(g2m::world::build_road_decks(short_span.tile, g2m::world::RoadSeparation{20.0, 3.0, 60.0, true}).size() == 1);
+    CHECK(g2m::world::build_road_decks(find("overpass.h25.sep").tile).size() == 1);
 }
 
 TEST_CASE("Structure decks: crowned heights along the deck, nothing past its ends", "[world][road_structures]") {

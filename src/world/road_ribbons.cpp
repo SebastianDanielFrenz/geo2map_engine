@@ -349,18 +349,18 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
   if(!valid){mesh.vertices.resize(first);mesh.indices.resize(first_index);}
  }
 }
-RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::TileKey& key,const RoadRibbonGround& ground,double lift) {
- RoadRibbonTile mesh;mesh.key=key;const auto decks=build_road_decks(geometry);
+RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::TileKey& key,const RoadRibbonGround& ground,double lift,const RoadSeparation& separation) {
+ RoadRibbonTile mesh;mesh.key=key;const auto decks=build_road_decks(geometry,separation);
  // Deck height at a station of a separated stretch. The station is clamped into the deck so a ribbon row that lands
  // a rounding step past the deck end still finds it; a bridge without a deck falls back to its own profile.
  const auto deck_height=[&](const g2m::RoadGeomEntry& entry,double station,double lateral)->std::optional<double>{
-  for(const auto& d:decks)if(d->way_id==entry.way_id&&station>=d->start_station-.05&&station<=d->end_station+.05)
+  for(const auto& d:decks)if(d->way_id==entry.way_id&&d->start_ref==entry.stretch.start_ref&&station>=d->start_station-.05&&station<=d->end_station+.05)
    if(auto z=road_deck_height(*d,std::clamp(station,d->start_station,d->end_station),lateral))return z;
   const auto& p=*entry.profile;if(auto z=p.at(std::clamp(station,0.0,p.reference.length_m)))return z->height_m;
   return {};
  };
  const auto separated_at=[&](const g2m::RoadGeomEntry& entry,double station){
-  return entry.profile->attributes.bridge||std::any_of(decks.begin(),decks.end(),[&](const auto& d){return d->way_id==entry.way_id&&station>=d->start_station&&station<=d->end_station;});
+  return entry.profile->attributes.bridge||std::any_of(decks.begin(),decks.end(),[&](const auto& d){return d->way_id==entry.way_id&&d->start_ref==entry.stretch.start_ref&&station>=d->start_station&&station<=d->end_station;});
  };
  // Surface height of a stretch at (station, lateral): the deck on a structure, else the ground.
  const auto surface=[&](const g2m::RoadGeomEntry& entry,double station,double lateral,double e,double n)->std::optional<double>{

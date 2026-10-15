@@ -8,6 +8,7 @@
 
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/road_geom_tile.h"
+#include "g2m/world/road_structures.h"
 
 #include <cstdint>
 #include <functional>
@@ -37,8 +38,10 @@ struct RoadRibbonTile {
 using RoadRibbonGround = std::function<std::optional<double>(double, double)>;
 
 // The ribbons of `geometry` inside `key` (each 1 m row and each marking is kept by the tile holding its centre), lifted
-// `lift_m` above the surface. Structure decks come from build_road_decks(geometry).
-RoadRibbonTile build_road_ribbons(const RoadGeomTile& geometry, const TileKey& key, const RoadRibbonGround& ground, double lift_m);
+// `lift_m` above the surface. Structure decks come from build_road_decks(geometry, separation); a stretch is drawn on a
+// deck of its own (way, stretch start_ref) where one covers the station.
+RoadRibbonTile build_road_ribbons(const RoadGeomTile& geometry, const TileKey& key, const RoadRibbonGround& ground, double lift_m,
+                                  const RoadSeparation& separation = {});
 // The junction patches alone (appended to `mesh`), in tile-local metres like build_road_ribbons.
 void add_junction_surfaces(RoadRibbonTile& mesh, const RoadGeomTile& geometry, const TileKey& key, const RoadRibbonGround& ground, double lift_m);
 
