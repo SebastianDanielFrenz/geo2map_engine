@@ -12,7 +12,6 @@ add_executable(g2m_phys_tests
   test_fill_physics_surfaces.cpp
   test_height_tile_loader.cpp
   test_physics_streamer.cpp
-  test_class_mode.cpp
   alloc_counter.cpp
 )
 target_link_libraries(g2m_phys_tests PRIVATE g2m_phys g2m_test_catch_main g2m_warnings g2m_options)

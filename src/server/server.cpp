@@ -235,8 +235,6 @@ struct Server::Impl {
                         if (r.kind == Resolved::Kind::Found) {
                             in.header = std::move(r.header);
                             in.body = std::move(r.body);
-                        } else if (r.kind == Resolved::Kind::Error && d->rejected_input_is_absent(ref)) {
-                            in.rejected = true; // G-1: a deterministic rejection the deriver accepts as absent
                         } else if (r.kind != Resolved::Kind::NotFound) {
                             return r; // an input is unavailable/degraded/failed: so is this tile
                         }
@@ -281,8 +279,6 @@ struct Server::Impl {
                                 auto r = resolve(rel, *il, ref.key, depth + 1);
                                 if (r.kind == Resolved::Kind::Found) {
                                     in.header = std::move(r.header); in.body = std::move(r.body);
-                                } else if (r.kind == Resolved::Kind::Error && d->rejected_input_is_absent(ref)) {
-                                    in.rejected = true;
                                 } else if (r.kind != Resolved::Kind::NotFound) return r;
                             }
                             inputs.push_back(std::move(in)); ++added;
@@ -307,7 +303,6 @@ struct Server::Impl {
                 out.header.height_offset = res->height_offset;
                 for (const InputTile& in : inputs) {
                     if (in.header) out.header.inputs.push_back(in.header->body_hash);
-                    else if (in.rejected) out.header.inputs.push_back(rejected_input_marker(in.ref));
                 }
                 std::sort(out.header.inputs.begin(), out.header.inputs.end());
                 out.header.inputs.erase(std::unique(out.header.inputs.begin(), out.header.inputs.end()),

@@ -3,7 +3,7 @@
 // g2m.terrain.height (the height pyramid, L0-L6 - L0 a byte-identical
 // passthrough of g2m.elev.base, L1-L6 the mean-of-4 downsample pyramid).
 // g2m.terrain.class (the surface-classification pyramid) is declared here
-// too; its deriver is TerrainClassDeriver (terrain_class.h, P2 slice 10).
+// too, for the layer name/slot to exist, but has no deriver until G2.5.
 //
 // Both height layers reuse body encoding 1 (SrcElev, docs/formats/
 // src_elev.md) at a 256 x 256 Cell-registered, SouthToNorth georef
@@ -35,8 +35,8 @@ LayerDesc elev_base_desc();
 // derive_terrain.h; height_tile.h's downsample_2x2() - PLAN.md G2.2).
 LayerDesc terrain_height_desc();
 // g2m.terrain.class: surface classification (g2m.landclass.v1 scheme),
-// levels 0-6, node-registered 257 x 257 (encoding TerrainClass,
-// docs/formats/terrain_class.md); deriver in terrain_class.h.
+// levels 0-6. No deriver until PLAN.md G2.5 - declared here so the layer
+// name/slot exists.
 LayerDesc terrain_class_desc();
 
 } // namespace g2m

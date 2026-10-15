@@ -17,7 +17,6 @@
 #include "g2m/core/result.h"
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/carve_params.h"
-#include "g2m/layer/classifier.h"
 #include "g2m/layer/deriver.h"
 #include "g2m/layer/height_tile.h"
 #include "g2m/layer/road_geom_tile.h"
@@ -84,22 +83,6 @@ struct CarveOptions {
 
 enum class CarveOwner : std::uint8_t { NoData = 0, Terrain = 1, JunctionCore = 2, ApproachCore = 3, JunctionBlend = 4, ApproachBlend = 5 };
 
-// The role plane of g2m.terrain.class (design 6.5, values fixed by the encoding: append only).
-enum class TerrainRole : std::uint8_t {
-    Terrain = 0, RoadBed = 1, Sidewalk = 2, Verge = 3, JunctionRoadBed = 4, JunctionSidewalk = 5, Blend = 6, BridgeDeck = 7,
-};
-inline constexpr std::uint8_t kTerrainRoleMax = 7;
-
-// The class of a point under the shared carve ownership (design 6.5, CarveModel::classify). `base` = the sample takes
-// the base (land cover) class; land_class and surface are then left Unknown for the caller to fill.
-struct CarveClass {
-    TerrainRole role = TerrainRole::Terrain;
-    bool base = true;
-    LandClass land_class = LandClass::Unknown;
-    SurfaceKind surface = SurfaceKind::Unknown;
-    std::uint8_t rank = 0;   // 0 = no road; else the owning way's RoadGraphWay::rank clamped to [1, 255]
-};
-
 // One evaluation of the model at a point.
 struct CarveSample {
     double z = 0;                       // metres; NaN for NoData
@@ -149,12 +132,6 @@ public:
     // The carved height at (x, y) in zone metres (a cell centre is (e + 0.5, n + 0.5)); the terrain T is the smoothed
     // DEM of the cell containing the point. Points outside the covered region return the terrain only.
     CarveSample evaluate(double x, double y) const noexcept;
-    // The terrain.class sample at (x, y) for the evaluation `sample` of the same point (design 6.5): a junction core
-    // is JunctionRoadBed inside its road bed ring (the highest-rank used approach's surface and land class, ties to the
-    // smallest way id), JunctionSidewalk inside the paved ring (PavingStones), else Verge (base); an approach core is
-    // RoadBed / Sidewalk / Verge by its band at the core's own (s, t) (carve_footprint); blends are Blend (base);
-    // terrain and blends inside a bridge's paved band + deck margin are BridgeDeck (base). Allocation-free.
-    CarveClass classify(double x, double y, const CarveSample& sample) const noexcept;
     // Test hooks.
     const RoadGeomTile& core_tile() const noexcept;     // merged entries, features incl. the junction ramps (approach cores)
     const RoadGeomTile& kept_tile() const noexcept;     // merged entries, features without suppressed ones and ramps (junctions)
@@ -179,19 +156,6 @@ Result<HeightTile> carve_terrain_tile(const TileKey& key, std::span<const Height
     std::span<const CarveGeomInput> roads, const CarveParams& params = builtin_carve_default(), const CarveOptions& options = {},
     unsigned workers = 1, CarveStats* stats = nullptr);
 
-// The decoded level-0 inputs of the carved and class derivers: the 3 x 3 elev.base window (offsets applied, one
-// datum) and the roads.geom tiles. Inputs of other layers are skipped (the caller's own). `what` prefixes the errors.
-struct CarveL0Inputs {
-    std::vector<HeightTile> dem = std::vector<HeightTile>(9);   // 256 KiB each: on the heap
-    std::array<const HeightTile*, 9> window{};
-    std::vector<RoadGeomTile> roads;
-    std::vector<TileKey> road_keys;
-    VerticalDatum datum = VerticalDatum::None;
-    std::vector<CarveGeomInput> geom() const;
-};
-Result<void> decode_carve_l0_inputs(const TileKey& target, std::span<const InputTile> inputs, CarveL0Inputs& out,
-    std::string_view what);
-
 // The roads.geom level-2 keys a level-0 tile reads: every level-2 tile intersecting the tile's square grown by 192 m
 // (half-open), ascending. One typically, at most four.
 std::vector<TileKey> carve_road_geom_keys(const TileKey& level0);
@@ -211,9 +175,6 @@ public:
     ContentHash config_hash() const override;
     std::span<const std::string> coverage_inputs() const override { return std::span<const std::string>(desc_.inputs).first(1); }
     std::vector<InputTileRef> inputs_for(const TileKey& target) const override;
-    // G-1 (terrain migration phase 6): a roads.geom input whose derivation failed (e.g. rejected by validation at the
-    // region edge) carves as "no roads there"; the tile header carries rejected_input_marker for it.
-    bool rejected_input_is_absent(const InputTileRef& ref) const override;
     Result<DeriveResult> derive(const DeriveRequest& request) const override;
 private:
     LayerDesc desc_;

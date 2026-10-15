@@ -25,7 +25,6 @@
 #include "g2m/layer/osm_roads.h"
 #include "g2m/phys/physics_grid.h"
 #include "g2m/phys/resident_heights.h"
-#include "g2m/world/surface_id_table.h"
 
 #include "ps/terrain/terrain_config.h"
 #include "ps/terrain/terrain_source.h"
@@ -50,18 +49,6 @@ struct RoadSurfaceConfig {
     ps::SurfaceId off_road = ps::kInvalidSurfaceId;
 };
 
-// Class mode's config (terrain migration phase 6, requests G-2/G-3/G-5): every
-// cell resolves the g2m.terrain.class tile riding on its L0 entry through the
-// full SurfaceKind / LandClass table (g2m::phys::fill_physics_classes);
-// `fallback` is what a cell over an absent or missing class tile gets. Heights
-// come from whatever layer the loader fetched (g2m.terrain.carved in the
-// carved release); the entries' RoadSegment metadata stays in the set for the
-// consumer (speed limit, road_ahead) and is not read here.
-struct ClassSurfaceConfig {
-    g2m::classes::SurfaceIdTable table;
-    ps::SurfaceId fallback = ps::kInvalidSurfaceId;
-};
-
 class G2mTerrainSource final : public ps::terrain::ITerrainSource {
 public:
     // `grid` anchors the 255 m physics-tile lattice on a session; `resident`
@@ -84,12 +71,6 @@ public:
     // height side of the same fill_tile call also missed.
     G2mTerrainSource(g2m::phys::PhysicsTileGrid grid, std::shared_ptr<const g2m::phys::ResidentHeightSet> resident,
                       RoadSurfaceConfig road);
-
-    // Class mode (see ClassSurfaceConfig). Prefetch (Snapshot) requires the
-    // class tile of every resident L0 key of the footprint and compares its
-    // identity, like the road lists in road mode.
-    G2mTerrainSource(g2m::phys::PhysicsTileGrid grid, std::shared_ptr<const g2m::phys::ResidentHeightSet> resident,
-                      ClassSurfaceConfig classes);
 
     [[nodiscard]] ps::real tile_size_m() const override;
     [[nodiscard]] std::uint32_t samples_per_tile() const override;
@@ -128,9 +109,7 @@ public:
     // surface side touched a Missing L0 key (a non-resident key, or a
     // resident one with no roads list at all - g2m::phys::RoadBlockStats::
     // missing_blocks > 0, fill_physics_surfaces.h's own Outcomes table) -
-    // one shared counter, never silently grass either way. Class mode counts
-    // a fill whose surface side touched a missing L0 key or a resident one
-    // without a class tile the same way.
+    // one shared counter, never silently grass either way.
     // nodata_fill_count() counts a fill that hit a
     // genuine in-coverage NoData sample (FillResult::HadNoData) -
     // informational only, never a correctness signal on its own (a
@@ -148,7 +127,6 @@ private:
     std::shared_ptr<const g2m::phys::ResidentHeightSet> resident_;
     ps::SurfaceId surface_;
     std::optional<RoadSurfaceConfig> road_; // road mode iff set (PLAN.md G2.5a-grip section 5)
-    std::optional<ClassSurfaceConfig> classes_; // class mode iff set (terrain migration phase 6)
     mutable std::atomic<std::uint64_t> fill_miss_count_{0};
     mutable std::atomic<std::uint64_t> nodata_fill_count_{0};
 };

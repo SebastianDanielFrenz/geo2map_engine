@@ -50,8 +50,7 @@ geo::SessionFrame ReleaseFixture::session_frame() const {
     return geo::SessionFrame(geo::UtmZone{32, geo::Hemisphere::North}, /*e0_m=*/474000, /*n0_m=*/5560000);
 }
 
-std::unique_ptr<ReleaseFixture> make_fixture_release(const std::filesystem::path& dir, const std::string& scope,
-                                                     bool carved) {
+std::unique_ptr<ReleaseFixture> make_fixture_release(const std::filesystem::path& dir, const std::string& scope) {
     const std::string fixtures_dir = std::string(G2M_SOURCE_DIR) + "/testdata/fixtures";
 
     auto fx = std::make_unique<ReleaseFixture>(open_store(dir, "sources"), open_store(dir, "derived"));
@@ -73,7 +72,7 @@ std::unique_ptr<ReleaseFixture> make_fixture_release(const std::filesystem::path
 
     std::vector<ReleaseSource> sources_attr = {
         ReleaseSource{"dgm1_fixture", "2026-09-26", "dl-de/zero-2-0", "test", false}};
-    LocalReleaseParams params = builtin_local_release_params(fx->scope, fx->derivers, std::move(sources_attr), false, false, carved, carved);
+    LocalReleaseParams params = builtin_local_release_params(fx->scope, fx->derivers, std::move(sources_attr));
     Result<ReleaseManifest> m = make_local_release(*fx->sources, params);
     REQUIRE(m.ok());
     fx->manifest = *m;
@@ -82,7 +81,7 @@ std::unique_ptr<ReleaseFixture> make_fixture_release(const std::filesystem::path
     ServerConfig config;
     config.server_id = "test-" + fx->scope;
     config.derived_store = fx->derived.get();
-    config.derivers = fx->derivers.ordered(false, false, carved, carved);
+    config.derivers = fx->derivers.ordered();
     config.upstreams = {&fx->local_upstream};
     fx->server = std::make_unique<Server>(std::move(config));
     REQUIRE(fx->server->add_release(fx->manifest, fx->scope).ok());

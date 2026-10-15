@@ -18,7 +18,7 @@ cell-registered, row 0 = south, NoData = `INT32_MIN` (`encode_height_tile` / `de
 | Encoding | 1 (SrcElev), encoding version 1 |
 | Header datum | level 0: the datum of the `g2m.elev.base` inputs (DHHN2016 or EGM2008; mixed datums, or a `roads.geom` tile in another datum, are rejected); levels 1-6: DHHN2016, as `g2m.terrain.height` |
 | Header height offset | 0 (input offsets are applied once, before carving) |
-| Config hash | SHA-256 of `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=8 radius=192 junction=D42 carve=<sha256 of data/carve/carve_default.json>; L1-L6 mean-of-4 half-even` (`terrain_carved_config_text()`) |
+| Config hash | SHA-256 of `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 junction=D42 carve=<sha256 of data/carve/carve_default.json>; L1-L6 mean-of-4 half-even` (`terrain_carved_config_text()`) |
 
 ## Inputs
 
@@ -26,12 +26,6 @@ cell-registered, row 0 = south, NoData = `INT32_MIN` (`encode_height_tile` / `de
   centre fails with NotFound), and the `g2m.roads.geom` level-2 tiles intersecting Q's square grown by 192 m on every side,
   half-open (`carve_road_geom_keys`: one tile typically, two along a level-2 edge, four at a corner; absent = no roads).
   The list is fixed by the key alone; `derive` rejects any other list.
-- **A rejected `roads.geom` input** (G-1, terrain migration phase 6): when a `roads.geom` tile fails to resolve with an
-  error (for example its own validation rejects it, as utm32n/2/452/5428 "reference endpoints" does), the carve treats it
-  like an absent one: no roads from it, the tile is served. The server records it in the output header's inputs as
-  `rejected_input_marker(ref)` = SHA-256 of `g2m.rejected-input/1 <layer> <key>` in place of a content hash
-  (`IDeriver::rejected_input_is_absent`, `deriver.h`; `header_has_rejected_input`). Errors are not cached, so the next
-  request derives the failing tile again. Only `roads.geom` is treated so; a failing `elev.base` input still fails the tile.
 - **Levels 1-6**: the 4 children of the same layer one level down (a missing child counts as all NoData).
 
 ## Values

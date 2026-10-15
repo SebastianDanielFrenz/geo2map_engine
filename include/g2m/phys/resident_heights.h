@@ -20,7 +20,6 @@
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/height_tile.h"
 #include "g2m/layer/osm_roads.h"
-#include "g2m/layer/terrain_class.h"
 
 #include <cstddef>
 #include <memory>
@@ -52,13 +51,6 @@ public:
     Lookup find(const TileKey& key, const HeightTile** out,
                 std::shared_ptr<const std::vector<RoadSegment>>* roads_out) const noexcept;
 
-    // Class mode (G-2/G-5): additionally writes the entry's class tile into
-    // `*classes_out` as a raw pointer (null for Missing/Absent and for a
-    // Resident entry installed without one). Roads are reported as above.
-    Lookup find(const TileKey& key, const HeightTile** out,
-                std::shared_ptr<const std::vector<RoadSegment>>* roads_out,
-                const TerrainClassTile** classes_out) const noexcept;
-
     // Installs (or replaces) `key`'s entry, roads left null (heights-only -
     // the pre-G2.5a-grip behaviour, unchanged: replacing an entry always
     // replaces its roads too, never merges). `tile == nullptr` records a
@@ -74,12 +66,6 @@ public:
     // list is a confirmed "no drivable ways", see fill_physics_surfaces.h).
     void install(const TileKey& key, std::shared_ptr<const HeightTile> tile,
                  std::shared_ptr<const std::vector<RoadSegment>> roads);
-
-    // Same, additionally installing the key's class tile (class mode). The
-    // 2- and 3-arg overloads leave it null; replacing an entry replaces it.
-    void install(const TileKey& key, std::shared_ptr<const HeightTile> tile,
-                 std::shared_ptr<const std::vector<RoadSegment>> roads,
-                 std::shared_ptr<const TerrainClassTile> classes);
 
     // Keeps only the entries whose key appears in `keep_sorted` (which must
     // already be sorted ascending by TileKey::packed(), duplicates allowed);
@@ -104,7 +90,6 @@ private:
         TileKey key;
         std::shared_ptr<const HeightTile> tile;                    // nullptr => Absent
         std::shared_ptr<const std::vector<RoadSegment>> roads;      // see the 3-arg install() above
-        std::shared_ptr<const TerrainClassTile> classes;            // see the 4-arg install() above
     };
     // Sorted ascending by key.packed(), unique by key.
     using Entries = std::vector<Entry>;

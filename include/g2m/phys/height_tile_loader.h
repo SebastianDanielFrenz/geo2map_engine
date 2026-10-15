@@ -37,21 +37,12 @@
 // (retried, then Failed after the budget) - the same "never silently
 // missing" rule, extended to roads. require_roads defaults false, so
 // heights-only behaviour (every existing caller) is unchanged.
-//
-// Class mode (terrain migration phase 6, requests G-2/G-5): a fetch may also
-// carry the key's g2m.terrain.class tile (FetchResult::classes,
-// provides_classes()). LoaderConfig::require_classes treats a 200 without it
-// like a 500, the same rule as require_roads. The two are independent: a
-// class-mode fetch keeps its RoadSegment metadata (speed limits, road_ahead)
-// when it has one, and the loader, ResidentHeightSet and G2mTerrainSource
-// keep it beside the class tile.
 #pragma once
 
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/height_tile.h"
 #include "g2m/layer/osm_roads.h"
 #include "g2m/layer/release.h"
-#include "g2m/layer/terrain_class.h"
 #include "g2m/layer/terrain_layers.h"
 #include "g2m/server/protocol.h"
 #include "g2m/server/transport.h"
@@ -82,9 +73,6 @@ struct FetchResult {
     Status status = Status::Internal;
     std::shared_ptr<const HeightTile> tile;
     std::shared_ptr<const std::vector<RoadSegment>> roads;
-    // The same key's g2m.terrain.class tile (class mode); null unless the fetch
-    // provides_classes(). Independent of `roads`.
-    std::shared_ptr<const TerrainClassTile> classes = nullptr;
 };
 
 // Fetches one DGM1 L0 height tile. Blocking; must be thread-safe (called
@@ -100,8 +88,6 @@ public:
     // hard-error list, out of this library's scope). Default false:
     // heights-only by default, like TransportHeightTileFetch below.
     virtual bool provides_roads() const { return false; }
-    // True iff this fetch populates FetchResult::classes (class mode).
-    virtual bool provides_classes() const { return false; }
 };
 
 // Fetches through a g2m ITransport (in-process server now, HTTP later):
@@ -115,26 +101,16 @@ public:
 // tile_container.h) is applied to every non-NoData sample; a sample it would
 // push outside int32 or onto the NoData sentinel is also Status::Internal.
 // The transport must outlive this object.
-//
-// Class mode: a non-empty `class_layer` (g2m.terrain.class) fetches that
-// layer's tile of the same key after a 200 height and decodes it into
-// FetchResult::classes (decode_terrain_class). Any non-200 class reply, or a
-// class tile that does not decode, makes the whole fetch Status::Internal
-// (retried): the class layer has the height layer's coverage, so a missing
-// class tile beside a present height tile is a server fault, not "no data".
-// Pair it with layer = g2m.terrain.carved for the carved surface.
 class TransportHeightTileFetch final : public IHeightTileFetch {
 public:
     TransportHeightTileFetch(ITransport& transport, ReleaseId rid,
-                             std::string layer = std::string(kTerrainHeightLayer), std::string class_layer = {});
+                             std::string layer = std::string(kTerrainHeightLayer));
     FetchResult fetch(const TileKey& key) override;
-    bool provides_classes() const override { return !class_layer_.empty(); }
 
 private:
     ITransport& transport_;
     ReleaseId rid_;
     std::string layer_;
-    std::string class_layer_;
 };
 
 // Test/smoke only: sleeps base + jitter before forwarding to `inner`, where
@@ -148,7 +124,6 @@ public:
     FetchResult fetch(const TileKey& key) override;
     // Forwards `inner`'s own capability (PLAN.md G2.5a-grip section 3).
     bool provides_roads() const override { return inner_->provides_roads(); }
-    bool provides_classes() const override { return inner_->provides_classes(); }
 
     // The delay fetch(key) sleeps for (exposed for tests).
     std::chrono::milliseconds delay_for(const TileKey& key) const;
@@ -170,7 +145,6 @@ struct LoadedHeightTile {
     LoadOutcome outcome = LoadOutcome::Failed;
     std::shared_ptr<const HeightTile> tile;
     std::shared_ptr<const std::vector<RoadSegment>> roads; // set only when outcome == Ready (see FetchResult::roads)
-    std::shared_ptr<const TerrainClassTile> classes;        // set only when outcome == Ready (see FetchResult::classes)
     int attempts = 0;    // fetch() calls made for this completion (>= 1)
     Status last_status = Status::Internal; // status of the last attempt (diagnostics)
 };
@@ -187,9 +161,6 @@ struct LoaderConfig {
     // rule as a 200 without a tile at all. false (the default) keeps
     // heights-only behaviour bit-identical.
     bool require_roads = false;
-    // Class mode: the same rule for FetchResult::classes. false (the default)
-    // keeps every existing caller unchanged.
-    bool require_classes = false;
 };
 
 struct LoaderStats {

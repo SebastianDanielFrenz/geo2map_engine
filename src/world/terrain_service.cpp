@@ -505,6 +505,7 @@ Result<std::unique_ptr<TerrainService>> TerrainService::open(const TerrainServic
     if (!config.zone.valid()) return bad(ErrorCode::InvalidArgument, "zone " + std::to_string(config.zone.zone) + " is out of range");
     if (config.e0_m % 1000 != 0 || config.n0_m % 1000 != 0)
         return bad(ErrorCode::InvalidArgument, "e0_m/n0_m must be multiples of 1000 m");
+    if (config.layers.classes) return bad(ErrorCode::Unsupported, "layers.classes: no g2m.terrain.class deriver yet");
     if (config.layers.geometry && !config.layers.roads) return bad(ErrorCode::InvalidArgument, "layers.geometry needs layers.roads");
     if (config.stores.source_scope.empty()) return bad(ErrorCode::InvalidArgument, "stores.source_scope is empty");
 
@@ -529,11 +530,10 @@ Result<std::unique_ptr<TerrainService>> TerrainService::open(const TerrainServic
     m.upstream.emplace(*m.sources);
 
     const bool carved = config.layers.carved;
-    const bool classes = config.layers.classes;
-    const bool roads = config.layers.roads || carved || classes;
-    const bool geometry = config.layers.geometry || carved || classes;
+    const bool roads = config.layers.roads || carved;
+    const bool geometry = config.layers.geometry || carved;
     LocalReleaseParams params =
-        builtin_local_release_params(config.stores.source_scope, m.derivers, config.attribution, roads, geometry, carved, classes);
+        builtin_local_release_params(config.stores.source_scope, m.derivers, config.attribution, roads, geometry, carved);
     params.world_seed = config.world_seed;
     for (const IDeriver* d : config.extra_derivers) params.derivers.push_back(d);
     auto manifest = make_local_release(*m.sources, params);

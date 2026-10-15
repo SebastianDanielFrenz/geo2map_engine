@@ -79,10 +79,6 @@ std::vector<Entry> compute_g3j();
 // testdata/golden/g3d_golden.txt.
 std::vector<Entry> compute_g3d();
 
-// G3c (golden_g3c.cpp, street fidelity P2 slice 10): the class layer g2m.terrain.class over the same fixtures and DEM
-// with synthetic land cover - the four g3d tiles' planes and one level-1 tile; testdata/golden/g3c_golden.txt.
-std::vector<Entry> compute_g3c();
-
 // "name count hash\n" per entry, the golden file's line format.
 std::string format(const std::vector<Entry>& entries);
 

@@ -35,16 +35,13 @@ LayerDesc terrain_class_desc() {
     LayerDesc d;
     d.id = LayerId{std::string(kTerrainClassLayer), 1};
     d.kind = LayerKind::Baked;
-    d.encoding = static_cast<std::uint16_t>(LayerEncoding::TerrainClass);
+    d.encoding = static_cast<std::uint16_t>(LayerEncoding::SrcLandcover);
     d.encoding_version = 1;
     LevelMask mask = 0;
     for (int l = 0; l <= kTerrainMaxLevel; ++l) mask |= level_bit(l);
     d.levels = mask;
-    // elev.base first: coverage follows it (TerrainClassDeriver::coverage_inputs).
-    d.inputs = {std::string(kElevBaseLayer), "g2m.roads.geom", std::string(kSrcLandcoverLayer)};
-    d.content = "terrain surface classification (g2m.landclass.v1 scheme), levels 0-6: land class, surface, role and "
-                "road rank per node at integer metres (257 x 257), carve ownership at L0, rank-max pyramid above "
-                "(street fidelity P2 slice 10)";
+    d.inputs = {std::string(kSrcLandcoverLayer)};
+    d.content = "terrain surface classification (g2m.landclass.v1 scheme), levels 0-6; no deriver until PLAN.md G2.5";
     return d;
 }
 

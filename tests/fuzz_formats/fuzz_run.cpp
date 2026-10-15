@@ -12,7 +12,6 @@
 #include "g2m/layer/src_elev.h"
 #include "g2m/layer/src_landcover.h"
 #include "g2m/layer/src_osm.h"
-#include "g2m/layer/terrain_class.h"
 #include "g2m/layer/tile_container.h"
 #include "g2m/server/protocol.h"
 
@@ -141,17 +140,6 @@ void run(Target target, std::span<const std::uint8_t> data) {
             data, [](const g2m::TileBody& b) { return g2m::decode_src_elev(b); },
             [](const g2m::ElevTile& t) { return g2m::encode_src_elev(t); }, "src.elev: round trip");
         return;
-    case Target::TerrainClass: {
-        const auto body = body_of(data); if (!body) return;
-        const g2m::TileKey key{g2m::geo::UtmZone{32, g2m::geo::Hemisphere::North}, 0, kFuzzClassX, kFuzzClassY};
-        g2m::TerrainClassTile tile;
-        if (!g2m::decode_terrain_class(*body, key, tile)) return;
-        auto enc = g2m::encode_terrain_class(tile);
-        check(enc.ok(), "terrain.class: re-encode");
-        g2m::TerrainClassTile back;
-        check(g2m::decode_terrain_class(*enc, key, back).ok() && back == tile, "terrain.class: round trip");
-        return;
-    }
     case Target::Landcover:
         raw_layer(
             data, [](const g2m::TileBody& b) { return g2m::decode_src_landcover(b); },
