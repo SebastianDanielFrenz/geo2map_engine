@@ -11,6 +11,7 @@
 #include "g2m/layer/road_dem_dependencies.h"
 #include "g2m/layer/road_completion.h"
 #include "g2m/layer/road_geom_tile.h"
+#include "g2m/layer/road_underpass.h"
 #include "g2m/layer/road_graph_tile.h"
 
 #include <algorithm>
@@ -88,6 +89,7 @@ struct RoadGeomInputs {
     g2m::RoadGraphTile tile;
     g2m::RoadGraph context;
     std::vector<g2m::TileKey> dem_keys;
+    g2m::RoadGraph crossings;   // D57: the tile graph plus the roads.graph tiles of road_crossing_dependencies
 };
 // `walk_margin_mm`: the D48 squares of road_bridge_dependencies (0 = the pre-D48 stage 2, a negative control).
 inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world, const g2m::TileKey& key, bool bridge_far_end = true,
@@ -115,6 +117,15 @@ inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world,
     }
     in.context = std::move(*context);
     in.dem_keys.assign(dem_keys.begin(), dem_keys.end());
+    {   // D57: the crossing graph, as RoadGeomDeriver builds it.
+        const auto refs = road_crossing_dependencies(in.tile.graph, key.zone, &key); if (!refs) return refs.error();
+        std::vector<RoadGraphTile> others;
+        for (const auto& r : *refs) { auto t = select_road_graph_tile(world, r.key); if (!t) return t.error(); others.push_back(std::move(*t)); }
+        std::vector<const RoadGraph*> graphs{&in.tile.graph};
+        for (const auto& t : others) graphs.push_back(&t.graph);
+        auto crossings = merge_road_graphs(graphs); if (!crossings) return crossings.error();
+        in.crossings = std::move(*crossings);
+    }
     return in;
 }
 
@@ -144,6 +155,12 @@ struct GeomOptions {
     g2m::RoadCompletionStats* stats = nullptr;
     // Called on the built tile with the tile's own DEM sampler before it is returned (e.g. the game's completion code).
     std::function<void(g2m::RoadGeomTile&, const g2m::RoadDemSampler&)> post = {};
+    // Underpass decks (D53-D58): the pass on, its crossing graph (false: the tile graph alone, a negative control),
+    // its stats, and the rules it runs with (null: the built-in de.json).
+    bool underpass = false;
+    bool crossing_context = true;
+    g2m::RoadUnderpassStats* underpass_stats = nullptr;
+    const g2m::RoadRules* rules = nullptr;
 };
 inline g2m::Result<g2m::RoadGeomTile> geometry_in_tile_with(const g2m::RoadGraph& world, const g2m::TileKey& key, const GeomOptions& o) {
     using namespace g2m;
@@ -153,14 +170,17 @@ inline g2m::Result<g2m::RoadGeomTile> geometry_in_tile_with(const g2m::RoadGraph
     for (std::size_t i = 0; i < heights.size(); ++i) { heights[i].key = in->dem_keys[i]; fill_dem(heights[i], o.height_m); views.push_back(&heights[i]); }
     const auto dem = RoadDemSampler::make(views); if (!dem) return dem.error();
     RoadProfileLimits limits; limits.reference.allow_curvature_exceptions = true;
-    auto tile = build_road_geom_tile(in->tile, *dem, limits, o.with_context ? &in->context : nullptr, builtin_road_rules_de(), o.completion, o.stats);
+    RoadUnderpassOptions underpass; underpass.enabled = o.underpass; underpass.stats = o.underpass_stats;
+    underpass.crossings = o.crossing_context ? &in->crossings : &in->tile.graph;
+    auto tile = build_road_geom_tile(in->tile, *dem, limits, o.with_context ? &in->context : nullptr, o.rules ? *o.rules : builtin_road_rules_de(),
+        o.completion, o.stats, underpass);
     if (tile && o.post) o.post(*tile, *dem);
     return tile;
 }
-// The tile RoadGeomDeriver serves (slice 8): context graph, the served completion options.
+// The tile RoadGeomDeriver serves (slice 8): context graph, the served completion options, the underpass decks (D53).
 inline g2m::Result<g2m::RoadGeomTile> served_geometry_in_tile(const g2m::RoadGraph& world, const g2m::TileKey& key,
         const std::function<double(double, double)>& height_m = {}) {
-    GeomOptions o; o.height_m = height_m; o.completion = g2m::served_road_completion_options();
+    GeomOptions o; o.height_m = height_m; o.completion = g2m::served_road_completion_options(); o.underpass = true;
     return geometry_in_tile_with(world, key, o);
 }
 

@@ -315,11 +315,15 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         auto with_origin = body(must(g2m::encode_road_geom(completed), "road geom provenance encode"));
         // Junctions (a signalised one, a raised table, one on a crossing node) and furniture of every kind.
         auto junctions = body(must(g2m::encode_road_geom(must(g2m_test::junction_scene_tile(), "junction scene")), "road geom junction encode"));
+        // Encoding 9 (D56): one underpass deck record on the profiled entry.
+        auto decked = featured; decked.encoding = g2m::kRoadGeomEncoding;
+        decked.underpasses.push_back({0, 10.0, 30.0, 1500, 0, {77, 4242}});
+        auto nine = body(must(g2m::encode_road_geom(decked), "road geom underpass encode"));
         tile.entries[0].cross_section.reset(); tile.entries[0].cross_section_decline = g2m::CrossSectionDecline{g2m::CrossSectionDeclineCode::NoCountedLane, 0};
         auto cross_decline = body(must(g2m::encode_road_geom(tile), "road geom cross-section decline encode"));
         tile.entries[0].cross_section_decline.reset(); tile.entries[0].profile.reset(); tile.entries[0].decline = g2m::make_error(g2m::ErrorCode::Unsupported, "fixture decline");
         return {std::move(first), body(legacy), std::move(with_features), std::move(cross_decline), body(must(g2m::encode_road_geom(tile), "road geom decline encode")),
-                std::move(six), std::move(with_origin), std::move(junctions)};
+                std::move(six), std::move(with_origin), std::move(junctions), std::move(nine)};
     }
     case Target::Roadgraph: {
         g2m::RoadGraphTile tile;

@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "2a5997c55dbc4025b0b592873784800b65870e7017a4a2cd0a029082bbd3c4e4");
+    CHECK(to_hex(digest) == "2fe0826f1da692361bc74f6833aa95c38f8e31fc123ec6183a3df6cdfbd7dfa0");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -214,4 +214,22 @@ TEST_CASE("The tunnel block: the straight-grade threshold of long tunnels (owner
     const auto other = load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 350 }"));
     REQUIRE(other); CHECK(other->tunnel.straight_grade_min_length_m == 350);
     CHECK(other->junction == builtin_road_rules_de().junction);
+}
+
+TEST_CASE("The underpass block: the deck rules of untagged grade-separated crossings (D53-D58)", "[layer][road_rules][underpass]") {
+    const auto& u = builtin_road_rules_de().underpass;
+    CHECK(u.enabled);
+    CHECK(u.min_depth_mm == 1000); CHECK(u.window_m == 50); CHECK(u.sag_radius_m == 300); CHECK(u.max_span_m == 80);
+    CHECK(u.abutment_mm == 2000); CHECK(u.depth_tol_mm == 100); CHECK(u.lower_margin_mm == 1000); CHECK(u.end_clearance_mm == 1000);
+    const std::string from = "\"underpass\": { \"enabled\": true,";
+    CHECK_FALSE(load_text(mutated(from, "\"underpassx\": { \"enabled\": true,")));     // the block is required
+    CHECK_FALSE(load_text(mutated(from, "\"underpass\": { \"enabled\": 1,")));         // a boolean
+    CHECK_FALSE(load_text(mutated(from, "\"underpass\": { \"bogus\": 1, \"enabled\": true,")));
+    CHECK_FALSE(load_text(mutated("\"window_m\": 50", "\"window_m\": 61")));           // the 65 m DEM margin
+    CHECK_FALSE(load_text(mutated("\"window_m\": 50", "\"window_m\": 50.5")));
+    CHECK_FALSE(load_text(mutated("\"max_span_m\": 80", "\"max_span_m\": 0")));
+    CHECK_FALSE(load_text(mutated("\"depth_tol_mm\": 100", "\"depth_tol_mm\": 1000")));   // below min_depth_mm
+    const auto off = load_text(mutated(from, "\"underpass\": { \"enabled\": false,"));
+    REQUIRE(off); CHECK_FALSE(off->underpass.enabled);
+    CHECK(off->tunnel == builtin_road_rules_de().tunnel);
 }

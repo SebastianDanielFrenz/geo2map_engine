@@ -1,11 +1,18 @@
-# g2m.roads.geom encoding 8 / version 1
+# g2m.roads.geom encoding 9 / version 1
 
 Level-2 baked geometry, explicitly selected. Complete original topology and
 midpoint ownership are retained. Every canonical graph stretch has exactly
 one accepted parametric profile or explicit declined outcome. A geometry tile
 does not promise every road is driveable; consumers must inspect declines.
 
-Encoding 8 (terrain migration phase 4, decision D47, the deriver writes it) has
+Encoding 9 (underpass decks, decisions D53-D58, the deriver writes it since
+2026-10-15) is encoding 8 plus section 8: the spans of ground stretches that
+pass over a lower road in a cutting and are served as decks (the profile there
+is the rim chord, not the DEM). Encoding 8 still decodes (no section 8, no
+decks) and is written when a tile asks for it and holds no deck. The decoder
+requires exactly sections 1 to 8 for encoding 9.
+
+Encoding 8 (terrain migration phase 4, decision D47) has
 the byte layout of encoding 7; it adds provenance 4 (TunnelFloor) to section 7,
 and a tunnel stretch may then carry a profile (its tunnel floor). Encoding 7
 still decodes (provenance 0..3, no tunnel profile) and is written when a tile
@@ -31,6 +38,7 @@ written. The decoder requires exactly sections 1 to 7 in that order for encoding
 | 5 | Zstd | junctions owned by this tile (encoding 7) |
 | 6 | Zstd | junction furniture: crossings, stop and give-way lines, signals (encoding 7) |
 | 7 | Zstd | profile provenance, one record per entry (encoding 7) |
+| 8 | Zstd | underpass decks on ground entries (encoding 9) |
 
 Sections 1-4 of an encoding-7 body have the encoding-6 format byte for byte;
 their content differs where the completion tier (design 6.6) gives a declined
@@ -174,6 +182,24 @@ junction's approach trims.
 TunnelFloor) and `u16
 strict_decline_code` (0 for Strict; for a completed profile the ErrorCode of the
 strict pass's decline, 1..ReadOnly).
+
+## Section 8: underpass decks (encoding 9)
+
+`varint count` (at most 65536), then per deck: `varint entry_index`, `varint
+start_mm`, `varint length_mm` (the deck is [start, start + length] in integer
+mm of the entry's reference station), `varint depth_mm` (the cutting depth
+under the rim chord at the crossing, 1..1000000), `u16 flags` (0; every bit
+reserved), `varint lower_way_count` (1..64), then the lower way ids as
+ascending varint deltas from 0 (every id > 0, strictly ascending).
+
+Validation (hard errors, `tests/layer/test_road_underpass.cpp` `[format]`):
+the entry has a profile and is neither bridge nor tunnel; 0 < start < end <
+reference length (a deck never reaches a stretch end); flags zero; decks
+ascending by entry and, within one entry, disjoint and ascending by station
+(`end` of one < `start` of the next). An encoding-8 tile with decks is
+rejected by the writer. The profile of the entry over the deck is the masked
+fit (D54); a consumer builds the deck mesh and collider from that profile and
+leaves the terrain under it uncarved by the upper road (D58).
 
 ## Junction, furniture and provenance validation (encoding 7)
 

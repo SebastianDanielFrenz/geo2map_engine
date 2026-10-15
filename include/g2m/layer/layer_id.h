@@ -50,6 +50,7 @@ enum class LayerEncoding : std::uint16_t {
     RoadGeomCrossSection = 6, // g2m.roads.geom with cross-section and feature sections (street fidelity P1 slice 5; still written when RoadGeomTile::encoding is 6)
     RoadGeomJunctions = 7, // g2m.roads.geom plus junction, furniture and provenance sections (street fidelity P2 slice 8; still written when RoadGeomTile::encoding is 7)
     RoadGeomTunnels = 8,   // g2m.roads.geom encoding 7 plus provenance 4, TunnelFloor (terrain migration phase 4, decision D47)
+    RoadGeomUnderpasses = 9, // g2m.roads.geom encoding 8 plus section 8, underpass deck spans (decisions D53-D58)
     TerrainClass = 7,      // g2m.terrain.class (encoding 7 in that layer's id space, design 9.4); docs/formats/terrain_class.md
 };
 

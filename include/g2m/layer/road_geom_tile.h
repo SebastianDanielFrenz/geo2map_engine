@@ -6,9 +6,13 @@
 #include <optional>
 namespace g2m {
 inline constexpr std::string_view kRoadGeomLayer = "g2m.roads.geom";
+// Encoding 9 (underpass decks, decisions D53-D58): encoding 8 plus section 8, the underpass deck spans of ground
+// stretches over a lower road in a DEM cutting (RoadGeomTile::underpasses). The deriver writes 9.
+inline constexpr std::uint16_t kRoadGeomEncoding = 9;
 // Encoding 8 (terrain migration phase 4, decision D47): the byte layout of encoding 7, with provenance 4 (TunnelFloor)
-// allowed in section 7 and a profile on a tunnel stretch carrying it. The deriver writes 8.
-inline constexpr std::uint16_t kRoadGeomEncoding = 8;
+// allowed in section 7 and a profile on a tunnel stretch carrying it. Still decoded, and written when
+// RoadGeomTile::encoding asks for it (a tile without underpass decks).
+inline constexpr std::uint16_t kRoadGeomEncodingTunnels = 8;
 // Encoding 7 (street fidelity P2 slice 8): encoding 6 plus junctions (section 5), furniture (section 6) and the
 // profile provenance (section 7, values 0..3). Still decoded, and written when RoadGeomTile::encoding asks for it (a
 // tile without tunnel floors).
@@ -110,6 +114,29 @@ struct RoadCompletionStats {
     std::size_t walk_other_side = 0;         // bridging nodes whose walk found support only away from a later bridge edge (D47)
     std::size_t strict_anchors = 0;          // bridging end nodes that took the strict pass's anchor (D30), once per node
 };
+// Encoding 9, section 8 (decisions D53-D58): a deck span of a ground stretch over a lower road that runs in a DEM
+// cutting under it without a bridge tag (road_underpass.h). The profile over [start_m, end_m] is the rim chord, not
+// the DEM; a consumer builds a deck (structure surface and collider) over the span from the served profile, as for a
+// bridge, and carves the ground stretch only outside it. Stations in integer mm, strictly inside the stretch.
+struct RoadUnderpass {
+    std::size_t entry_index = 0;        // a ground entry (profile, neither bridge nor tunnel)
+    double start_m = 0, end_m = 0;      // deck stations along the entry's reference, 0 < start < end < length
+    std::int32_t depth_mm = 0;          // the deepest crossing's depression under the rim chord (diagnostic)
+    std::uint16_t flags = 0;            // reserved, 0
+    std::vector<std::int64_t> lower_ways;   // the lower ways under the deck, ascending, unique, non-empty
+    friend bool operator==(const RoadUnderpass&, const RoadUnderpass&) = default;
+};
+struct RoadUnderpassStats;   // road_underpass.h
+class RoadUnderpassFinder;   // road_underpass.h
+// The underpass pass of build_road_geom_tile (D53). `crossings` is a canonical graph holding every way that crosses a
+// segment of a tile way (merge_road_graphs over road_crossing_dependencies, the tile graph included); null = the
+// context (or the tile graph). Off by default in the library; the deriver turns it on when de.json's underpass block
+// is enabled. On, the built tile has encoding 9 and the ground profiles are masked over the spans it serves.
+struct RoadUnderpassOptions {
+    bool enabled = false;
+    const RoadGraph* crossings = nullptr;
+    RoadUnderpassStats* stats = nullptr;
+};
 // Every graph stretch has exactly one accepted profile or explicit decline.
 // Consumers must inspect declines; this is never an implicitly complete mesh.
 struct RoadGeomTile {
@@ -120,9 +147,10 @@ struct RoadGeomTile {
     // (adjust_features_for_junctions), which only the owner tile holds, so a consumer applies them with the junctions
     // it has loaded. Sorted by (entry_index, station bits, node_id).
     std::vector<ProfileFeature> features;
-    // 8 for everything built; 7, 6 or 5 for a decoded older body. 7 has no tunnel floors; 6 has no junctions, furniture
+    // 9 for everything built with the underpass pass, else 8; 7, 6 or 5 for a decoded older body. 8 has no underpass
+    // decks; 7 has no tunnel floors; 6 has no junctions, furniture
     // or origins; 5 also no cross-sections or features (consumers fall back to the symmetric RoadAttributes::width_mm path).
-    std::uint16_t encoding = kRoadGeomEncoding;
+    std::uint16_t encoding = kRoadGeomEncodingTunnels;
     // One per entry (design 6.6, section 7 of encoding 7): every built tile has them (all Strict without the
     // completion tier). Empty for a decoded encoding-6/5 body.
     std::vector<RoadProfileOrigin> origins;
@@ -133,6 +161,8 @@ struct RoadGeomTile {
     // Encoding 7: build_road_furniture over this tile with `junctions` (entry furniture of every entry the record's
     // owning entry rule picks in this tile, plus the furniture of the junctions above; junction_index refers to them).
     std::vector<RoadFurniture> furniture;
+    // Encoding 9 (D53-D58): underpass deck spans, sorted by (entry_index, start_m), non-overlapping per entry.
+    std::vector<RoadUnderpass> underpasses;
 };
 // Feature shape (owner decision Q2: representable on the 1 m grid). Every carved feature is a plateau with two C1
 // smooth-step ramps (road_smooth_step), at least kFeatureMinRampMm per side, so the narrowest carved feature is 2 m
@@ -154,11 +184,12 @@ double feature_height_contribution_m(const ProfileFeature& f, double station_m) 
 // context, which is only exact for a graph that is complete at its own nodes.
 // Order: strict profiles, the completion tier (when enabled), cross-sections and features, the junctions
 // (build_road_junctions, then the owner filter of 5.1), the furniture (build_road_furniture with the owned
-// junctions), the origins (all Strict without the tier), then validate_road_geom_tile.
+// junctions), the origins (all Strict without the tier), the underpass decks (with `underpass` on and the rules'
+// underpass block enabled: the strict and completed ground profiles are masked, encoding 9), then validate_road_geom_tile.
 Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph,
     const RoadDemSampler& dem, const RoadProfileLimits& limits = {}, const RoadGraph* context = nullptr,
     const RoadRules& rules = builtin_road_rules_de(), const RoadCompletionOptions& completion = {},
-    RoadCompletionStats* completion_stats = nullptr);
+    RoadCompletionStats* completion_stats = nullptr, const RoadUnderpassOptions& underpass = {});
 // Sum of every carved feature of `entry` at station s (metres, 0 without one). Features are sorted by entry, so this
 // is a binary search plus the entry's own features. A consumer adds it to the vertical profile and the crown:
 // z = profile(s) + crown(t) + feature_height_m(tile, entry, s), over the feature's lateral extent.

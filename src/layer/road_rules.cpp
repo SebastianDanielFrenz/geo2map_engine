@@ -119,6 +119,24 @@ bool read_tunnel_rules(Reader& rd, const json& root, TunnelRules& out) {
            rd.integer(*t, kPath, "straight_grade_min_length_m", 0, 100000, out.straight_grade_min_length_m);
 }
 
+bool read_underpass_rules(Reader& rd, const json& root, UnderpassRules& out) {
+    const auto* u = rd.field(root, "root", "underpass");
+    static constexpr const char* kPath = "underpass";
+    if (!u || !rd.keys(*u, kPath, {"enabled", "min_depth_mm", "window_m", "sag_radius_m", "max_span_m", "abutment_mm", "depth_tol_mm",
+            "lower_margin_mm", "end_clearance_mm"}) ||
+        !rd.boolean(*u, kPath, "enabled", out.enabled) ||
+        !rd.integer(*u, kPath, "min_depth_mm", 1, 100000, out.min_depth_mm) ||
+        !rd.integer(*u, kPath, "window_m", 5, 60, out.window_m) ||   // the window's DEM reads stay inside the 65 m margin
+        !rd.integer(*u, kPath, "sag_radius_m", 0, 100000, out.sag_radius_m) ||
+        !rd.integer(*u, kPath, "max_span_m", 1, 120, out.max_span_m) ||
+        !rd.integer(*u, kPath, "abutment_mm", 0, 20000, out.abutment_mm) ||
+        !rd.integer(*u, kPath, "depth_tol_mm", 1, 10000, out.depth_tol_mm) ||
+        !rd.integer(*u, kPath, "lower_margin_mm", 0, 20000, out.lower_margin_mm) ||
+        !rd.integer(*u, kPath, "end_clearance_mm", 0, 50000, out.end_clearance_mm)) return false;
+    if (out.depth_tol_mm >= out.min_depth_mm) return rd.fail("underpass: depth_tol_mm must be below min_depth_mm");
+    return true;
+}
+
 const CrossingPattern* find_pattern(const std::vector<CrossingPatternEntry>& table, std::string_view value) {
     const auto it = std::lower_bound(table.begin(), table.end(), value,
         [](const CrossingPatternEntry& e, std::string_view v) { return e.value < v; });
@@ -148,7 +166,7 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
     Reader rd;
     const auto fail = [&]() { return make_error(ErrorCode::InvalidArgument, "road rules: " + rd.err); };
     if (!rd.keys(j, "root", {"format", "country", "min_lane_mm", "added_lane_side", "cycle_lane_mm", "sidewalk_mm", "tagged_shoulder_mm",
-            "parking_mm", "traffic_calming", "junction", "furniture", "tunnel", "min_edge_radius_m", "classes", "sources"})) return fail();
+            "parking_mm", "traffic_calming", "junction", "furniture", "tunnel", "underpass", "min_edge_radius_m", "classes", "sources"})) return fail();
     std::string format;
     if (!rd.text(j, "root", "format", format)) return fail();
     if (format != "g2m.road_rules/1") return make_error(ErrorCode::Unsupported, "road rules: format '" + format + "'");
@@ -183,7 +201,8 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
                 !rd.integer(*entry, path, "width_mm", 0, 100000, out.width_mm)) return fail();
         }
     }
-    if (!read_junction_rules(rd, j, rules.junction) || !read_furniture_rules(rd, j, rules.furniture) || !read_tunnel_rules(rd, j, rules.tunnel)) return fail();
+    if (!read_junction_rules(rd, j, rules.junction) || !read_furniture_rules(rd, j, rules.furniture) || !read_tunnel_rules(rd, j, rules.tunnel) ||
+        !read_underpass_rules(rd, j, rules.underpass)) return fail();
     const auto* sources = rd.field(j, "root", "sources");
     if (!sources || !rd.object(*sources, "sources")) return fail();
     for (auto it = sources->begin(); it != sources->end(); ++it)

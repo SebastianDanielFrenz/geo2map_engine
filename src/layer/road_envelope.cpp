@@ -83,6 +83,14 @@ std::vector<RoadSegment> envelope_road_segments(const RoadGeomTile& tile, const 
         base.rank = rank;
         base.way_id = entry.way_id;
         base.bridge = profile.attributes.bridge;
+        // D58: the capsules over an underpass deck are deck, not ground (painted like a bridge: not at all).
+        std::vector<std::pair<double, double>> decks;
+        for (const auto& u : tile.underpasses) if (u.entry_index == ei) decks.emplace_back(u.start_m, u.end_m);
+        const auto on_deck = [&](double a, double b) {
+            const double mid = 0.5 * (a + b);
+            for (const auto& [d0, d1] : decks) if (mid >= d0 && mid <= d1) return true;
+            return false;
+        };
         base.forward_limit = speed.forward;
         base.backward_limit = speed.backward;
 
@@ -125,6 +133,7 @@ std::vector<RoadSegment> envelope_road_segments(const RoadGeomTile& tile, const 
                 if (hw > 0) {
                     RoadSegment seg = base;
                     seg.a = point(s0, m0); seg.b = point(s1, m1); seg.half_width_mm = hw;
+                    if (!decks.empty() && on_deck(prev_s, s)) seg.bridge = true;
                     if (touches(box, seg.a, seg.b, hw)) keyed.push_back({seg, 1, ei, seq});
                 }
             }
@@ -148,6 +157,7 @@ std::vector<RoadSegment> envelope_road_segments(const RoadGeomTile& tile, const 
                 seg.land_class = LandClass::PavedRoad;
                 seg.surface = SurfaceKind::PavingStones;
                 seg.a = point(s0, m0); seg.b = point(s1, m1); seg.half_width_mm = hw;
+                if (!decks.empty() && on_deck(prev_s, s)) seg.bridge = true;
                 if (touches(box, seg.a, seg.b, hw)) keyed.push_back({seg, 0, ei, seq + 1 + q});
             }
             seq += 1 + sidewalk_count;
