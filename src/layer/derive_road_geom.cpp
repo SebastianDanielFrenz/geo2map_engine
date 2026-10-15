@@ -1,5 +1,6 @@
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/road_dem_dependencies.h"
+#include "g2m/layer/road_underpass.h"
 #include "g2m/layer/terrain_layers.h"
 #include "g2m/core/hash.h"
 #include <algorithm>
@@ -59,9 +60,16 @@ Result<std::optional<std::vector<InputTileRef>>> bridge_dependencies(const RoadG
     auto bridges = road_bridge_dependencies(graph.graph, *context, zone, &graph.key); if (!bridges) return bridges.error();
     return std::optional<std::vector<InputTileRef>>(std::move(*bridges));
 }
-// Stage 1 plus, once the context is resolved, stage 2: sorted and unique.
+// The roads.graph tiles holding every way that crosses a segment of the tile's ways (D57, underpass decks); empty with
+// the rules' underpass block off. Part of stage 1.
+Result<std::vector<InputTileRef>> crossing_dependencies(const RoadGraphTile& graph, geo::UtmZone zone) {
+    if (!builtin_road_rules_de().underpass.enabled) return std::vector<InputTileRef>{};
+    return road_crossing_dependencies(graph.graph, zone, &graph.key);
+}
+// Stage 1 plus, once the context is resolved, stage 2: sorted and unique. `crossings_out` (optional) receives the
+// crossing tiles (D57), which are part of the set but never of the stretch context.
 Result<std::vector<InputTileRef>> all_dependencies(const RoadGraphTile& graph, geo::UtmZone zone, std::span<const InputTile> inputs,
-    bool* complete = nullptr) {
+    bool* complete = nullptr, std::vector<InputTileRef>* context_out = nullptr, std::vector<InputTileRef>* crossings_out = nullptr) {
     auto deps = dependencies(graph, zone); if (!deps) return deps.error();
     const auto bridges = bridge_dependencies(graph, zone, inputs); if (!bridges) return bridges.error();
     if (complete) *complete = bridges->has_value();
@@ -69,6 +77,11 @@ Result<std::vector<InputTileRef>> all_dependencies(const RoadGraphTile& graph, g
         deps->insert(deps->end(), (*bridges)->begin(), (*bridges)->end());
         std::sort(deps->begin(), deps->end()); deps->erase(std::unique(deps->begin(), deps->end()), deps->end());
     }
+    if (context_out) *context_out = *deps;
+    const auto crossings = crossing_dependencies(graph, zone); if (!crossings) return crossings.error();
+    if (crossings_out) *crossings_out = *crossings;
+    deps->insert(deps->end(), crossings->begin(), crossings->end());
+    std::sort(deps->begin(), deps->end()); deps->erase(std::unique(deps->begin(), deps->end()), deps->end());
     return deps;
 }
 }
@@ -84,14 +97,14 @@ std::string option_value(double v) {
 }
 }
 std::string road_geom_config_text() {
-    // xs=1: the cross-section and feature sections (P1); enc=8: junctions, furniture and provenance (P2 slice 8) with
-    // tunnel floors (D47). The
+    // xs=1: the cross-section and feature sections (P1); enc=9: junctions, furniture and provenance (P2 slice 8) with
+    // tunnel floors (D47) and underpass decks (D56). The
     // rules hash ties a release to the exact de.json bytes (junction and furniture blocks included); every value of the
     // served completion options is part of the text (the relaxed completion limits are code constants, completion=1).
     const auto& rules_hash = builtin_road_rules_de().content_sha256;
     const auto c = served_road_completion_options();
     return "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph"
-        " xs=1 enc=8 rules=de:" + to_hex(std::span<const std::uint8_t>(rules_hash.data(), rules_hash.size())) + " join-bisector=1 context=nodes"
+        " xs=1 enc=9 rules=de:" + to_hex(std::span<const std::uint8_t>(rules_hash.data(), rules_hash.size())) + " join-bisector=1 context=nodes"
         " junction=1 furniture=1 completion=1 completion-retry=" + option_value(c.retry_spacing_m) + "/" + std::to_string(c.retry_iterations) +
         " completion-abutment=" + option_value(c.abutment_ground_m) + "/" + option_value(c.abutment_path_m) +
         " completion-ground=" + option_value(c.ground_spacing_m) + "/" + option_value(c.ground_ramp_m) + " strict-anchor=1 ring-nesting=2mm"
@@ -106,7 +119,10 @@ std::string road_geom_config_text() {
         " bridge-anchor-reuse=" + (c.bridge_anchor_reuse ? "1" : "0") +
         // D48 (terrain migration phase 5): the walk budget above is 200 m; its DEM and graph reads are covered by the
         // stage-2 squares of this half-width around every node of the incident bridges.
-        " bridge-walk-margin=" + std::to_string(kRoadBridgeWalkMarginMm / 1000);
+        " bridge-walk-margin=" + std::to_string(kRoadBridgeWalkMarginMm / 1000) +
+        // D53-D58: underpass decks (encoding 9, section 8); the parameters are de.json's underpass block (in the rules
+        // hash above); crossing-context=1: the roads.graph tiles of every way crossing a tile way's segment (D57).
+        " underpass=" + std::string(builtin_road_rules_de().underpass.enabled ? "1" : "off") + " crossing-context=1";
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {
@@ -119,11 +135,13 @@ Result<std::vector<InputTileRef>> RoadGeomDeriver::additional_inputs_for(const D
 Result<DeriveResult> RoadGeomDeriver::derive(const DeriveRequest& request) const {
     const auto graph = graph_input(request); if (!graph) return graph.error();
     bool complete = false;
-    auto expected = all_dependencies(*graph, request.target.zone, request.inputs, &complete); if (!expected) return expected.error();
+    std::vector<InputTileRef> context_refs, crossing_refs;
+    auto expected = all_dependencies(*graph, request.target.zone, request.inputs, &complete, &context_refs, &crossing_refs);
+    if (!expected) return expected.error();
     if (!complete) return make_error(ErrorCode::InvalidArgument, "roads.geom: incomplete dependency set");
     expected->push_back({std::string(kRoadGraphLayer), request.target}); std::sort(expected->begin(), expected->end());
     if (request.inputs.size() != expected->size()) return make_error(ErrorCode::InvalidArgument, "roads.geom: incomplete dependency set");
-    std::set<InputTileRef> seen; std::vector<HeightTile> heights; std::vector<RoadGraphTile> context_tiles;
+    std::set<InputTileRef> seen; std::vector<HeightTile> heights; std::vector<RoadGraphTile> context_tiles, crossing_tiles;
     std::optional<VerticalDatum> datum; std::size_t bytes = 0;
     for (const auto& input : request.inputs) {
         if (!std::binary_search(expected->begin(), expected->end(), input.ref) || !seen.insert(input.ref).second)
@@ -137,7 +155,10 @@ Result<DeriveResult> RoadGeomDeriver::derive(const DeriveRequest& request) const
         if (input.ref.layer == kRoadGraphLayer) {
             if (input.ref.key == request.target) continue;
             auto tile = decode_graph_input(input); if (!tile) return tile.error();
-            context_tiles.push_back(std::move(*tile)); continue;
+            const bool in_context = std::binary_search(context_refs.begin(), context_refs.end(), input.ref);
+            if (std::binary_search(crossing_refs.begin(), crossing_refs.end(), input.ref)) crossing_tiles.push_back(in_context ? *tile : std::move(*tile));
+            if (in_context) context_tiles.push_back(std::move(*tile));
+            continue;
         }
         if (input.header->datum != VerticalDatum::DHHN2016 && input.header->datum != VerticalDatum::EGM2008)
             return make_error(ErrorCode::Unsupported, "roads.geom: unknown elevation datum");
@@ -154,10 +175,16 @@ Result<DeriveResult> RoadGeomDeriver::derive(const DeriveRequest& request) const
     std::vector<const RoadGraph*> graphs{&graph->graph};
     for (const auto& tile : context_tiles) graphs.push_back(&tile.graph);
     const auto context = merge_road_graphs(graphs); if (!context) return context.error();
+    // D57: the crossing graph, the tile graph plus every way crossing one of its segments (never part of the context).
+    std::vector<const RoadGraph*> crossing_graphs{&graph->graph};
+    for (const auto& tile : crossing_tiles) crossing_graphs.push_back(&tile.graph);
+    const auto crossings = merge_road_graphs(crossing_graphs); if (!crossings) return crossings.error();
+    RoadUnderpassOptions underpass; underpass.enabled = true; underpass.crossings = &*crossings;
     std::vector<const HeightTile*> views; for (const auto& height : heights) views.push_back(&height);
     const auto dem = RoadDemSampler::make(views); if (!dem) return dem.error();
     RoadProfileLimits limits; limits.reference.allow_curvature_exceptions = true;
-    const auto geometry = build_road_geom_tile(*graph, *dem, limits, &*context, builtin_road_rules_de(), served_road_completion_options());
+    const auto geometry = build_road_geom_tile(*graph, *dem, limits, &*context, builtin_road_rules_de(), served_road_completion_options(),
+        nullptr, underpass);
     if (!geometry) return geometry.error();
     const auto body = encode_road_geom(*geometry); if (!body) return body.error();
     auto encoded = encode_body(*body); if (!encoded) return encoded.error();

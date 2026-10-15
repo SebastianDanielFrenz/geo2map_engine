@@ -132,6 +132,9 @@ struct Line {
     double length = 0;
     double trim_start = 0, trim_end = 0;
     double b_class = 0;
+    // Bridge lines: the deck's stations; the clearance ramp runs from both (0 and length for a bridge entry, an
+    // underpass deck's own span for a ground entry, D58).
+    double deck_from = 0, deck_to = 0;
     std::vector<Station> stations;
 };
 struct CarvedJunction {
@@ -399,6 +402,7 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
             chosen.try_emplace(EntryKey{e.way_id, e.stretch.start_ref, e.stretch.end_ref}, ti, ei);
         }
     std::map<EntryKey, std::size_t> merged_index;
+    std::vector<std::vector<std::pair<double, double>>> deck_spans;   // per merged entry: its underpass decks (D58)
     std::vector<std::string_view> highway;
     for (const auto& [key, src] : chosen) {
         merged_index.emplace(key, m.kept.entries.size());
@@ -406,6 +410,9 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
         m.kept.entries.push_back(t.entries[src.second]);
         highway.push_back(way_highway(t.source.graph, t.entries[src.second].way_id));
         m.rank.push_back(way_rank(t.source.graph, t.entries[src.second].way_id));
+        deck_spans.emplace_back();
+        if (options.underpass_decks)
+            for (const auto& u : t.underpasses) if (u.entry_index == src.second) deck_spans.back().emplace_back(u.start_m, u.end_m);
     }
     const std::size_t n_entries = m.kept.entries.size();
     std::vector<std::vector<std::size_t>> remap(inputs.size());
@@ -496,9 +503,13 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
                 if (half_station(ref, h)) all.push_back(static_cast<double>(h) * 0.5);
         }
         all.push_back(L);
+        // D58: a ground stretch is carved only outside its underpass decks; each deck is a bridge line of its own.
+        const auto& decks = bridge ? std::vector<std::pair<double, double>>{} : deck_spans[e];
+        for (const auto& [d0, d1] : decks) { all.push_back(d0); all.push_back(d1); }
         std::sort(all.begin(), all.end());
         all.erase(std::unique(all.begin(), all.end()), all.end());
-        Line line; line.entry = e; line.bridge = bridge; line.length = L;
+        const auto in_deck = [&](double s) { for (const auto& [d0, d1] : decks) if (s > d0 && s < d1) return true; return false; };
+        Line line; line.entry = e; line.bridge = bridge; line.length = L; line.deck_from = 0; line.deck_to = L;
         line.trim_start = m.trim_start[e]; line.trim_end = m.trim_end[e];
         line.b_class = static_cast<double>(params.blend_for_class_mm(highway[e])) / 1000.0;
         std::size_t prev_global = kNone;
@@ -506,7 +517,7 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
             const double s = all[g];
             bool on = false;
             for (const auto& [a, b] : active) if (s >= a && s <= b) { on = true; break; }
-            if (!on) continue;
+            if (!on || in_deck(s)) continue;
             const auto pose = ref.at(s);
             if (!pose) return make_error(ErrorCode::Malformed, "carve: reference station " + pose.error().message);
             Station st; st.s = s; st.x = pose->x; st.y = pose->y;
@@ -517,14 +528,40 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
             line.stations.push_back(st);
             prev_global = g;
         }
-        if (line.stations.size() < 2) continue;
-        if (!bridge)
-            for (auto& st : line.stations) {
-                st.b_left = m.blend_width(e, ref, line.b_class, st.s, st.outer_left, &centre, stats);
-                st.b_right = m.blend_width(e, ref, line.b_class, st.s, st.outer_right, &centre, stats);
+        // The deck lines (D58): the stations of each deck, its ends as the line's own ends.
+        std::vector<Line> deck_lines;
+        for (const auto& [d0, d1] : decks) {
+            Line deck; deck.entry = e; deck.bridge = true; deck.length = L; deck.deck_from = d0; deck.deck_to = d1;
+            std::size_t prev = kNone;
+            for (std::size_t g = 0; g < all.size(); ++g) {
+                const double s = all[g];
+                if (s < d0 || s > d1) continue;
+                bool on = false;
+                for (const auto& [a, b] : active) if (s >= a && s <= b) { on = true; break; }
+                if (!on) continue;
+                const auto pose = ref.at(s);
+                if (!pose) return make_error(ErrorCode::Malformed, "carve: reference station " + pose.error().message);
+                Station st; st.s = s; st.x = pose->x; st.y = pose->y;
+                st.global_first = s == d0; st.global_last = s == d1;
+                const CarveFootprint f = carve_footprint(*entry.cross_section, s);
+                st.outer_left = f.outer_left; st.outer_right = f.outer_right;
+                if (!deck.stations.empty() && prev + 1 == g) deck.stations.back().connects_next = true;
+                deck.stations.push_back(st);
+                prev = g;
             }
-        m.line_of[e] = m.lines.size();
-        m.lines.push_back(std::move(line));
+            if (deck.stations.size() >= 2) deck_lines.push_back(std::move(deck));
+        }
+        if (stats) stats->underpass_decks += decks.size();
+        if (line.stations.size() >= 2) {
+            if (!bridge)
+                for (auto& st : line.stations) {
+                    st.b_left = m.blend_width(e, ref, line.b_class, st.s, st.outer_left, &centre, stats);
+                    st.b_right = m.blend_width(e, ref, line.b_class, st.s, st.outer_right, &centre, stats);
+                }
+            m.line_of[e] = m.lines.size();
+            m.lines.push_back(std::move(line));
+        }
+        for (auto& deck : deck_lines) m.lines.push_back(std::move(deck));
     }
 
     // Carved junctions: not declined, not OnStructure, with a surface (design 6.3, 6.4).
@@ -800,7 +837,7 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
             const CarveFootprint f = carve_footprint(*m.core.entries[line.entry].cross_section, p.s);
             if (p.t < f.paved_right - m.deck_margin || p.t > f.paved_left + m.deck_margin) continue;
             const double top = road_surface_height_m(m.core, line.entry, p.s, std::clamp(p.t, f.paved_right, f.paved_left), m.surface);
-            const double edge = std::min(p.s, line.length - p.s);
+            const double edge = std::min(p.s - line.deck_from, line.deck_to - p.s);
             const double limit = top - m.deck_clearance * road_smooth_step(edge / m.deck_ramp);
             if (limit < out.z) { out.z = limit; out.deck_clamped = true; }
         }
@@ -976,7 +1013,7 @@ LayerDesc terrain_carved_desc() {
 
 std::string terrain_carved_config_text() {
     const auto& sha = builtin_carve_default().content_sha256;
-    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=8 radius=192 junction=D42 carve=" +
+    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 carve=" +
         to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even";
 }
 

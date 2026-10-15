@@ -2358,6 +2358,89 @@ carved, not the reverse (terrain migration phase 6).**
   and 250 m tunnels change: the phase-3a mesh pins of `structure_scene` (.holed, .sep) were regenerated with the
   game's mesh code (refgen, 945455a) and the ported code matches them.
 
+### Decisions made for underpass decks (owner decision 2026-10-15, racing_game PR #5)
+
+Owner: "Yes, that change is good. Let's do that." (mask the cutting under an upper ground road, serve only the span over
+it as a deck). The first draft floated the whole stretch 0.55 m over the ground; these decisions bound the deck to the
+crossing.
+
+**D53. Which crossings are decked, and where the switch lives.**
+- Upper: a ground stretch (neither bridge nor tunnel). Lower: a way whose node polyline crosses the upper stretch's node
+  polyline (exact integer-mm segment test, no shared node), on a lower OSM `layer` or tagged tunnel, never tagged
+  bridge: the G-6 census rule (D51), unchanged. Same-layer crossings without a node stay as they are.
+- Switch: the `underpass` block of `data/road_rules/de.json` (`UnderpassRules`, `enabled` true in the served rules) and
+  `RoadUnderpassOptions::enabled` of `build_road_geom_tile` (library default off, the deriver passes it on). With the
+  rules switch off the deriver adds no crossing dependencies and writes encoding 8 with no decks; a tile built with the
+  option off is encoding 8 byte for byte as before.
+- The lower road is not touched: its profile, carve and grip are what they were. A lower road tagged tunnel keeps its
+  tunnel floor (D47/D52).
+
+**D54. The mask.** The upper profile's DEM samples (the median-of-7 samples of `build_road_profile`, strict and Retry,
+and the 40 m samples of GroundCompleted) whose station lies inside a deck span are replaced by the straight rim chord
+of that crossing (the highest chord where merged decks overlap); a span holding no sample gets one at its middle when
+that keeps 0.5 m to both neighbours. Samples outside every span are untouched, so the profile outside a deck is the
+same fit to the same ground as before (in the test scene the worst |profile - DEM| outside the deck is 3 mm; the
+profile at the crossing goes from 98.06 m, a 1.9 m sag into the 6 m cutting, to 100.01 m).
+
+**D55. The span is the crossing, never the stretch.** Per crossing: the station s_c nearest the intersection; the
+profile's own lateral-median DEM sample h(k) every metre over k = -W..W (`window_m` 50; beyond a stretch end on the
+tangent of the end pose); the rims a < 0 < b are the hull vertices around 0 of the upper convex hull of
+h(k) - k^2 / (2 R) (R = `sag_radius_m` 300; exact int64 on 1/256 m units, collinear points kept), so a sag of radius R
+or wider is ground, not a cutting; a hull vertex at 0 is `shallow` (no depression), a rim at the window edge
+`no_rim` (a valley, not a cutting). Depth d(k) = chord(k) - h(k) under the straight rim chord; d(0) < `min_depth_mm`
+(1 m) is `shallow`. The deck is the lower road's footprint along the upper reference ((lower half width +
+`lower_margin_mm` 1 m + upper half width x |cos angle|) / max(|sin angle|, 0.25) on each side of s_c) united with the contiguous k around
+0 where d > `depth_tol_mm` (0.1 m), widened by `abutment_mm` (2 m) on each side and clipped to [a, b], mm-rounded.
+Longer than `max_span_m` (80) is `too_long`; closer than `end_clearance_mm` (1 m) to a stretch end is `reaches_end`
+(so a deck is never a whole stretch and never sits on a junction). Overlapping decks of one stretch merge. The
+synthetic scene (16 m cutting, 4 m shoulders, 6 m deep, 2 % grade) gives a 24 m deck, [388.5, 412.5] around the
+crossing at 400.5.
+- Crossings near a stretch end (the census's `short_side`, closer than 20 m; the Kalbach case): handled. The window
+  extends past the end on the tangent and only the deck itself must keep `end_clearance_mm`; the test decks a crossing
+  18 m from a side-road junction (also with a 5 m clearance), and refuses one 14.5 m away under a 5 m clearance
+  (`reaches_end`, profile unmasked, never a deck stretched to the junction).
+  Tile-invariant because the extension is a function of the stretch's own reference and the DEM within 53 m of it
+  (inside the 65 m DEM margin of roads.geom).
+
+**D56. Served as a deck: roads.geom encoding 9, section 8.** One record per deck (entry index, start and length in mm of
+the entry's reference station, depth in mm, u16 flags 0, the lower way ids ascending); format in
+`docs/formats/road_geom.md`. The profile over the deck is the served (masked) profile, so a consumer builds deck mesh and
+collider exactly like a bridge deck from served profiles: `g2m::world::build_road_decks` emits one inferred deck per
+record after the entry decks (stations = the record, heights = the profile), and skips the inferred tunnel roof of a
+lower tunnel whose crossing station lies in a served deck (one deck, not two on top of each other). The record is
+recomputed from the stored reference after the fit (the same pure function the mask used), so encoder and mask agree.
+No new structure kind: the existing inferred-deck representation is reused.
+
+**D57. Tile invariance needs the crossing ways.** The lower way of a crossing need not be in the stretch's context (it
+shares no node). The deriver adds, as roads.graph inputs, the L2 tiles every segment of a tile way passes through
+(`road_crossing_dependencies`, `segment_touches_box`); a way crossing such a segment passes through the tile holding the
+intersection, whose roads.graph holds it complete. These tiles form a separate crossings graph and never join the
+stretch context (the references stay what they were). Config text `crossing-context=1`. Test `[invariance]`: a 2 km stretch
+across a tile edge with the crossing 1200 m east of the west tile's centre (outside its graph and halo) gives the same
+deck and profile from both tiles, and the same bytes on a rebuild; the negative control (tile graph only, no crossing
+context) serves the west tile no deck and a different profile.
+
+**D58. The carve: no slot.** `terrain.carved` reads the decks: a ground stretch's line skips the stations inside its
+decks (the deck ends are inserted as stations) and each deck is a bridge line of its own (`deck_from`/`deck_to`, the
+deck clamp measured from those ends), so the terrain under the deck keeps the cutting (the lower road owns it at its own
+level) and the upper road's core is never carved across it. `CarveOptions::underpass_decks` = false is the sabotage:
+the masked profile is carved across the cutting at rim height and the lower road cuts a 6.2 m slot into it (test
+`[carve]`: 0 upper core cells in the deck with decks, a 6.17 m core step without). The road envelope marks capsules over
+a deck as bridge (no ground grip). Config text of terrain.carved and terrain.class: `underpass-deck=1`.
+- Release ids: the de.json bytes and the roads.geom config text (`enc=9 ... underpass=1 crossing-context=1`) move the
+  roads.geom release id; the carved and class config texts move theirs. Goldens re-recorded with `g2m_golden_dump`:
+  `g3xs` (flat DEM, no cutting, no deck) moves only because every served body is now encoding 9 with an empty section 8
+  (+22 bytes per tile, the other sections unchanged); `g3j` is unchanged; `g3d` and `g3c` move in one tile each,
+  hoechst_a66 L0 1820/21684, where the bumpy tilted test DEM (+-2 m waves) holds a 1.7 m depression under the A 66
+  (way 24504840) at the lower service way 52405506: a 37 m deck [354.92, 391.92] of the 431.7 m stretch. The census test
+  prints every served deck of both fixtures: none on the flat DEM; on the tilted one that A 66 deck, one 23 m deck of way
+  199241226 and one 53 m deck of the 68.6 m way 402193257 (a short-side crossing the census cannot measure).
+- Example 4 of the PR (hidden `[.][diag]` test writing a CSV): the A 66 fixture over way 52405506 with its tunnel tag
+  removed, a flat 100 m DEM with a 5.3 m, 16 m wide cutting along the lower way. Before: profile sag 1.1 m, the lower
+  road cuts a slot through the carved A 66. After: profile 100.00 m everywhere (within 2 mm), a 26 m deck centred on
+  the crossing, the carved terrain under it falls from the deck ends to the lower road (the ground core's end blend,
+  as at a bridge abutment).
+
 ---
 
 

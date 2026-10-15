@@ -219,11 +219,25 @@ std::vector<std::shared_ptr<const RoadDeck>> build_road_decks(const RoadGeomTile
         if (entry.profile && (entry.profile->attributes.bridge || entry.profile->attributes.tunnel)) {
             if (auto d = deck(*entry.profile, entry.way_id, entry.stretch.start_ref, 0, entry.profile->reference.length_m, false)) result.push_back(std::move(d));
         }
+    // Underpass decks (roads.geom encoding 9, D56): the served span of a ground stretch over a lower road in a DEM
+    // cutting, carrying the stretch's own (masked) profile; inferred like a roof.
+    for (const auto& u : geometry.underpasses) {
+        if (u.entry_index >= geometry.entries.size()) continue;
+        const auto& entry = geometry.entries[u.entry_index];
+        if (!entry.profile) continue;
+        if (auto d = deck(*entry.profile, entry.way_id, entry.stretch.start_ref, u.start_m, u.end_m, true)) result.push_back(std::move(d));
+    }
+    const auto in_underpass = [&](std::size_t entry_index, double station) {
+        for (const auto& u : geometry.underpasses)
+            if (u.entry_index == entry_index && station >= u.start_m && station <= u.end_m) return true;
+        return false;
+    };
     const auto& graph = geometry.source.graph;
     for (const auto& lower : graph.ways) {
         auto attrs = resolve_road_attributes(lower);
         if (!attrs || !attrs->tunnel) continue;
-        for (const auto& entry : geometry.entries) {
+        for (std::size_t entry_index = 0; entry_index < geometry.entries.size(); ++entry_index) {
+            const auto& entry = geometry.entries[entry_index];
             if (!entry.profile || entry.profile->attributes.bridge || entry.profile->attributes.tunnel) continue;
             const auto* upper = find_way(graph, entry.way_id);
             if (!upper || upper->rank < 5 || osm_layer(*upper) <= osm_layer(lower)) continue;
@@ -241,6 +255,7 @@ std::vector<std::shared_ptr<const RoadDeck>> build_road_decks(const RoadGeomTile
                     const double t = (vx * dy - vy * dx) / determinant, u = (vx * uy - vy * ux) / determinant;
                     if (t < 0 || t > 1 || u < 0 || u > 1) continue;
                     const double station = segment.station_m + t * segment.curve.length;
+                    if (in_underpass(entry_index, station)) continue;   // the served underpass deck already carries it
                     const double sine = std::abs(determinant) / std::max(.001, det::hypot(ux, uy) * det::hypot(dx, dy));
                     const double extent = std::max(20.0, (attrs->width_mm / 2000.0 + 4) / std::max(.2, sine));
                     const double from = std::max(0.0, station - extent), to = std::min(p.reference.length_m, station + extent);

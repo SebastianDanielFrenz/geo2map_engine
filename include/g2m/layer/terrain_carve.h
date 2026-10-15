@@ -79,6 +79,7 @@ struct CarveOptions {
     bool first_come_ownership = false;      // T14 sabotage: the first candidate of each kind wins instead of the min / max rules
     bool deck_clamp = true;                 // T15 sabotage: no clearance clamp under bridges
     bool junction_relief_fade = true;       // D42 sabotage: false keeps every approach's full relief (the D22-D24 surface)
+    bool underpass_decks = true;            // D58 sabotage: false carves a ground stretch over its underpass decks (the slot)
     std::uint64_t candidate_order_seed = 0; // T14: visit the candidates of a bucket in a seeded permutation (0 = stored order)
 };
 
@@ -118,6 +119,7 @@ struct CarveStats {
     std::size_t cells_terrain = 0, cells_nodata = 0, cells_junction_core = 0, cells_approach_core = 0;
     std::size_t cells_junction_blend = 0, cells_approach_blend = 0;
     std::size_t cells_deck_clamped = 0;
+    std::size_t underpass_decks = 0;            // D58: underpass deck spans of the loaded entries (lines built)
     std::size_t deck_clearance_violations = 0;  // a core cell the clamp lowered (clearance < deck clearance: a profile problem)
     std::size_t blend_stations = 0;             // blend widths computed at stations whose edge point lies in the tile
     std::size_t steep_blend_stations = 0;       // ... with factor * |T_edge - z_edge| > blend_max: steeper than 1:1.5 (counted)

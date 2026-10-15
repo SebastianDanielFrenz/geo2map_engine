@@ -1,4 +1,5 @@
 #include "g2m/layer/road_profile.h"
+#include "g2m/layer/road_underpass.h"
 #include "g2m/core/det_math.h"
 #include <algorithm>
 #include <array>
@@ -236,6 +237,8 @@ Result<RoadProfile> build_road_profile(const RoadReferenceBuilder& builder,
         std::sort(heights.begin(), heights.end()); samples.push_back({station, heights[3] / 256.0});
     }
     samples.push_back({out.reference.length_m, h1});
+    // D54: over a served underpass deck the rim chord replaces the DEM's cutting.
+    if (limits.underpass) limits.underpass->mask_samples(id, stretch, out.reference, samples);
     auto vertical = fit_vertical_profile(samples, fit); if (!vertical) return vertical.error();
     out.vertical = std::move(*vertical); return out;
 }

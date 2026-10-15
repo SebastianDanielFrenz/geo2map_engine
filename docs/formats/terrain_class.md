@@ -30,7 +30,7 @@ of the expected key, another scheme, a plane of the wrong size and a value above
 | Levels | 0 to 6 |
 | Header datum | None, height offset 0 |
 | Coverage | `g2m.elev.base` |
-| Config hash | SHA-256 of `g2m.terrain.class/1 nodes=257 L0 carve-ownership roads.geom enc=8 radius=192 junction=D42 carve=<sha256 of carve_default.json> classifier=<sha256 of the ESA classifier table> scheme=g2m.landclass.v1 landcover=floor sidewalk=paving_stones; L1-L6 rank-max 3x3 centre-then-row-major window=4x4` (`terrain_class_config_text()`) |
+| Config hash | SHA-256 of `g2m.terrain.class/1 nodes=257 L0 carve-ownership roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 carve=<sha256 of carve_default.json> classifier=<sha256 of the ESA classifier table> scheme=g2m.landclass.v1 landcover=floor sidewalk=paving_stones; L1-L6 rank-max 3x3 centre-then-row-major window=4x4` (`terrain_class_config_text()`) |
 
 ## Inputs
 

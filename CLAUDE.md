@@ -1162,6 +1162,23 @@ constant grade between its portal samples (DEM floor below, or when steeper than
 with the game's mesh code). Tests `[tunnel]` in test_road_completion.cpp (tile edge invariance + controls, fixture measurement)
 and test_road_rules.cpp.
 
+Underpass decks (design D53-D58, owner decision 2026-10-15, racing_game PR #5): `data/road_rules/de.json` block `underpass`
+(`UnderpassRules`: enabled, min_depth 1 m, window 50 m, sag radius 300 m, max span 80 m, abutment 2 m, depth tol 0.1 m,
+lower margin 1 m, end clearance 1 m; de.json SHA `2fe0826f...dfa0`). `include/g2m/layer/road_underpass.h`
+`RoadUnderpassFinder` (spans per ground stretch: crossing of a lower-layer/tunnel way without a shared node, rims from the
+upper hull of the window minus a 300 m sag, deck = lower footprint + depression + abutments clipped to the rims; mask =
+rim chord over the span, applied via `RoadProfileLimits::underpass` in strict/Retry and GroundCompleted) and
+`road_crossing_dependencies` (D57: roads.graph tiles of every tile-way segment; separate crossings graph,
+`RoadUnderpassOptions{enabled, crossings, stats}` of `build_road_geom_tile`, library default off). roads.geom encoding 9
+(`kRoadGeomEncoding`, 8 = `kRoadGeomEncodingTunnels` still written when asked, no decks): section 8 `RoadGeomTile::underpasses`
+(`RoadUnderpass{entry_index, start_m, end_m, depth_mm, flags, lower_ways}`). Consumers: terrain.carved skips deck spans
+on the ground line and adds a bridge line per deck (`CarveOptions::underpass_decks` sabotage), the road envelope marks
+deck capsules bridge, `g2m::world::build_road_decks` adds an inferred deck per span (no tunnel roof under it). Config
+texts: roads.geom `enc=9 ... underpass=1 crossing-context=1`, carved/class `enc=9 ... underpass-deck=1`. Tests
+`tests/layer/test_road_underpass.cpp` (`[underpass][deck]`: bounds + ground outside, non-deck controls, near end,
+tile invariance + negative control, encoding 9 round trip/validation, carve no-slot + sabotage; hidden `[.][diag]` example-4
+CSV), `tests/world/test_road_meshes.cpp` (D56 deck), scene `tests/support/underpass_scene.h`.
+
 ## G4 routing, slice 1 (2026-10-14)
 
 Design, owner questions and the slice plan: `docs/routing_design.md`. `g2m_route` (`include/g2m/route/`, `src/route/`)
