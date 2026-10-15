@@ -65,7 +65,7 @@ struct LayerOptIn {
     bool roads = true;      // g2m.roads.graph
     bool geometry = true;   // g2m.roads.geom (needs roads)
     bool carved = false;    // g2m.terrain.carved; when set, height() serves it instead of g2m.terrain.height
-    bool classes = false;   // g2m.terrain.class: no deriver yet (terrain migration phase 6), open() rejects true
+    bool classes = false;   // g2m.terrain.class (phase 6); implies the carved layer in the release (height() still follows `carved`)
 };
 
 struct TerrainServiceConfig {

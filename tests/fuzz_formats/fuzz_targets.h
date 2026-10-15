@@ -32,6 +32,7 @@ enum class Target {
     Roadgeom,  // decode_body + decode_road_geom
     Roadgraph, // decode_body + decode_road_graph
     RoadCrossSectionEval, // decode_body + decode_road_geom, then boundaries_at at 17 stations per cross-section
+    TerrainClass, // decode_body + decode_terrain_class (g2m.terrain.class, P2 slice 10) at a fixed key, round trip
 };
 
 struct TargetInfo {
@@ -43,8 +44,11 @@ inline constexpr TargetInfo kTargets[] = {
     {Target::Container, "container"}, {Target::Elev, "elev"}, {Target::Landcover, "landcover"},
     {Target::Osm, "osm"},             {Target::Pack, "pack"}, {Target::Manifest, "manifest"},
     {Target::Path, "path"},           {Target::Region, "region"}, {Target::Roadgraph, "roadgraph"}, {Target::Roadgeom, "roadgeom"},
-    {Target::RoadCrossSectionEval, "roadCrossSectionEval"},
+    {Target::RoadCrossSectionEval, "roadCrossSectionEval"}, {Target::TerrainClass, "terrainClass"},
 };
+
+// The key the TerrainClass target decodes against (and its seeds are encoded at).
+inline constexpr std::int32_t kFuzzClassX = 1820, kFuzzClassY = 21684;
 
 // Runs one input (fuzz_run.cpp).
 void run(Target target, std::span<const std::uint8_t> data);

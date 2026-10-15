@@ -452,7 +452,7 @@ geo2map_engine/
                                       Dijkstra (node and point), route validators and GraphBuilder; route_scenes.h = the
                                       synthetic cross and random restricted grids
     golden/                           golden.h/.cpp + golden_g1.cpp + golden_g1c.cpp (g2m_golden, milestone G1c I6),
-                                      dump_main.cpp (g2m_golden_dump [g0|g1|g1c]), test_golden.cpp (g2m_golden_tests)
+                                      dump_main.cpp (g2m_golden_dump [g0|g1|g1c|...|g3c]), test_golden.cpp (g2m_golden_tests)
     fuzz/                             libFuzzer targets for g2m_decode (fuzz_zip, fuzz_tiff, fuzz_pbf) over a
                                       fuzz-instrumented copy of G2M_DECODE_SOURCES; same G2M_BUILD_FUZZERS gate and
                                       CTest `fuzz` label as fuzz_formats (WSL clang legs)
@@ -1066,6 +1066,23 @@ Terrain migration phase 5 (design D48, 2026-10-15): the completion's abutment wa
 adds, in the second discovery stage, the elev.base and roads.graph tiles of a 205 m square around every node of every bridge
 incident to the tile's nodes (0 = the pre-D48 set). Config text `completion-abutment=32/200 ... bridge-walk-margin=205`
 (release id bump #2). Tests `[D48]` (fence, 60/200/500 m walks, fixture cost) in test_road_completion.cpp.
+
+Terrain migration phase 6 (served carve readiness, designs D49-D51, 2026-10-15): G-1 / D50: `IDeriver::rejected_input_is_absent(ref)`,
+`InputTile::rejected`, `rejected_input_marker(ref)` (server.cpp): a roads.geom input of terrain.carved / terrain.class that fails to
+resolve counts as absent (no roads) and its marker goes into the output header inputs; errors are not cached. Slice 10 / D49:
+`g2m.terrain.class` v1 L0-L6, body encoding 7 (`include/g2m/layer/terrain_class.h`, `src/layer/terrain_class.cpp`,
+`docs/formats/terrain_class.md`): 257 x 257 nodes at integer metres, planes land_class / surface / role (`TerrainRole`) / rank; L0
+from the carve ownership (`CarveModel::classify`) over ESA land cover, L1-L6 rank-max 3 x 3 over a 4 x 4 window of L-1 tiles.
+Opt-in (`include_classes` in `builtin_local_release_params` / `BuiltinTerrainDerivers::ordered`, bake `--layers g2m.terrain.class`,
+implies carved + roads); release ids without it unchanged. D51 / G-2/G-3/G-5: `FetchResult::classes`, `TransportHeightTileFetch(...,
+layer, class_layer)`, `LoaderConfig::require_classes`, `ResidentHeightSet` entries carry the class tile (4-arg install/find),
+`include/g2m/phys/fill_physics_classes.h` (cell centre -> class node, full `SurfaceIdTable` resolve), bridge
+`ClassSurfaceConfig` ctor of `G2mTerrainSource` (Snapshot prefetch compares the class tile identity). G-6:
+`include/g2m/layer/road_underpass.h` `road_underpass_census` (dip = chord over +-60 m minus profile at grade-separated crossings),
+`g2m_road_probe --underpasses`. Tests: `tests/layer/test_terrain_class.cpp` ([terrain_class]), G-1 case in test_terrain_carve.cpp,
+`tests/layer/test_road_underpass.cpp` ([underpass]), `tests/phys/test_class_mode.cpp` ([classes]),
+`bridges/physics_sim/tests/test_carved_prefetch.cpp` ([classes], bridge leg); golden `g3c` (`tests/golden/golden_g3c.cpp`,
+`testdata/golden/g3c_golden.txt`). Open: render `ClassWindow` from terrain.class, the home-region G-6 run.
 
 Junction gradient (design D42, after slice 9): the junction surface blends v_i = b_i + phi_i (p_i - b_i) + psi_i (z_i - p_i)
 instead of z_i (b base, p paved band only, z full approach surface; `junction_approach_heights` returns all three), with

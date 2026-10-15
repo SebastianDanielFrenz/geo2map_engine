@@ -3,6 +3,7 @@
 #include "g2m/layer/road_attributes.h"
 #include "g2m/layer/road_profile.h"
 #include "g2m/layer/road_geom_tile.h"
+#include "g2m/layer/road_underpass.h"
 #include "g2m/layer/road_dem_dependencies.h"
 #include "g2m/layer/derive_terrain.h"
 #include "g2m/core/det_math.h"
@@ -17,14 +18,17 @@
 #include <algorithm>
 using namespace g2m;
 int main(int argc, char** argv) {
-    bool exceptions_enabled = false, profiles_enabled = false;
+    bool exceptions_enabled = false, profiles_enabled = false, underpasses_enabled = false;
     for (int i = 5; i < argc; ++i) {
         if (std::string_view(argv[i]) == "--exceptions" && !exceptions_enabled) exceptions_enabled = true;
         else if (std::string_view(argv[i]) == "--profiles" && !profiles_enabled) profiles_enabled = true;
+        else if (std::string_view(argv[i]) == "--underpasses" && !underpasses_enabled) underpasses_enabled = true;
         else { std::cerr << "unknown or repeated option\n"; return 1; }
     }
-    if (argc < 5 || argc > 7) {
-        std::cerr << "usage: g2m_road_probe STORE SCOPE TILE_KEY OUTPUT_CSV [--exceptions] [--profiles]\n"; return 1;
+    // --underpasses (request G-6) prints the census of road_underpass.h over the tile's roads.geom; implies --profiles.
+    if (underpasses_enabled) profiles_enabled = true;
+    if (argc < 5 || argc > 8) {
+        std::cerr << "usage: g2m_road_probe STORE SCOPE TILE_KEY OUTPUT_CSV [--exceptions] [--profiles] [--underpasses]\n"; return 1;
     }
     const auto key = parse_tile_path(argv[3]);
     if (!key || key->level != 2) { std::cerr << "level-2 tile key required\n"; return 1; }
@@ -193,6 +197,18 @@ int main(int argc, char** argv) {
         std::cout << "dem_tiles=" << heights.size() << " profile_ok=" << fitted << " bridge_profiles=" << bridges
             << " profile_with_dem_ms=" << std::chrono::duration<double, std::milli>(Clock::now() - profile_begin).count() << '\n';
         for (const auto& [reason, count] : declined) std::cout << "declined_profiles=" << count << " reason=" << reason << '\n';
+        if (underpasses_enabled) {
+            const auto census = road_underpass_census(*geometry);
+            std::cout << "underpass_census ground_entries=" << census.ground_entries << " crossings=" << census.crossings.size()
+                << " same_layer=" << census.same_layer << " short_side=" << census.short_side
+                << " over_0_3m=" << census.over_threshold << " max_dip_m=" << census.max_dip_m << '\n';
+            for (const auto& x : census.crossings) {
+                const auto ll = geo::Utm{}.reverse(key->zone, x.x_m, x.y_m);
+                std::cout << std::setprecision(10) << "underpass upper_way=" << x.upper_way << " lower_way=" << x.lower_way
+                    << " lower_layer=" << x.lower_layer << " lower_tunnel=" << x.lower_tunnel << " station_m=" << x.station_m
+                    << " dip_m=" << x.dip_m << " lat=" << ll.lat << " lon=" << ll.lon << '\n';
+            }
+        }
     }
     return 0;
 }

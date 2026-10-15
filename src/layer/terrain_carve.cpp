@@ -147,6 +147,14 @@ enum ElemKind : std::uint8_t { kJunction = 0, kGround = 1, kBridge = 2 };
 struct BlockElem { std::uint8_t kind = 0; std::uint32_t index = 0; std::uint32_t seg_begin = 0, seg_end = 0; };
 struct Block { std::uint32_t elem_begin = 0, elem_end = 0; };
 
+std::uint8_t way_rank(const RoadGraph& graph, std::int64_t way_id) {
+    auto it = std::lower_bound(graph.ways.begin(), graph.ways.end(), way_id, [](const RoadGraphWay& w, std::int64_t id) { return w.osm_id < id; });
+    const RoadGraphWay* way = (it != graph.ways.end() && it->osm_id == way_id) ? &*it : nullptr;
+    if (!way) for (const auto& w : graph.ways) if (w.osm_id == way_id) { way = &w; break; }
+    const int r = way ? way->rank : 0;
+    return static_cast<std::uint8_t>(std::clamp(r, 1, 255));
+}
+
 std::string_view way_highway(const RoadGraph& graph, std::int64_t way_id) {
     auto it = std::lower_bound(graph.ways.begin(), graph.ways.end(), way_id, [](const RoadGraphWay& w, std::int64_t id) { return w.osm_id < id; });
     const RoadGraphWay* way = (it != graph.ways.end() && it->osm_id == way_id) ? &*it : nullptr;
@@ -289,6 +297,7 @@ struct CarveModel::Impl {
     std::vector<RoadJunction> junctions;        // every loaded record, merged entry indices
     std::vector<CarvedJunction> carved;
     std::vector<double> trim_start, trim_end;   // per merged entry
+    std::vector<std::uint8_t> rank;             // per merged entry: the way's rank clamped to [1, 255] (terrain.class)
     std::vector<std::size_t> line_of;           // per merged entry: index into lines or kNone
     std::vector<Line> lines;
     std::int64_t bx0 = 0, by0 = 0, nbx = 0, nby = 0;
@@ -396,6 +405,7 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
         const RoadGeomTile& t = *inputs[src.first].tile;
         m.kept.entries.push_back(t.entries[src.second]);
         highway.push_back(way_highway(t.source.graph, t.entries[src.second].way_id));
+        m.rank.push_back(way_rank(t.source.graph, t.entries[src.second].way_id));
     }
     const std::size_t n_entries = m.kept.entries.size();
     std::vector<std::vector<std::size_t>> remap(inputs.size());
@@ -798,6 +808,79 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
     return out;
 }
 
+CarveClass CarveModel::classify(double x, double y, const CarveSample& c) const noexcept {
+    const Impl& m = *impl_;
+    CarveClass out;
+    const geom::PointMm pmm{static_cast<std::int64_t>(std::llround(x * 1000.0)), static_cast<std::int64_t>(std::llround(y * 1000.0))};
+    const auto road = [&](std::size_t entry, TerrainRole role, bool sidewalk) {
+        out.role = role; out.base = false; out.rank = entry < m.rank.size() ? m.rank[entry] : 1;
+        if (sidewalk) { out.land_class = LandClass::PavedRoad; out.surface = SurfaceKind::PavingStones; return; }
+        const auto& profile = m.core.entries[entry].profile;
+        out.land_class = profile ? profile->attributes.land_class : LandClass::PavedRoad;
+        out.surface = profile ? profile->attributes.surface : SurfaceKind::Unknown;
+    };
+    const std::int64_t ce = static_cast<std::int64_t>(std::floor(x)), cn = static_cast<std::int64_t>(std::floor(y));
+    const std::int64_t bx = floor_div(ce, kCarveBucketM) - m.bx0, by = floor_div(cn, kCarveBucketM) - m.by0;
+    const bool in_blocks = bx >= 0 && by >= 0 && bx < m.nbx && by < m.nby;
+    const Block* block = in_blocks ? &m.blocks[static_cast<std::size_t>(by * m.nbx + bx)] : nullptr;
+    switch (c.owner) {
+    case CarveOwner::JunctionCore: {
+        const CarvedJunction& j = m.carved[c.element];
+        const RoadJunction& r = m.junctions[j.record];
+        // The approach that names the surface: highest rank, ties to the smallest way id (then the ring order).
+        std::size_t best = kNone;
+        for (const auto& a : r.approaches) {
+            if (a.status != JunctionApproachStatus::Used || a.entry_index >= m.core.entries.size()) continue;
+            if (best == kNone) { best = a.entry_index; continue; }
+            const std::uint8_t ra = m.rank[a.entry_index], rb = m.rank[best];
+            if (ra > rb || (ra == rb && m.core.entries[a.entry_index].way_id < m.core.entries[best].way_id)) best = a.entry_index;
+        }
+        const auto& bed = r.rings[static_cast<std::size_t>(JunctionRingLayer::RoadBed)].vertices;
+        const auto& paved = r.rings[static_cast<std::size_t>(JunctionRingLayer::Paved)].vertices;
+        if (best != kNone && bed.size() >= 3 && inside_ring(bed, pmm)) road(best, TerrainRole::JunctionRoadBed, false);
+        else if (best != kNone && paved.size() >= 3 && inside_ring(paved, pmm)) road(best, TerrainRole::JunctionSidewalk, true);
+        else out.role = TerrainRole::Verge;
+        return out;
+    }
+    case CarveOwner::ApproachCore: {
+        out.role = TerrainRole::Verge;
+        if (!block) return out;
+        // The core candidate of evaluate() for this entry (the same projection and core test).
+        for (std::size_t i = block->elem_begin; i < block->elem_end; ++i) {
+            const BlockElem& el = m.elems[i];
+            if (el.kind != kGround) continue;
+            const Line& line = m.lines[el.index];
+            if (line.entry != c.element) continue;
+            const Projection p = project(line, m.segs.data() + el.seg_begin, el.seg_end - el.seg_begin, x, y);
+            if (!p.valid || p.outside || p.clamped || p.s < line.trim_start || p.s > line.length - line.trim_end) continue;
+            const CarveFootprint f = carve_footprint(*m.core.entries[line.entry].cross_section, p.s);
+            if (p.t < f.outer_right || p.t > f.outer_left) continue;
+            if (p.t >= f.roadbed_right && p.t <= f.roadbed_left) road(line.entry, TerrainRole::RoadBed, false);
+            else if (p.t >= f.paved_right && p.t <= f.paved_left) road(line.entry, TerrainRole::Sidewalk, true);
+            return out;
+        }
+        return out;
+    }
+    case CarveOwner::ApproachBlend:
+    case CarveOwner::JunctionBlend: out.role = TerrainRole::Blend; break;
+    case CarveOwner::Terrain:
+    case CarveOwner::NoData: break;
+    }
+    if (!block || c.owner == CarveOwner::NoData) return out;
+    for (std::size_t i = block->elem_begin; i < block->elem_end; ++i) {
+        const BlockElem& el = m.elems[i];
+        if (el.kind != kBridge) continue;
+        const Line& line = m.lines[el.index];
+        const Projection p = project(line, m.segs.data() + el.seg_begin, el.seg_end - el.seg_begin, x, y);
+        if (!p.valid || p.outside) continue;
+        const CarveFootprint f = carve_footprint(*m.core.entries[line.entry].cross_section, p.s);
+        if (p.t < f.paved_right - m.deck_margin || p.t > f.paved_left + m.deck_margin) continue;
+        out.role = TerrainRole::BridgeDeck;
+        break;
+    }
+    return out;
+}
+
 // ---- the tile ----
 
 namespace {
@@ -924,6 +1007,63 @@ Result<void> check_header(const InputTile& in) {
 }
 } // namespace
 
+std::vector<CarveGeomInput> CarveL0Inputs::geom() const {
+    std::vector<CarveGeomInput> out;
+    for (std::size_t i = 0; i < roads.size(); ++i) out.push_back({road_keys[i], &roads[i]});
+    return out;
+}
+
+Result<void> decode_carve_l0_inputs(const TileKey& target, std::span<const InputTile> inputs, CarveL0Inputs& out,
+    std::string_view what_view) {
+    const std::string what(what_view);
+    std::optional<VerticalDatum> datum;
+    bool centre = false;
+    std::size_t bytes = 0;
+    for (const auto& in : inputs) {
+        if (in.ref.layer != kElevBaseLayer && in.ref.layer != kRoadGeomLayer) continue;   // the caller's own layers
+        if (in.body.size() > kMaxBodyRawSize - bytes) return make_error(ErrorCode::LimitExceeded, what + ": input byte budget");
+        bytes += in.body.size();
+        if (!in.header) continue;   // absent (or rejected, G-1): NoData / no roads
+        if (in.header->key != in.ref.key || in.header->layer != in.ref.layer || in.header->layer_version != 1 ||
+            in.header->body_size != in.body.size() || in.header->body_hash != content_hash(in.body))
+            return make_error(ErrorCode::Malformed, what + ": dependency header mismatch");
+        const auto body = decode_body(in.body); if (!body) return body.error();
+        if (in.ref.layer == kElevBaseLayer) {
+            const std::int64_t dx = static_cast<std::int64_t>(in.ref.key.x) - target.x, dy = static_cast<std::int64_t>(in.ref.key.y) - target.y;
+            if (dx < -1 || dx > 1 || dy < -1 || dy > 1 || in.ref.key.level != 0) return make_error(ErrorCode::Malformed, what + ": elev.base outside the window");
+            const std::size_t slot = static_cast<std::size_t>((dy + 1) * 3 + (dx + 1));
+            if (in.header->datum != VerticalDatum::DHHN2016 && in.header->datum != VerticalDatum::EGM2008)
+                return make_error(ErrorCode::Unsupported, what + ": unknown elevation datum");
+            if (datum && *datum != in.header->datum) return make_error(ErrorCode::Malformed, what + ": mixed elevation datums");
+            datum = in.header->datum;
+            if (auto ok = decode_height_tile(*body, in.ref.key, out.dem[slot]); !ok) return ok.error();
+            for (auto& h : out.dem[slot].h) if (h != kHeightNoData) {
+                const auto adjusted = static_cast<std::int64_t>(h) + in.header->height_offset;
+                if (adjusted <= std::numeric_limits<std::int32_t>::min() || adjusted > std::numeric_limits<std::int32_t>::max())
+                    return make_error(ErrorCode::LimitExceeded, what + ": elevation offset overflow");
+                h = static_cast<std::int32_t>(adjusted);
+            }
+            out.window[slot] = &out.dem[slot];
+            if (slot == 4) centre = true;
+        } else {
+            auto tile = decode_road_geom(*body); if (!tile) return tile.error();
+            if (tile->source.key != in.ref.key) return make_error(ErrorCode::Malformed, what + ": roads.geom key mismatch");
+            out.roads.push_back(std::move(*tile)); out.road_keys.push_back(in.ref.key);
+        }
+    }
+    if (!centre) return make_error(ErrorCode::NotFound, what + ": g2m.elev.base input missing");
+    // roads.geom heights are in the DEM's datum (or None for a tile without profiles).
+    for (const auto& in : inputs)
+        if (in.header && in.ref.layer == kRoadGeomLayer && in.header->datum != VerticalDatum::None && in.header->datum != *datum)
+            return make_error(ErrorCode::Malformed, what + ": roads.geom datum differs from the DEM");
+    out.datum = *datum;
+    return {};
+}
+
+bool TerrainCarvedDeriver::rejected_input_is_absent(const InputTileRef& ref) const {
+    return ref.layer == kRoadGeomLayer;
+}
+
 Result<DeriveResult> TerrainCarvedDeriver::derive(const DeriveRequest& request) const {
     const TileKey& target = request.target;
     if (!target.valid() || target.level < 0 || target.level > kTerrainMaxLevel)
@@ -950,52 +1090,13 @@ Result<DeriveResult> TerrainCarvedDeriver::derive(const DeriveRequest& request) 
         auto bytes = encode_body(*encoded); if (!bytes) return bytes.error();
         return DeriveResult{std::move(*bytes), VerticalDatum::DHHN2016, 0};
     }
-    std::vector<HeightTile> dem(9);
-    std::array<const HeightTile*, 9> window{};
-    std::vector<RoadGeomTile> roads;
-    std::vector<TileKey> road_keys;
-    std::optional<VerticalDatum> datum;
-    bool centre = false;
-    std::size_t bytes = 0;
-    for (const auto& in : request.inputs) {
-        if (in.body.size() > kMaxBodyRawSize - bytes) return make_error(ErrorCode::LimitExceeded, "terrain.carved: input byte budget");
-        bytes += in.body.size();
-        if (!in.header) continue;   // absent: NoData / no roads
-        if (auto ok = check_header(in); !ok) return ok.error();
-        const auto body = decode_body(in.body); if (!body) return body.error();
-        if (in.ref.layer == kElevBaseLayer) {
-            const std::int64_t dx = static_cast<std::int64_t>(in.ref.key.x) - target.x, dy = static_cast<std::int64_t>(in.ref.key.y) - target.y;
-            const std::size_t slot = static_cast<std::size_t>((dy + 1) * 3 + (dx + 1));
-            if (in.header->datum != VerticalDatum::DHHN2016 && in.header->datum != VerticalDatum::EGM2008)
-                return make_error(ErrorCode::Unsupported, "terrain.carved: unknown elevation datum");
-            if (datum && *datum != in.header->datum) return make_error(ErrorCode::Malformed, "terrain.carved: mixed elevation datums");
-            datum = in.header->datum;
-            if (auto ok = decode_height_tile(*body, in.ref.key, dem[slot]); !ok) return ok.error();
-            for (auto& h : dem[slot].h) if (h != kHeightNoData) {
-                const auto adjusted = static_cast<std::int64_t>(h) + in.header->height_offset;
-                if (adjusted <= std::numeric_limits<std::int32_t>::min() || adjusted > std::numeric_limits<std::int32_t>::max())
-                    return make_error(ErrorCode::LimitExceeded, "terrain.carved: elevation offset overflow");
-                h = static_cast<std::int32_t>(adjusted);
-            }
-            window[slot] = &dem[slot];
-            if (slot == 4) centre = true;
-        } else {
-            auto tile = decode_road_geom(*body); if (!tile) return tile.error();
-            if (tile->source.key != in.ref.key) return make_error(ErrorCode::Malformed, "terrain.carved: roads.geom key mismatch");
-            roads.push_back(std::move(*tile)); road_keys.push_back(in.ref.key);
-        }
-    }
-    if (!centre) return make_error(ErrorCode::NotFound, "terrain.carved: g2m.elev.base input missing");
-    // roads.geom heights are in the DEM's datum (or None for a tile without profiles).
-    for (const auto& in : request.inputs)
-        if (in.header && in.ref.layer == kRoadGeomLayer && in.header->datum != VerticalDatum::None && in.header->datum != *datum)
-            return make_error(ErrorCode::Malformed, "terrain.carved: roads.geom datum differs from the DEM");
-    std::vector<CarveGeomInput> geom;
-    for (std::size_t i = 0; i < roads.size(); ++i) geom.push_back({road_keys[i], &roads[i]});
+    CarveL0Inputs in;
+    if (auto ok = decode_carve_l0_inputs(target, request.inputs, in, "terrain.carved"); !ok) return ok.error();
+    const auto geom = in.geom();
     auto tile = std::make_unique<HeightTile>();
-    if (auto ok = carve_terrain_tile_into(*tile, target, window, geom, builtin_carve_default(), {}, 1, nullptr); !ok) return ok.error();
+    if (auto ok = carve_terrain_tile_into(*tile, target, in.window, geom, builtin_carve_default(), {}, 1, nullptr); !ok) return ok.error();
     auto encoded = encode_height_tile(*tile); if (!encoded) return encoded.error();
     auto body = encode_body(*encoded); if (!body) return body.error();
-    return DeriveResult{std::move(*body), *datum, 0};
+    return DeriveResult{std::move(*body), in.datum, 0};
 }
 } // namespace g2m
