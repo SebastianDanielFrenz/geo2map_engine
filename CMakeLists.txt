@@ -62,6 +62,10 @@ option(G2M_BUILD_FUZZERS "Build the libFuzzer targets in tests/fuzz_formats and 
 # src/import still built).
 option(G2M_BUILD_IMPORT "Build src/decode, src/import and apps/g2m_tiler (and fetch their decoder dependencies)" ON)
 option(G2M_BUILD_APPS "Build the g2m_tiler CLI (apps/g2m_tiler, PLAN.md G1c I2) - requires G2M_BUILD_IMPORT" ON)
+# G6: g2m_http (protocol v1 over HTTP, cpp-httplib) and the sidecar
+# apps/g2m_server. Defaults ON only for a top-level build, so a consumer that
+# add_subdirectory()s geo2map_engine (racing_game) fetches nothing new.
+option(G2M_BUILD_HTTP "Build g2m_http and apps/g2m_server (fetches cpp-httplib)" ${PROJECT_IS_TOP_LEVEL})
 
 if(G2M_BUILD_APPS AND NOT G2M_BUILD_IMPORT)
   message(FATAL_ERROR "G2M_BUILD_APPS requires G2M_BUILD_IMPORT: apps/g2m_tiler links g2m_import")
@@ -233,6 +237,16 @@ add_subdirectory(src/route)
 add_subdirectory(third_party/musl_math)
 add_subdirectory(src)
 
+# G6: protocol v1 over HTTP (cmake/deps_http.cmake: cpp-httplib) and the
+# sidecar server binary apps/g2m_server.
+if(G2M_BUILD_HTTP)
+  include(cmake/deps_http.cmake)
+  add_subdirectory(src/http)
+  if(G2M_BUILD_APPS)
+    add_subdirectory(apps/g2m_server)
+  endif()
+endif()
+
 if(G2M_BUILD_IMPORT)
   include(cmake/deps_decoders.cmake)
   add_subdirectory(src/decode)
@@ -259,6 +273,9 @@ if(G2M_BUILD_TESTS)
   add_subdirectory(tests/phys)
   add_subdirectory(tests/world)
   add_subdirectory(tests/route)
+  if(G2M_BUILD_HTTP)
+    add_subdirectory(tests/http)
+  endif()
   add_subdirectory(tests/golden)
   add_subdirectory(tests/fuzz)
 endif()
@@ -268,8 +285,8 @@ if(G2M_BUILD_REFGEN)
 endif()
 
 # Later targets (PLAN.md 2.3), not built yet - placeholders only, see CLAUDE.md:
-#   g2m_c (C API), g2m_http (G6), g2m_godot (adapters/godot), apps g2m_server /
-#   g2m_cli. (g2m_layers/g2m_server/g2m_client: G1+, already built above.
+#   g2m_c (C API), g2m_godot (adapters/godot), apps g2m_cli. (g2m_http and
+#   apps/g2m_server: G6, built above when G2M_BUILD_HTTP.) (g2m_layers/g2m_server/g2m_client: G1+, already built above.
 #   g2m_import and its app g2m_tiler: G1c I2, already built above.
 #   g2m_ps_bridge: bridges/physics_sim, G5, built below.)
 

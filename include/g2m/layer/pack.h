@@ -63,4 +63,12 @@ struct PackView {
 // it is the tile its entry says).
 Result<PackView> decode_pack(std::span<const std::uint8_t> bytes);
 
+// The pack directory alone (G6: the body of the /hashes endpoint over
+// HTTP; docs/formats/pack.md "Pack directory"): magic G2MH, the pack's
+// header fields, then 256 x (state, body hash). A Present entry carries a
+// hash, every other entry an all-zero one. Canonical: decode(encode(d)) == d
+// and encode(decode(b)) == b for every accepted b.
+Result<std::vector<std::uint8_t>> encode_pack_directory(const PackDirectory& dir);
+Result<PackDirectory> decode_pack_directory(std::span<const std::uint8_t> bytes);
+
 } // namespace g2m

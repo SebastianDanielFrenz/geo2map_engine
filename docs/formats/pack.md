@@ -40,3 +40,21 @@ Rules:
   checksum and body hash). Its header must name this pack's layer, rid and
   the entry's tile key, and its body hash must equal the entry's hash.
 - The sizes must add up to the data exactly.
+
+## Pack directory (version 1, G6)
+
+The body of the `/hashes` endpoint over HTTP (`encode_pack_directory` /
+`decode_pack_directory`): the pack's head and its 256 states and hashes,
+without sizes or data.
+
+| Field | Type | Rule |
+|---|---|---|
+| magic | 4 bytes | `G2MH` |
+| version | u8 | 1 |
+| reserved | u8, u16 | 0, 0 |
+| layer_len, layer, rid, scheme, zone, hemisphere, level, x, y | | exactly as in the pack above |
+| directory | 256 × 33 bytes | per entry: `state` u8 (0..3, as above), `body_hash` 32 bytes |
+
+Rules: a non-present entry has an all-zero hash; nothing follows the last
+entry. The encoding is canonical: `encode(decode(b)) == b` for every
+accepted `b` (fuzz target `packDirectory`).

@@ -76,7 +76,8 @@
         "CMAKE_BUILD_TYPE": "Release",
         "G2M_BUILD_IMPORT": "OFF",
         "G2M_BUILD_TESTS": "OFF",
-        "G2M_BUILD_APPS": "OFF"
+        "G2M_BUILD_APPS": "OFF",
+        "G2M_BUILD_HTTP": "OFF"
       }
     },
     {
@@ -90,6 +91,7 @@
         "PS_BUILD_TESTS": "OFF",
         "PS_BUILD_GODOT_ADAPTER": "OFF",
         "G2M_PS_SOURCE_DIR": "${sourceDir}/out/ps_pin/src",
+        "G2M_BUILD_HTTP": "OFF",
         "FETCHCONTENT_FULLY_DISCONNECTED": "ON",
         "FETCHCONTENT_SOURCE_DIR_JOLTPHYSICS": "S:/claude_code/physics_sim/out/build/release/_deps/joltphysics-src",
         "FETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON": "S:/claude_code/physics_sim/out/build/release/_deps/nlohmann_json-src",
