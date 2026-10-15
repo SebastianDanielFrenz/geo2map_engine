@@ -620,8 +620,9 @@ JunctionApproachStatus approach_status(const RoadGeomTile& tile, const RawApproa
         }
         return JunctionApproachStatus::NoProfile;
     }
-    if (!e.cross_section) return JunctionApproachStatus::NoCrossSection;
+    // A tunnel stays a Tunnel approach with a TunnelFloor profile (D47), whatever its cross-section.
     if (e.profile->attributes.tunnel) return JunctionApproachStatus::Tunnel;
+    if (!e.cross_section) return JunctionApproachStatus::NoCrossSection;
     return JunctionApproachStatus::Used;
 }
 

@@ -110,7 +110,7 @@ TEST_CASE("Structure decks: crowned heights along the deck, nothing past its end
     const auto& c = cases().front();
     REQUIRE(c.name == "structure_scene");
     const auto set = g2m::world::build_structure_set(c.tile);
-    REQUIRE(set.decks.size() == 3);
+    REQUIRE(set.decks.size() == 5);  // 1 bridge, 2 tunnel floors (D47), 2 inferred roofs
     for (const auto& d : set.decks) {
         INFO(d->way_id);
         CHECK(d->start_station < d->end_station);

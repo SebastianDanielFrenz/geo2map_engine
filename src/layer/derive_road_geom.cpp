@@ -84,20 +84,26 @@ std::string option_value(double v) {
 }
 }
 std::string road_geom_config_text() {
-    // xs=1: the cross-section and feature sections (P1); enc=7: junctions, furniture and provenance (P2 slice 8). The
+    // xs=1: the cross-section and feature sections (P1); enc=8: junctions, furniture and provenance (P2 slice 8) with
+    // tunnel floors (D47). The
     // rules hash ties a release to the exact de.json bytes (junction and furniture blocks included); every value of the
     // served completion options is part of the text (the relaxed completion limits are code constants, completion=1).
     const auto& rules_hash = builtin_road_rules_de().content_sha256;
     const auto c = served_road_completion_options();
     return "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph"
-        " xs=1 enc=7 rules=de:" + to_hex(std::span<const std::uint8_t>(rules_hash.data(), rules_hash.size())) + " join-bisector=1 context=nodes"
+        " xs=1 enc=8 rules=de:" + to_hex(std::span<const std::uint8_t>(rules_hash.data(), rules_hash.size())) + " join-bisector=1 context=nodes"
         " junction=1 furniture=1 completion=1 completion-retry=" + option_value(c.retry_spacing_m) + "/" + std::to_string(c.retry_iterations) +
         " completion-abutment=" + option_value(c.abutment_ground_m) + "/" + option_value(c.abutment_path_m) +
         " completion-ground=" + option_value(c.ground_spacing_m) + "/" + option_value(c.ground_ramp_m) + " strict-anchor=1 ring-nesting=2mm"
         " bridge-far-end=1"    // D35: two discovery stages, the DEM and graph tiles of every incident bridge's far end
         " ground-ease=8/0.05"  // D43: ground completion eases contradicting end grades toward the chord in eighths, mismatch <= 0.05
         " corner-fillet=1"     // D44: kerb returns on block corners (radii from the rules), per-corner fallback to sharp
-        " width-taper=5";      // D46: a width step between two continuing stubs tapers 1:5
+        " width-taper=5"       // D46: a width step between two continuing stubs tapers 1:5
+        // D47 (terrain migration phase 4): tunnel floors (spacing/max grade/min radius/chord threshold, 0 = DEM floor
+        // for every length) and the accepted-bridge anchors with the walk over every incident bridge edge.
+        " tunnel-floor=" + std::string(c.tunnel_floors ? "" : "off/") + option_value(c.tunnel_spacing_m) + "/" + option_value(c.tunnel_max_grade) + "/" + option_value(c.tunnel_min_radius_m) +
+        "/chord:" + option_value(c.tunnel_chord_min_length_m) +
+        " bridge-anchor-reuse=" + (c.bridge_anchor_reuse ? "1" : "0");
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {

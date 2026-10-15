@@ -84,7 +84,7 @@ void rejects(const char* name, const char* message, const std::function<void(Roa
 
 TEST_CASE("T8: the scene tile carries junctions and furniture of every kind and round trips", "[layer][road_geom][enc7][T8]") {
     const auto& t = scene();
-    CHECK(t.encoding == 7);
+    CHECK(t.encoding == 8);
     REQUIRE(t.junctions.size() == 3);
     const auto& j3 = t.junctions[junction_at(t, 3)]; const auto& j5 = t.junctions[junction_at(t, 5)]; const auto& j7 = t.junctions[junction_at(t, 7)];
     CHECK(j3.decline == JunctionDecline::None); CHECK(j3.approaches.size() == 4);

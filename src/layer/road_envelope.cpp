@@ -67,6 +67,7 @@ std::vector<RoadSegment> envelope_road_segments(const RoadGeomTile& tile, const 
         const RoadGeomEntry& entry = tile.entries[ei];
         if (!entry.profile || !entry.cross_section) continue;
         const RoadProfile& profile = *entry.profile;
+        if (profile.attributes.tunnel) continue;   // a TunnelFloor profile (D47) never paints the ground above it (osm_roads skips tunnels too)
         const RoadCrossSection& xs = *entry.cross_section;
         const RoadReferenceLine& ref = profile.reference;
         const double length = ref.length_m;
