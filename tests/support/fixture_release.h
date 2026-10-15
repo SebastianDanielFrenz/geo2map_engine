@@ -65,7 +65,12 @@ struct ReleaseFixture {
 // Any pipeline failure aborts the current Catch2 test via REQUIRE, exactly
 // as tests/layer/test_derive_terrain.cpp's own Fixture did before this was
 // factored out - callers must invoke this from inside a running TEST_CASE.
+//
+// `carved` (terrain migration phase 6) opts the release into g2m.terrain.carved
+// and g2m.terrain.class (and the road layers they imply; the fixture has no
+// OSM, so roads.geom is absent and the carve has no roads).
 std::unique_ptr<ReleaseFixture> make_fixture_release(const std::filesystem::path& dir,
-                                                     const std::string& scope = "fixture_release");
+                                                     const std::string& scope = "fixture_release",
+                                                     bool carved = false);
 
 } // namespace g2m::test_support

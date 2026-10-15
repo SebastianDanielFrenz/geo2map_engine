@@ -3,6 +3,8 @@
 
 #include "fuzz_targets.h"
 
+#include "g2m/layer/terrain_class.h"
+
 #include "g2m/layer/layer_id.h"
 #include "g2m/layer/osm_clip.h"
 #include "g2m/layer/pack.h"
@@ -186,6 +188,16 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
     }
     case Target::Elev: return elev_bodies();
     case Target::Landcover: return landcover_bodies();
+    case Target::TerrainClass: {
+        // A class tile with every plane value used once (synthetic, deterministic).
+        g2m::TerrainClassTile t;
+        t.reset(g2m::TileKey{g2m::geo::UtmZone{32, g2m::geo::Hemisphere::North}, 0, kFuzzClassX, kFuzzClassY});
+        for (std::size_t i = 0; i < g2m::kTerrainClassNodes; ++i) {
+            t.land_class[i] = static_cast<std::uint8_t>((i / 7) % 14); t.surface[i] = static_cast<std::uint8_t>((i / 11) % 12);
+            t.role[i] = static_cast<std::uint8_t>((i / 13) % 8); t.rank[i] = static_cast<std::uint8_t>((i / 257) % 40);
+        }
+        return {body(must(g2m::encode_terrain_class(t), "encode_terrain_class"))};
+    }
     case Target::Osm: return osm_bodies();
     case Target::Roadgeom:
     case Target::RoadCrossSectionEval: {

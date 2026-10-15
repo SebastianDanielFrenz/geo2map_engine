@@ -19,6 +19,7 @@
 #include "g2m/layer/layer_id.h"
 #include "g2m/layer/tile_container.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -38,12 +39,29 @@ struct InputTileRef {
 };
 
 // One resolved input: its header and raw body bytes, or nothing if the
-// input tile does not exist in the release (outside its coverage).
+// input tile does not exist in the release (outside its coverage). `rejected`
+// marks an input whose own derivation failed deterministically and that the
+// deriver accepts as absent (IDeriver::rejected_input_is_absent); header and
+// body are then empty, as for an absent tile.
 struct InputTile {
     InputTileRef ref;
     std::optional<TileHeader> header;
     std::vector<std::uint8_t> body;
+    bool rejected = false;
 };
+
+// The value a server puts into a derived tile's header input list for a
+// rejected input (terrain migration phase 6, G-1): SHA-256 of
+// "g2m.rejected-input/1 <layer> <key>". It flags the tile as built without
+// that input, and is never the body hash of a real tile.
+inline ContentHash rejected_input_marker(const InputTileRef& ref) {
+    const std::string text = "g2m.rejected-input/1 " + ref.layer + " " + to_string(ref.key);
+    return content_hash(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(text.data()), text.size()));
+}
+inline bool header_has_rejected_input(const TileHeader& header, const InputTileRef& ref) {
+    const ContentHash m = rejected_input_marker(ref);
+    return std::find(header.inputs.begin(), header.inputs.end(), m) != header.inputs.end();
+}
 
 struct DeriveRequest {
     TileKey target;
@@ -90,6 +108,13 @@ public:
     // known once the stretch-context tiles are resolved).
     static constexpr std::size_t kMaxDiscoveryStages = 4;
     virtual std::size_t discovery_stages() const { return 1; }
+    // Whether an input whose own derivation failed (a deterministic deriver
+    // error, e.g. a roads.geom tile rejected by validation) is treated as
+    // absent instead of failing this tile (terrain migration phase 6, G-1).
+    // The server then passes it with `rejected` set and adds
+    // rejected_input_marker(ref) to the output header's inputs. Unavailable
+    // or degraded inputs (transient) still fail the tile. Default false.
+    virtual bool rejected_input_is_absent(const InputTileRef&) const { return false; }
     virtual Result<DeriveResult> derive(const DeriveRequest& request) const = 0;
 };
 

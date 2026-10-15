@@ -16,15 +16,23 @@ ResidentHeightSet::Lookup ResidentHeightSet::find(const TileKey& key, const Heig
 ResidentHeightSet::Lookup ResidentHeightSet::find(const TileKey& key, const HeightTile** out,
                                                    std::shared_ptr<const std::vector<RoadSegment>>* roads_out) const
     noexcept {
+    return find(key, out, roads_out, nullptr);
+}
+
+ResidentHeightSet::Lookup ResidentHeightSet::find(const TileKey& key, const HeightTile** out,
+                                                   std::shared_ptr<const std::vector<RoadSegment>>* roads_out,
+                                                   const TerrainClassTile** classes_out) const noexcept {
     const auto packed = packed_of(key);
     const auto it = std::lower_bound(entries_->begin(), entries_->end(), packed,
                                      [](const Entry& e, std::uint64_t p) { return e.key.packed() < p; });
     if (it == entries_->end() || it->key.packed() != packed) {
         *out = nullptr;
         if (roads_out) *roads_out = nullptr;
+        if (classes_out) *classes_out = nullptr;
         return Lookup::Missing;
     }
     if (roads_out) *roads_out = it->roads;
+    if (classes_out) *classes_out = it->classes.get();
     if (!it->tile) {
         *out = nullptr;
         return Lookup::Absent;
@@ -39,6 +47,12 @@ void ResidentHeightSet::install(const TileKey& key, std::shared_ptr<const Height
 
 void ResidentHeightSet::install(const TileKey& key, std::shared_ptr<const HeightTile> tile,
                                  std::shared_ptr<const std::vector<RoadSegment>> roads) {
+    install(key, std::move(tile), std::move(roads), nullptr);
+}
+
+void ResidentHeightSet::install(const TileKey& key, std::shared_ptr<const HeightTile> tile,
+                                 std::shared_ptr<const std::vector<RoadSegment>> roads,
+                                 std::shared_ptr<const TerrainClassTile> classes) {
     make_writable();
     const auto packed = packed_of(key);
     const auto it = std::lower_bound(entries_->begin(), entries_->end(), packed,
@@ -46,9 +60,10 @@ void ResidentHeightSet::install(const TileKey& key, std::shared_ptr<const Height
     if (it != entries_->end() && it->key.packed() == packed) {
         it->tile = std::move(tile);
         it->roads = std::move(roads);
+        it->classes = std::move(classes);
         return;
     }
-    entries_->insert(it, Entry{key, std::move(tile), std::move(roads)});
+    entries_->insert(it, Entry{key, std::move(tile), std::move(roads), std::move(classes)});
 }
 
 void ResidentHeightSet::retain_only(std::span<const TileKey> keep_sorted) {

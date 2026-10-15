@@ -53,6 +53,8 @@ add_executable(g2m_layer_tests
   test_derive_terrain.cpp
   test_terrain_pyramid.cpp
   test_terrain_carve.cpp
+  test_terrain_class.cpp
+  test_road_underpass.cpp
   test_junction_gradient.cpp
   test_junction_dump.cpp
   test_junction_fillets.cpp

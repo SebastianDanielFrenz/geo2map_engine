@@ -52,7 +52,7 @@ set(_g2m_fuzz_dir ${CMAKE_CURRENT_BINARY_DIR}/corpus)
 add_test(NAME g2m_fuzz_seeds COMMAND g2m_fuzz_seeds ${_g2m_fuzz_dir})
 set_tests_properties(g2m_fuzz_seeds PROPERTIES FIXTURES_SETUP g2m_fuzz_corpus LABELS "fuzz")
 
-foreach(_t container elev landcover osm pack manifest path region roadgraph roadgeom roadCrossSectionEval)
+foreach(_t container elev landcover osm pack manifest path region roadgraph roadgeom roadCrossSectionEval terrainClass)
   # Enumerator name: container -> Container.
   string(SUBSTRING ${_t} 0 1 _first)
   string(TOUPPER ${_first} _first)

@@ -58,7 +58,7 @@ GateStatus PhysicsTerrainStreamer::update(std::span<const InterestPoint> points)
     loader_.poll(completions_);
     for (LoadedHeightTile& done : completions_) {
         switch (done.outcome) {
-        case LoadOutcome::Ready: set_.install(done.key, std::move(done.tile), std::move(done.roads)); break;
+        case LoadOutcome::Ready: set_.install(done.key, std::move(done.tile), std::move(done.roads), std::move(done.classes)); break;
         case LoadOutcome::Absent: set_.install(done.key, nullptr, std::move(done.roads)); break;
         case LoadOutcome::Failed:
             if (!sorted_contains(failed_, done.key)) {

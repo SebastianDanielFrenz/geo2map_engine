@@ -1282,7 +1282,9 @@ Each test is listed with its negative control or sabotage, which must make it fa
 | T19 zero allocation / workers | carve with 1 and 10 workers bit-identical; CarveModel::evaluate allocation-free | — |
 | Slice 9 as implemented | `test_terrain_carve.cpp` over the four busiest fixture L0 tiles (A 1856/21718, 1852/21718; B 1822/21685, 1820/21684), flat DEM and the libm-free tilted bumpy rough DEM of `carve_fixture.h`. **T12**: owner switches between adjacent cell centres bisected to 1e-10 m: core↔blend ≤ 0.12 mm, blend↔terrain 0, junction core↔approach core on the trim line ≤ 5.04 mm (bound 1 cm), trim-line samples (16 per used approach, 336 points) ≤ 2.02 mm (bound 1/256 m), every cell = half-even quantisation of the model; reported only (D41): blend↔blend up to 3.44 m, core↔core up to 2.20 m, ring overlap up to 0.296 m. **T13**: 1507 stations, LS crossfall error p50 0.00012, p95 0.00070, p99 0.00108, max 0.00155 (bound 0.002; patch ±2.5 m along the road, ≥ 3 m across, regressors grade + vertical curvature + crown). **T14**: 8851 core/blend cells × 100 seeded candidate orders, 0 differ. **T15**: synthetic bridge over a valley and a lower road: 1696 footprint cells, 542 lowered, 0 above the limit, 0 changed outside the footprint, 2048 lower-road cells unchanged, 0 clearance violations. **T17**: served L0 = `carve_terrain_tile`, header offset applied once, L1 = mean-of-4 of the served L0, L1 ≠ bare pyramid; absent centre = NotFound, roads.geom in another datum rejected. **T19**: 1 = 10 workers, evaluate 0 allocations. **Tile invariance**: 3 seams (an L0 seam, an L0 seam that is also an L2 seam, an L2 seam with roads crossing it), flat and tilted, 2048 cells each: 0 difference. **Smoothing parity** against the game's double smoothing: max 0.80, p99 0.65 height units (1/256 m), 0 NoData mismatches. **Served path**: server and four-worker bake give the same L0 and L1 containers (10 inputs per L0 tile) | T12: blends toward the raw DEM: blend↔terrain 7.03 cm; T13: single-cell slopes 0.102 (cannot meet 0.2 %); T14: first-come ownership: 354 cells differ; T15: clamp off: 542 cells above the limit; T17: no centre, wrong datum, short input list rejected; T19: an allocation in the counted scope is seen; invariance: centre-only DEM differs (0.08-1.05 m), own-L2-tile roads only differs (0.224 m on the seam with crossing roads); smoothing strength 100: 42.9 units |
 | Junction gradient as implemented (D42) | `test_junction_gradient.cpp` over the junctions touching the four busy L0 tiles (71 flat, 20 tilted DEM), 0.5 m lattice of core points each junction owns: on the road bed and paved rings gradient ≤ max(B, 2·F_paved) + 0.02 at ≥ 2 m from every trim segment and ≤ max(B, own, 2·F_all) + 0.02 nearer (B steepest approach grade + crossfall, F the forced gradient between two approaches' trim points, own the approaches' slope at their trims): 0 over on both DEMs; where 2·F_paved ≤ B the interior meets B + 0.02 (worst excess over B 0.000 flat, 0.005 tilted); B + 0.02 met everywhere on the drivable rings at 36 of 71 flat junctions (D22-D24: 1), 6 of 20 tilted (5); 30 flat / 8 tilted junctions have F_paved > B + 0.02 (no surface can meet B) and are printed with their numbers. T5's no-overshoot reads the range of each approach's base, paved and full height | `CarveOptions::junction_relief_fade = false` (the D22-D24 surface): 14 flat junctions over their limit |
-| Goldens | `g3xs` re-recorded (encoding 7 bodies); new `g3j` (junction + furniture sections of both fixtures), `g3d` (carved L0 + class tiles over 4 fixture L0 tiles on the synthetic DEM); Windows = Linux | — |
+| Slice 10 as implemented (terrain migration phase 6) | `test_terrain_class.cpp`: **T16** on A66 tiles 1820/21684 and 1822/21685: every approach-core node's role equals the footprint band of its projection (16388 and 2110 nodes, 0 mismatches; road bed 13066, sidewalk 886, verge 2479, junction road bed 196, blend 14445; 2400 bridge-deck nodes on 1822/21685); edge nodes equal on an L0 seam and an L2 seam; **T17 class half** on L1 910/10842: rank-max equals a brute-force reference over a global node map (0 differ), L1 edge equal to the neighbour (0 differ), 10465 road nodes vs 8038 subsampled; served path: server and 4-worker bake give the same containers, 11 inputs at L0, datum None; encoding round trip and every rejection | cell-centre (half-metre) registration: 244 and 99 of 807 / 188 road edge nodes classify differently; land cover from the ancestor only (D49): 220 of 257 L2 seam edge nodes differ |
+| G-1 / G-2 / G-5 as implemented (phase 6) | `[G-1]` (D50); `tests/phys/test_class_mode.cpp`: every cell of a 2 x 2 straddle equals `table.resolve` of its centre node, Absent / Missing / class-less tiles take the fallback (counts 1 / 2), zero allocation, roads kept beside the class tile, `require_classes` fails a class-less fetch after 3 attempts, the streamer installs both, `TransportHeightTileFetch` class layer (404 / wrong key = Internal); `bridges/physics_sim/tests/test_carved_prefetch.cpp` on the PKT fixture release with carved + class: 36 gate keys with class tiles, snapshot fill = live fill, class-only replacement invalidates, class-less entry declines, World state hash with prefetch at 1 / 4 workers = synchronous, prefetch installs > 0, fill miss 0 | reading the node one metre west: > half the cells differ; dropping the class identity check from `prefetch_inputs_current`: the bridge test fails |
+| Goldens | `g3xs` re-recorded (encoding 7 bodies); new `g3j` (junction + furniture sections of both fixtures), `g3d` (carved L0 over 4 fixture L0 tiles on the synthetic DEM); `g3c` (class planes of the same 4 tiles and L1 910/10842, synthetic land cover; a separate set so g3d keeps its lines); Windows = Linux (g3c: Linux only so far) | — |
 
 ---
 
@@ -1372,9 +1374,9 @@ Sizes: **S** ≤ 1 day, **M** 1-2 days, **L** 3+ days of agent work [estimate].
 | 7 | Furniture (7.1-7.4): crossings, lines, signals, declines, `furniture_quad`; T9-T11 | M | Sonnet | release | none |
 | 8 | roads.geom encoding 7 (sections 5-7), validation 9.2, ownership filter, fuzz target extension, config hash; T7, T8; `docs/formats/road_geom.md` | M | Sonnet | release, linux-release, linux-asan-ubsan | **`g3xs` re-recorded** (body SHA `17d9b7c7…ee2f9` changes), **new `g3j`** |
 | 9 | `CarveModel` + `g2m.terrain.carved` deriver: inputs (5.3), smoothing port, buckets, ownership, blends, decks, quantise, pyramid; T12-T15, T17, T19 | L | **Opus** | release, linux-release, linux-asan-ubsan, linux-tsan | **new `g3d`** (carved part) |
-| 10 | `g2m.terrain.class` deriver + TerrainClass encoding 9.4, format doc, fuzz target; T16 | M | Sonnet | release, linux-release, linux-asan-ubsan | `g3d` (class part) |
-| 11 | Wiring: bake opt-in (both layers + roads), builtin release, `fill_physics_surfaces` class mode, a render `ClassWindow` from terrain.class, `g2m_ps_bridge` layer option; tests in `tests/phys` and `bridges/physics_sim` | S | Sonnet | full `tools\ci.ps1` + `-Only bridge-release` | none new |
-| 12 | Measurement: `g2m_road_probe --junctions --carve`, home-region run, numbers into this document, the pipeline docs and CLAUDE.md | S | Sonnet | none (docs + probe) | none |
+| 10 | `g2m.terrain.class` deriver + TerrainClass encoding 9.4, format doc, fuzz target; T16 | M | Sonnet | release, linux-release, linux-asan-ubsan | new `g3c` (the class part, separate from `g3d`) **- done (terrain migration phase 6, D49, D50)** |
+| 11 | Wiring: bake opt-in (both layers + roads), builtin release, `fill_physics_surfaces` class mode, a render `ClassWindow` from terrain.class, `g2m_ps_bridge` layer option; tests in `tests/phys` and `bridges/physics_sim` | S | Sonnet | full `tools\ci.ps1` + `-Only bridge-release` | none new **- partly done (phase 6: bake/builtin opt-in, `fill_physics_classes`, `ClassSurfaceConfig`, carved+class prefetch test; the render `ClassWindow` from terrain.class is open)** |
+| 12 | Measurement: `g2m_road_probe --junctions --carve`, home-region run, numbers into this document, the pipeline docs and CLAUDE.md | S | Sonnet | none (docs + probe) | none **- partly done (phase 6: G-6 `road_underpass_census` + probe `--underpasses`, fixture numbers in D51; the home-region run is open)** |
 
 **Order:** 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12.
 
@@ -2283,6 +2285,50 @@ rejected.
   chain now matches the game's node height (99.941 m both; 99.211 m at 60 m).
 - GAP 3 (retry way 285188051 on utm32n/2/464/5394, ground ways 25589596 and 320190187): an input diff needs the real
   stores; not reproduced on the fixtures, open until the probe runs.
+
+**D49. terrain.class inputs: the land cover tiles of the closed square, a 4 x 4 window above level 0; classes imply
+carved, not the reverse (terrain migration phase 6).**
+- A class tile is node-registered with both edges (257 x 257), so its east and north edge nodes lie on the neighbour's
+  first column / row. Level 0 therefore reads every `g2m.src.landcover` level-2 tile holding a node of the CLOSED square
+  (`terrain_class_landcover_keys`: the ancestor, plus its east, north and north-east neighbours when the tile touches the
+  ancestor's east or north edge), not only the ancestor; with the ancestor only, 220 of the 257 edge nodes on a level-2
+  seam differ from the neighbour tile (test control).
+- Level L >= 1: the 3 x 3 rank-max window around an edge node of the parent reaches one level L-1 node beyond the 2 x 2
+  children, so the deriver reads the 4 x 4 same-layer tiles at (2x + dx, 2y + dy), dx, dy in -1..2. With only the
+  children the L1 edge nodes would not equal the neighbour's.
+- Wiring: naming the class layer adds the carved layer (one ownership); naming the carved layer does NOT add the class
+  layer, so a carved-only release keeps its slice-9 identity (6.1's "naming either adds both" is not applied to carved).
+  `TerrainService` accepts `LayerOptIn{classes}` (implies carved); its height layer still follows `carved`.
+
+**D50. A rejected roads.geom input counts as absent for the carved and class layers (request G-1).**
+- Problem: a roads.geom tile can fail its own validation (utm32n/2/452/5428, "reference endpoints"); the server resolver
+  failed every tile depending on it, so a carved / class tile near it would never be served and the game's gate would
+  freeze (no fallback after the switch).
+- `IDeriver::rejected_input_is_absent(ref)` (default false): when an input resolves to an error and the deriver answers
+  true, the server passes it as absent (`InputTile::rejected`) and records `rejected_input_marker(ref)` = SHA-256 of
+  `g2m.rejected-input/1 <layer> <key>` in the output header's inputs, so the output says which input was dropped
+  (`header_has_rejected_input`). `TerrainCarvedDeriver` and `TerrainClassDeriver` answer true for `g2m.roads.geom`
+  only; a failing `elev.base` still fails the tile. No release id change: the config texts are unchanged and only a tile
+  that failed before is now served.
+- Cost: errors are not cached, so every dependent tile re-derives the failing roads.geom tile once per request.
+- Test `[G-1]`: a release whose roads.geom deriver always fails gives a Found carved L0 (flat DEM, 10 inputs, marker in
+  the header), L1 and class tile (no roads, rank 0 everywhere); a carved deriver that does not opt in fails (control).
+
+**D51. Physics class mode and the G-6 census (slices 11 and 12 as far as carve readiness goes, terrain migration phase 6).**
+- `g2m_phys`: `FetchResult::classes`, `IHeightTileFetch::provides_classes`, `LoaderConfig::require_classes` (a 200
+  without the class tile retried, then Failed, like `require_roads`), `ResidentHeightSet` keeps the class tile beside the
+  heights and the RoadSegment metadata (request G-2: class mode keeps the speed-limit / road_ahead data the road mode
+  carries), `fill_physics_classes` (cell centre = class node, full `SurfaceIdTable`, request G-3), and
+  `TransportHeightTileFetch(transport, rid, height_layer, class_layer)`. Bridge: `ClassSurfaceConfig{table, fallback}`
+  and the Snapshot prefetch requiring the class tile and comparing its identity (request G-5).
+- G-6: `road_underpass_census` (`road_underpass.h`) lists the ground stretches crossing a lower road (lower OSM layer or
+  tunnel, not a bridge, no shared node) and measures the dip = chord over +-60 m minus the profile, threshold 0.3 m;
+  `g2m_road_probe ... --underpasses` prints it per tile. Fixtures (synthetic DEMs, no cuttings): hoechst_a66 2 tunnel
+  crossings, max dip 0.000 m flat / 0.099 m tilted; frankfurt_hoechst none. A synthetic 6 m deep, 16 m wide cutting under
+  a secondary road gives a 2.0 m dip on the served profile, so the B8 case is reproduced in kind. The home-store run
+  (B8 at s ~ 2852 / 4453 / 5261) and the DEM-masking decision wait for the store.
+- Not done here: the render `ClassWindow` from terrain.class (slice 11), the junction / carve census of section 12 on the
+  home tiles.
 
 ---
 

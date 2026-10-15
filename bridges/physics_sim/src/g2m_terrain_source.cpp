@@ -1,5 +1,6 @@
 #include "g2m/ps_bridge/g2m_terrain_source.h"
 
+#include "g2m/phys/fill_physics_classes.h"
 #include "g2m/phys/fill_physics_heights.h"
 #include "g2m/phys/fill_physics_surfaces.h"
 
@@ -26,6 +27,12 @@ G2mTerrainSource::G2mTerrainSource(g2m::phys::PhysicsTileGrid grid,
 G2mTerrainSource::G2mTerrainSource(g2m::phys::PhysicsTileGrid grid,
                                    std::shared_ptr<const g2m::phys::ResidentHeightSet> resident, RoadSurfaceConfig road)
     : grid_(std::move(grid)), resident_(std::move(resident)), surface_(road.off_road), road_(std::move(road)) {}
+
+G2mTerrainSource::G2mTerrainSource(g2m::phys::PhysicsTileGrid grid,
+                                   std::shared_ptr<const g2m::phys::ResidentHeightSet> resident,
+                                   ClassSurfaceConfig classes)
+    : grid_(std::move(grid)), resident_(std::move(resident)), surface_(classes.fallback),
+      classes_(std::move(classes)) {}
 
 ps::real G2mTerrainSource::tile_size_m() const { return static_cast<ps::real>(grid_.tile_size_m()); }
 
@@ -86,14 +93,17 @@ bool G2mTerrainSource::footprint_ready(ps::terrain::TileKey key,
             l0.y = static_cast<std::int32_t>(y);
             const g2m::HeightTile* height = nullptr;
             std::shared_ptr<const std::vector<g2m::RoadSegment>> roads;
-            const auto state = view.find(l0, &height, &roads);
+            const g2m::TerrainClassTile* cls = nullptr;
+            const auto state = view.find(l0, &height, &roads, &cls);
             if (state == g2m::phys::ResidentHeightSet::Lookup::Missing) return false;
             if (road_ && state == g2m::phys::ResidentHeightSet::Lookup::Resident && !roads) return false;
+            if (classes_ && state == g2m::phys::ResidentHeightSet::Lookup::Resident && !cls) return false;
             if (compare_live) {
                 const g2m::HeightTile* live_height = nullptr;
                 std::shared_ptr<const std::vector<g2m::RoadSegment>> live_roads;
-                if (resident_->find(l0, &live_height, &live_roads) != state || height != live_height ||
-                    (road_ && roads.get() != live_roads.get())) return false;
+                const g2m::TerrainClassTile* live_cls = nullptr;
+                if (resident_->find(l0, &live_height, &live_roads, &live_cls) != state || height != live_height ||
+                    (road_ && roads.get() != live_roads.get()) || (classes_ && cls != live_cls)) return false;
             }
         }
     }
@@ -116,6 +126,12 @@ void G2mTerrainSource::fill_from(ps::terrain::TileKey key, const g2m::phys::Resi
         const g2m::RoadBlockStats road_stats =
             g2m::phys::fill_physics_surfaces(grid_, index, resident, road_->lut, road_->off_road, out.cell_surface_ids);
         if (road_stats.missing_blocks > 0) fill_miss_count_.fetch_add(1, std::memory_order_relaxed);
+    } else if (classes_) {
+        // Class mode (terrain migration phase 6): the full SurfaceKind /
+        // LandClass table over the class tiles, allocation-free.
+        const g2m::phys::ClassFillStats class_stats = g2m::phys::fill_physics_classes(
+            grid_, index, resident, classes_->table, classes_->fallback, out.cell_surface_ids);
+        if (class_stats.missing_tiles > 0) fill_miss_count_.fetch_add(1, std::memory_order_relaxed);
     } else {
         // Every cell gets the same single surface (PLAN.md R2.2 1b) - `out`'s
         // vector is already sized by the caller, this only overwrites content.
