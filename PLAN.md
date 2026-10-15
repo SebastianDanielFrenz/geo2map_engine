@@ -484,8 +484,11 @@ in the vault.
   not `client/`: the server's network upstreams use it, and the client will
   too. `ServerConfig` is in `server.h`; there is no `config.h`. The protocol
   objects are in `server/protocol.h`. The protocol paths and statuses are
-  documented in `docs/formats/protocol.md`; the full spec
-  (`docs/protocol/`) comes with G6.
+  documented in `docs/formats/protocol.md`; the HTTP binding is
+  `docs/protocol/README.md` (G6, 2026-10-15: `g2m_http` with cpp-httplib
+  v0.58.0 PRIVATE, `HttpTransport`, `HttpServer`, the `/hashes` body as the
+  new `G2MH` pack directory, sidecar `apps/g2m_server`; plain HTTP on
+  127.0.0.1, offline; TLS, auth, rate limits and upstream chaining are G7).
 - **Cache schema (7.2).** One schema serves the client cache and the
   server's stores:
   - `tiles(scope, layer, key, hash, header, last_used, pinned)`, where

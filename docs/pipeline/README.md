@@ -34,7 +34,7 @@ flowchart TB
   IMP["<b>2. Import</b> - g2m_tiler import<br/>resolve region to level-2 tiles<br/>import-dem, import-osm, import-landcover"]
   RAW["<b>3. Raw layers</b> - level 2, 1024 m, source store<br/>g2m.src.elev.dgm1 / g2m.src.osm / g2m.src.landcover"]
   BAKE["<b>4. Derived layers</b> - pure derivers, g2m_tiler bake<br/>g2m.elev.base L0 / g2m.terrain.height L0-L6<br/>g2m.roads.graph L2 / g2m.roads.geom L2<br/>g2m.terrain.carved L0-L6 (opt-in, not consumed yet)<br/><i>planned:</i> terrain.class (P2), buildings, trees, markings"]
-  SRV["<b>5. Server and cache</b> - in-process today<br/>g2m::Server: cache, derive on miss, upstream<br/>tiles.sqlite3 + blob files, release id<br/><i>planned:</i> HTTP server, packs, hosted CDN"]
+  SRV["<b>5. Server and cache</b> - in-process (the game), or HTTP sidecar g2m_server<br/>g2m::Server: cache, derive on miss, upstream<br/>tiles.sqlite3 + blob files, release id<br/><i>planned:</i> hosted server, CDN (G7)"]
   GAME["<b>6a. racing_game</b> WorldTerrain<br/>render chunks, road raster and grip,<br/>road carving at L0, NPC traffic"]
   PHYS["<b>6b. physics_sim</b><br/>g2m_ps_bridge G2mTerrainSource<br/>TileManager Jolt heightfield pool"]
   SRC --> IMP --> RAW --> BAKE --> SRV --> GAME --> PHYS
@@ -145,12 +145,12 @@ Details: [client_side.md](client_side.md).
 
 | | |
 |---|---|
-| Code | `include/g2m/server/{server,builtin_release,protocol,tile_store}.h`, `src/server/*.cpp`, `include/g2m/client/{cache,in_process_transport}.h`. |
+| Code | `include/g2m/server/{server,builtin_release,protocol,tile_store}.h`, `src/server/*.cpp`, `include/g2m/client/{cache,in_process_transport}.h`; HTTP (G6): `include/g2m/http/{http_wire,http_transport,http_server}.h`, `src/http/`, `apps/g2m_server/`. |
 | Behaviour | `Server::handle()` routes a protocol v1 request. Resolver chain per layer: Cache (derived store under the release id), Derive (inputs resolved recursively), Upstream (local source store, later network). Results of Derive are written to the derived store. |
 | Store | SQLite + blob files, content-addressed: [formats/cache_db.md](../formats/cache_db.md). |
 | Release | Release id = SHA-256 over source tile hashes, layer versions and config hashes, classifiers and the world seed: [formats/release_manifest.md](../formats/release_manifest.md). Manifest `g2m.release/1`; server manifest `g2m.server/1` in [formats/protocol.md](../formats/protocol.md). |
-| Status | In-process only. `apps/g2m_server` (HTTP) and `g2m_cli` do not exist yet. Offline mode returns 503 degraded instead of touching the network. |
-| Tests | `tests/server/test_server.cpp`, `test_tile_store.cpp`, `test_protocol.cpp`, `test_client_cache.cpp`, `tests/layer/test_release.cpp`, `test_pack.cpp`. |
+| Status | In-process in the game. G6: protocol v1 over HTTP (`g2m_http`: `HttpTransport` = an `ITransport` client, `HttpServer` = a front end for any `ITransport`; binding in [../protocol/README.md](../protocol/README.md)) and the sidecar `apps/g2m_server` (one local release over a read-only source store, offline by construction, 127.0.0.1 by default; same release id as the in-process server for the same store and opt-ins). Not wired into racing_game. No served byte or release id changed. `g2m_cli` does not exist yet. Offline mode returns 503 degraded instead of touching the network. |
+| Tests | `tests/server/test_server.cpp`, `test_tile_store.cpp`, `test_protocol.cpp`, `test_client_cache.cpp`, `tests/layer/test_release.cpp`, `test_pack.cpp`; `tests/http/test_http_wire.cpp`, `test_http_server.cpp` (`g2m_http_tests`: HTTP vs in-process byte-identical round trip of every endpoint and status, status mapping, malformed requests, concurrency); fuzz targets `packDirectory`, `httpRequest`, `httpResponse`. |
 
 ---
 
@@ -297,7 +297,7 @@ flowchart TB
   G3F["G3 F route acceptance - open"]
   G4["G4 routing - slices 1, 2, 4, 5 of 5 done"]
   G5["G5 land cover, buildings, water, vegetation - planned"]
-  G6["G6 HTTP server and packs - planned"]
+  G6["G6 HTTP transport and sidecar server - done"]
   G7["G7 hosted server - planned"]
   G8["G8 worldwide - planned"]
   P0["P0 OSM tag coverage probe - done"]
@@ -324,9 +324,9 @@ flowchart TB
   classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
   classDef part fill:#fff3cd,stroke:#b58900,stroke-dasharray:4 3,color:#000;
   classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
-  class G0,G1,G2,G3A,P0,P1 done;
+  class G0,G1,G2,G3A,G6,P0,P1 done;
   class G3C,G3D,G4,P2 part;
-  class G2C,G3E,G3F,G5,G6,G7,G8,P3,P4,P5,P6,P7,P8 plan;
+  class G2C,G3E,G3F,G5,G7,G8,P3,P4,P5,P6,P7,P8 plan;
 ```
 
 | Item | Status | Where it is described |
@@ -345,7 +345,8 @@ flowchart TB
 | Street fidelity P2 (junction surfaces, carving, furniture = G3-D) | Slices 1-9 of 12 done: rules, surface height, junction rings and clusters, junction heights, the completion tier and furniture as library functions, served since slice 8 in `roads.geom` encoding 7 (junctions, furniture, provenance); slice 9 serves the carved heights `g2m.terrain.carved`; terrain.class and wiring (10-11) open; both owner questions answered 2026-10-05 (switch gate not zero gaps, relaxed profiles served flagged) | [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) |
 | Street fidelity P3 to P8 | Planned, nothing written | [../street_fidelity/plan.md](../street_fidelity/plan.md) section 6 |
 | G4: routing, guidance, map geometry | Slices 1-2 implemented (routable graph, edge-based A* with ALT, oneway, via-node restrictions, heading-aware snapping, region graph from roads.graph tiles; `g2m_route`), slice 4 (guidance manoeuvre list) and slice 5 (client map tiles at three LODs); restrictions in roads.graph (slice 3) open | [../routing_design.md](../routing_design.md) |
-| HTTP server, packs, hosted CDN (G6, G7) | Planned | [../formats/protocol.md](../formats/protocol.md), [../formats/pack.md](../formats/pack.md) |
+| G6: protocol v1 over HTTP, sidecar `g2m_server` | Implemented (plain HTTP, localhost by default; not wired into racing_game) | [../protocol/README.md](../protocol/README.md), [../formats/protocol.md](../formats/protocol.md), [../formats/pack.md](../formats/pack.md) |
+| G7: hosted server (TLS, auth, rate limits, upstream chaining, CDN) | Planned; prerequisites listed in [../protocol/README.md](../protocol/README.md) "Not in G6" | `PLAN.md` |
 
 ---
 

@@ -19,6 +19,9 @@ This file only maps what exists and how to build, test and run it.
   WorldCover importers, the offline tiler CLI (`apps/g2m_tiler`), and the
   real home-region import into the integrated server's source store
   (PLAN.md 3.11, 5.5 step 3) - see `g2m_import`/`g2m_tiler` below.
+  **G6 done** (2026-10-15): protocol v1 over HTTP (`g2m_http`) and the
+  sidecar server `apps/g2m_server` - see `g2m_http` below; not wired into
+  racing_game; TLS/auth/hosting are G7 (`docs/protocol/README.md`).
 
 C++20, namespace `g2m`, MIT. g2m never includes or links anything from
 physics_sim.
@@ -30,6 +33,7 @@ geo2map_engine/
   CMakeLists.txt, CMakePresets.json   top-level build (presets below)
   CLAUDE.md, README.md, PLAN.md, LICENSE, THIRD_PARTY_NOTICES.md
   cmake/deps_core.cmake               FetchContent for zstd / SQLite / nlohmann_json (G1a; pins in its header table)
+  cmake/deps_http.cmake               FetchContent for cpp-httplib (G6; only with G2M_BUILD_HTTP; pin in its header table)
   include/g2m/core/                   public API of g2m_core (no third-party types)
     result.h                          Result<T> / Result<void>, Error{code, message}, ErrorCode, make_error (no exceptions)
     bytes.h                           ByteWriter / ByteReader: little-endian, canonical LEB128 varint/svarint, zigzag;
@@ -75,7 +79,8 @@ geo2map_engine/
                                       (== the compiled raster_params_for_render_level), render_road_lod_key(policy, level)
     release.h                         ReleaseInputs -> compute_release_id, Coverage, ReleaseManifest + to_json/from_json,
                                       to_hex / content_hash_from_hex
-    pack.h                            PackDirectory/PackEntry/PackTileState, pack_of/pack_tile, encode/decode_pack
+    pack.h                            PackDirectory/PackEntry/PackTileState, pack_of/pack_tile, encode/decode_pack,
+                                      encode/decode_pack_directory (G6: `G2MH`, the /hashes body over HTTP)
   include/g2m/server/                 public API of g2m_server (PLAN.md 3.1-3.4)
     tile_store.h                      TileStore (SQLite + blob files; CONCURRENCY CONTRACT in the header), TileStoreConfig
                                       (incl. read_only - G2.0: SQLite immutable-mode URI, no directory creation, no
@@ -99,6 +104,23 @@ geo2map_engine/
                                       (INTERNAL: georef block)
   src/server/                         g2m_server: tile_store.cpp, protocol.cpp, server.cpp
   src/client/                         g2m_client: cache.cpp
+  include/g2m/http/                   public API of g2m_http (G6; no httplib type; binding spec docs/protocol/README.md)
+    http_wire.h                       the pure HTTP mapping of protocol v1: request_target/request_headers and
+                                      decode_response (client), parse_request/encode_response/error_response/
+                                      handle_request (server), Message/Header, header-text escaping, ETag, base path,
+                                      parse_http_url, kMaxTargetLength 1024; status mapping (429/5xx -> 503, 4xx -> 400,
+                                      bad header or payload -> 500, transport failure -> 503)
+    http_transport.h                  HttpTransport (ITransport over HTTP/1.1, keep-alive pool, timeouts, max body,
+                                      never follows redirects), HttpTransportConfig
+    http_server.h                     HttpServer::start(ITransport&, HttpServerConfig) (127.0.0.1, port 0 = any,
+                                      base path, thread pool, one listener per port), port/base_url/stats/stop
+  src/http/                           g2m_http: http_wire.cpp (also compiled into the fuzz build), http_transport.cpp,
+                                      http_server.cpp (the only files that include httplib.h)
+  apps/g2m_server/                    sidecar map server (G6): main.cpp - one local release over a read-only source
+                                      store (builtin_local_release_params, --layers terrain|roads|geometry|carved),
+                                      offline (no fetcher), --bind 127.0.0.1 --port 0 --base-path --threads,
+                                      prints `G2M_SERVER_READY url=... port=... rid=...`, SIGINT/SIGTERM or
+                                      --exit-on-stdin-eof stop it; binary g2m_server (CMake target g2m_server_app)
   include/g2m/mesh/                   public API of g2m_mesh (PLAN.md G2.3): engine-neutral terrain render
                                       chunks + LOD selection, POD-shaped for a later C API
     terrain_chunk.h                  ChunkKey, HeightWindow (67x67 halo)/ClassWindow, TileLookup,
@@ -307,6 +329,8 @@ geo2map_engine/
                                       rigid-body dynamics do not depend on SurfaceId, so state_hash alone
                                       would not catch a road-painting bug. bridge_test_support.h gained
                                       install_square_with_roads (install_square's road-carrying counterpart).
+  docs/protocol/README.md             protocol v1 over HTTP (G6): targets, headers, bodies, content types, Cache-Control,
+                                      client status mapping, connections, the sidecar, what G7 needs
   docs/formats/                       normative byte formats: README (conventions), tile_container, src_elev,
                                       src_landcover, src_osm, road_graph, road_geom, terrain_carved, pack,
                                       release_manifest, regions, protocol, cache_db
@@ -412,7 +436,15 @@ geo2map_engine/
     server/                           g2m_server_tests: test_tile_store, test_protocol, test_server, test_client_cache
                                       (server_test_util.h: TempDir, make_body/make_header)
     fuzz_formats/                     fuzz target bodies (fuzz_run.cpp) + seeds (fuzz_seeds.cpp); g2m_fuzz_smoke_tests
-                                      (every leg); fuzz_<name> libFuzzer executables + g2m_fuzz_seeds (G2M_BUILD_FUZZERS)
+                                      (every leg); fuzz_<name> libFuzzer executables + g2m_fuzz_seeds (G2M_BUILD_FUZZERS);
+                                      G6 added packDirectory, httpRequest, httpResponse (http_wire.cpp compiled in)
+    http/                             g2m_http_tests (G6, tag [http]): test_http_wire.cpp (pure mapping: header text,
+                                      ETag/URL/base path, canonical targets, encode->decode identity of every server
+                                      response, foreign statuses, broken payloads, pack directory), test_http_server.cpp
+                                      (real sockets: HTTP vs in-process byte-identical for 27 requests covering every
+                                      endpoint and status, with and without a base path; malformed targets/headers/
+                                      methods/raw garbage; HEAD; 8-thread concurrency; transport failure -> 503; port in
+                                      use; stop() with idle keep-alive; pooled connection replaced); http_test_world.h
     unit/                             g2m_unit_tests: test_det_math, test_tm_reference, test_geo_frames,
                                       test_tile_raster_hash, test_decode_zip, test_decode_tiff, test_decode_osm,
                                       test_decode_real_data (gated on env var G2M_DATA_DIR, SKIP when unset)
@@ -453,10 +485,10 @@ Not built yet. These are placeholders only (PLAN.md 2.2/2.3; a comment at the
 end of `CMakeLists.txt`):
 - the other core headers `polyline.h`, `graph/`, `mesh/`;
 - `include/g2m_c/`;
-- `apps/g2m_server`, `apps/g2m_cli` (`apps/g2m_tiler` is now built - G1c);
+- `apps/g2m_cli` (`apps/g2m_tiler` - G1c - and `apps/g2m_server` - G6 - are built);
 - `adapters/`;
 - `tests/{determinism,protocol,bench}`;
-- the targets `g2m_c`, `g2m_http` and `g2m_godot` (`bridges/physics_sim` /
+- the targets `g2m_c` and `g2m_godot` (`g2m_http` is built - G6; `bridges/physics_sim` /
   `g2m_ps_bridge` is now built - PLAN.md R2.2 G5/G6, see "Layout" above).
 
 ## Targets
@@ -472,6 +504,11 @@ end of `CMakeLists.txt`):
 - `g2m_server` (STATIC): `src/server/*.cpp`; PUBLIC `g2m_layers`, PRIVATE
   `g2m_dep_sqlite3`, `g2m_dep_json`.
 - `g2m_client` (STATIC): `src/client/*.cpp`; PUBLIC `g2m_server`.
+- `g2m_http` (STATIC, G6, only with `G2M_BUILD_HTTP`): `src/http/*.cpp`; PUBLIC
+  `g2m_server`, PRIVATE `g2m_dep_httplib` (cpp-httplib, INTERFACE, `cmake/deps_http.cmake`),
+  `g2m_warnings`, `g2m_options`. `g2m_server_app` (executable `g2m_server`, `apps/g2m_server/`,
+  with `G2M_BUILD_HTTP` and `G2M_BUILD_APPS`): links `g2m_http` + `g2m_client`, reuses
+  `apps/g2m_tiler/cli_args.h`. Tests `g2m_http_tests` (`tests/http/`, with `G2M_BUILD_HTTP`).
 - `g2m_mesh` (STATIC, PLAN.md G2.3): `src/mesh/*.cpp` (terrain_chunk.cpp,
   lod_select.cpp); PUBLIC `g2m_core` + `g2m_layers` (for `HeightTile`), no
   other dependency - no rendering-engine or third-party type anywhere in
@@ -563,8 +600,9 @@ end of `CMakeLists.txt`):
     `g2m_golden_dump` (exe; sets: `g0`, `g1`, `g1c`, `g2`, `g2mesh`, `g2roads`);
   - `g2m_fuzz_run`, `g2m_fuzz_seeds_lib` (STATIC);
   - with `G2M_BUILD_FUZZERS`: `g2m_fuzz_instrumented` (OBJECT:
-    `G2M_LAYERS_SOURCES` + `src/server/protocol.cpp` + `fuzz_run.cpp`,
-    `-fsanitize=fuzzer-no-link`), `fuzz_{container,elev,landcover,osm,pack,manifest,path}`
+    `G2M_LAYERS_SOURCES` + `src/server/protocol.cpp` + `src/http/http_wire.cpp` + `fuzz_run.cpp`,
+    `-fsanitize=fuzzer-no-link`), `fuzz_{container,elev,landcover,osm,pack,manifest,path,region,
+    roadgraph,roadgeom,roadCrossSectionEval,packDirectory,httpRequest,httpResponse}`
     (`-fsanitize=fuzzer`), `g2m_fuzz_seeds` (writes the corpus; CTest
     fixture). The CTest tests `fuzz_<name>` run 10 s each
     (`G2M_FUZZ_SECONDS`, `-seed=1`), label `fuzz`.
@@ -599,6 +637,9 @@ end of `CMakeLists.txt`):
   (below) proves OFF actually builds - only `g2m_core`/`g2m_layers`/
   `g2m_server`/`g2m_client` and their own deps (zstd, SQLite, nlohmann_json)
   compile, no Catch2/decoder deps fetched.
+- `G2M_BUILD_HTTP` (default `PROJECT_IS_TOP_LEVEL`, G6): fetches cpp-httplib and builds
+  `g2m_http`, `tests/http` and (with `G2M_BUILD_APPS`) `apps/g2m_server`. OFF in a consumer
+  that `add_subdirectory`s geo2map_engine (racing_game), so it fetches nothing new there.
 - `G2M_BUILD_REFGEN` (OFF): fetches GeographicLib v2.7
   (`GEOGRAPHICLIB_PRECISION=3`, long double) and builds `tools/refgen`.
   - Only on Linux x86-64, because it needs an 80-bit long double.
@@ -631,10 +672,14 @@ end of `CMakeLists.txt`):
 | zlib-ng | `2.3.3` | `g2m_decode`: zlib-API DEFLATE for libosmium's PBF blob decompression only |
 | protozero | `v1.8.2` | `g2m_decode`: header-only protobuf decode, under libosmium |
 | libosmium | `v2.23.1` | `g2m_decode`: OSM PBF parsing (`src/decode/osm/`) |
+| cpp-httplib | `v0.58.0` (git commit `4f3f9ef1`) | `g2m_http` only (PRIVATE, header-only, no TLS/zlib), `G2M_BUILD_HTTP` |
 
 ## Presets
 
 - Every preset sets `CMAKE_C_COMPILER` too (zstd and SQLite are C).
+- `G2M_BUILD_HTTP` is on in every top-level preset except `consumer-check` and `bridge-release`
+  (both set it OFF: no extra fetch in a consumer configuration, and `bridge-release` is fully
+  disconnected).
 - Windows (Ninja, from a VS 2022 Build Tools environment):
   - `debug`, `release`, `relwithdebinfo`, `asan` (clang-cl);
   - `msvc-debug`, `msvc-release` (cl);

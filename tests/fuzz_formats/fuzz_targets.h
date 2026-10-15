@@ -32,6 +32,9 @@ enum class Target {
     Roadgeom,  // decode_body + decode_road_geom
     Roadgraph, // decode_body + decode_road_graph
     RoadCrossSectionEval, // decode_body + decode_road_geom, then boundaries_at at 17 stations per cross-section
+    PackDirectory, // decode_pack_directory (the /hashes body, G6)
+    HttpRequest,   // g2m::http::parse_request (method byte, target line, If-None-Match lines) + header text
+    HttpResponse,  // g2m::http::decode_response ("target\nstatus\nheaders\n\nbody"), then encode/decode is stable
 };
 
 struct TargetInfo {
@@ -44,6 +47,7 @@ inline constexpr TargetInfo kTargets[] = {
     {Target::Osm, "osm"},             {Target::Pack, "pack"}, {Target::Manifest, "manifest"},
     {Target::Path, "path"},           {Target::Region, "region"}, {Target::Roadgraph, "roadgraph"}, {Target::Roadgeom, "roadgeom"},
     {Target::RoadCrossSectionEval, "roadCrossSectionEval"},
+    {Target::PackDirectory, "packDirectory"}, {Target::HttpRequest, "httpRequest"}, {Target::HttpResponse, "httpResponse"},
 };
 
 // Runs one input (fuzz_run.cpp).

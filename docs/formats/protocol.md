@@ -2,7 +2,10 @@
 
 In G1 the requests and responses are in-process objects
 (`g2m/server/protocol.h`) passed through `ITransport`. G6's HTTP transport
-serialises exactly these objects. Paths are relative to `{base}/g2m/v1`.
+serialises exactly these objects; the HTTP binding (headers, bodies,
+content types, status mapping, the sidecar) is
+[docs/protocol/README.md](../protocol/README.md). Paths are relative to
+`{base}/g2m/v1`.
 
 ## Endpoints
 
@@ -12,7 +15,7 @@ serialises exactly these objects. Paths are relative to `{base}/g2m/v1`.
 | `/releases/{rid}/manifest` | ReleaseManifestRequest | `g2m.release/1` JSON ([release_manifest.md](release_manifest.md)) |
 | `/releases/{rid}/tiles/{layer}/{scheme}/{level}/{x}/{y}` | TileRequest (+ optional if_none_match) | one g2m.tile/1 container |
 | `/releases/{rid}/packs/{layer}/{scheme}/{level}/{px}/{py}` | PackRequest | a pack ([pack.md](pack.md)) |
-| `/releases/{rid}/hashes/{layer}/{scheme}/{level}/{px}/{py}` | HashesRequest | the pack directory only |
+| `/releases/{rid}/hashes/{layer}/{scheme}/{level}/{px}/{py}` | HashesRequest | the pack directory only ([pack.md](pack.md) "Pack directory") |
 
 - `{rid}` is 64 lower-case hex digits and `{scheme}` is `utm{zone}{n|s}`.
 - For packs and hashes, `px`/`py` are pack coordinates.

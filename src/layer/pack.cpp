@@ -12,6 +12,8 @@ namespace g2m {
 namespace {
 
 constexpr std::uint8_t kMagic[4] = {'G', '2', 'M', 'P'};
+constexpr std::uint8_t kDirMagic[4] = {'G', '2', 'M', 'H'};
+constexpr std::uint8_t kDirVersion = 1;
 constexpr std::uint8_t kPackVersion = 1;
 constexpr std::uint8_t kSchemeUtm = 1;
 
@@ -51,16 +53,18 @@ int pack_entry_index(const TileKey& tile) {
     return (tile.y - p.y * kPackSide) * kPackSide + (tile.x - p.x * kPackSide);
 }
 
-Result<std::vector<std::uint8_t>> encode_pack(const PackDirectory& dir,
-                                              const std::array<std::vector<std::uint8_t>, kPackTiles>& containers) {
+namespace {
+
+// magic, version, reserved, layer, rid, scheme/zone/hemisphere/level, x, y
+// (shared by the pack and the pack directory).
+Result<void> write_pack_head(ByteWriter& w, const std::uint8_t (&magic)[4], std::uint8_t version, const PackDirectory& dir) {
     if (!is_valid_layer_name(dir.layer)) return make_error(ErrorCode::InvalidArgument, "pack: invalid layer name");
     // The pack's tiles must be valid keys too: check both corners.
     if (!dir.pack.valid() || !pack_tile(dir.pack, 0).valid() || !pack_tile(dir.pack, kPackTiles - 1).valid()) {
         return make_error(ErrorCode::InvalidArgument, "pack: invalid pack key");
     }
-    ByteWriter w;
-    w.bytes(kMagic, 4);
-    w.u8(kPackVersion);
+    w.bytes(magic, 4);
+    w.u8(version);
     w.u8(0);
     w.u16(0);
     w.u8(static_cast<std::uint8_t>(dir.layer.size()));
@@ -72,35 +76,18 @@ Result<std::vector<std::uint8_t>> encode_pack(const PackDirectory& dir,
     w.u8(static_cast<std::uint8_t>(dir.pack.level));
     w.i32(dir.pack.x);
     w.i32(dir.pack.y);
-    for (int i = 0; i < kPackTiles; ++i) {
-        const PackEntry& e = dir.entries[static_cast<std::size_t>(i)];
-        const auto& c = containers[static_cast<std::size_t>(i)];
-        if (static_cast<std::uint8_t>(e.state) > 3) return make_error(ErrorCode::InvalidArgument, "pack: bad state");
-        if (e.state == PackTileState::Present) {
-            if (auto ok = check_container(dir, i, c); !ok) return ok.error();
-        } else if (!c.empty() || !is_zero(e.body_hash)) {
-            return make_error(ErrorCode::InvalidArgument, "pack: non-present entry with data or hash");
-        }
-        w.u8(static_cast<std::uint8_t>(e.state));
-        w.bytes(e.body_hash);
-        w.u64(c.size());
-    }
-    for (const auto& c : containers) w.bytes(c);
-    return w.take();
+    return {};
 }
 
-Result<PackView> decode_pack(std::span<const std::uint8_t> bytes) {
-    ByteReader r(bytes);
-    const auto magic = r.bytes(4);
-    const std::uint8_t version = r.u8();
+Result<void> read_pack_head(ByteReader& r, const std::uint8_t (&magic)[4], std::uint8_t version, PackDirectory& d) {
+    const auto m = r.bytes(4);
+    const std::uint8_t v = r.u8();
     const std::uint8_t res8 = r.u8();
     const std::uint16_t res16 = r.u16();
     if (!r.ok()) return make_error(ErrorCode::Truncated, "pack: truncated");
-    if (std::memcmp(magic.data(), kMagic, 4) != 0) return make_error(ErrorCode::BadMagic, "not a g2m pack");
-    if (version != kPackVersion) return make_error(ErrorCode::Unsupported, "pack version");
+    if (std::memcmp(m.data(), magic, 4) != 0) return make_error(ErrorCode::BadMagic, "not a g2m pack");
+    if (v != version) return make_error(ErrorCode::Unsupported, "pack version");
     if (res8 != 0 || res16 != 0) return make_error(ErrorCode::Malformed, "pack: reserved fields");
-    PackView v;
-    PackDirectory& d = v.dir;
     const std::uint8_t name_len = r.u8();
     d.layer = std::string(r.string(name_len));
     const auto rid = r.bytes(32);
@@ -121,6 +108,37 @@ Result<PackView> decode_pack(std::span<const std::uint8_t> bytes) {
         d.pack.y < TileKey::kIndexMin / kPackSide || d.pack.y > TileKey::kIndexMax / kPackSide) {
         return make_error(ErrorCode::Malformed, "pack: key");
     }
+    return {};
+}
+
+} // namespace
+
+Result<std::vector<std::uint8_t>> encode_pack(const PackDirectory& dir,
+                                              const std::array<std::vector<std::uint8_t>, kPackTiles>& containers) {
+    ByteWriter w;
+    if (auto ok = write_pack_head(w, kMagic, kPackVersion, dir); !ok) return ok.error();
+    for (int i = 0; i < kPackTiles; ++i) {
+        const PackEntry& e = dir.entries[static_cast<std::size_t>(i)];
+        const auto& c = containers[static_cast<std::size_t>(i)];
+        if (static_cast<std::uint8_t>(e.state) > 3) return make_error(ErrorCode::InvalidArgument, "pack: bad state");
+        if (e.state == PackTileState::Present) {
+            if (auto ok = check_container(dir, i, c); !ok) return ok.error();
+        } else if (!c.empty() || !is_zero(e.body_hash)) {
+            return make_error(ErrorCode::InvalidArgument, "pack: non-present entry with data or hash");
+        }
+        w.u8(static_cast<std::uint8_t>(e.state));
+        w.bytes(e.body_hash);
+        w.u64(c.size());
+    }
+    for (const auto& c : containers) w.bytes(c);
+    return w.take();
+}
+
+Result<PackView> decode_pack(std::span<const std::uint8_t> bytes) {
+    ByteReader r(bytes);
+    PackView v;
+    PackDirectory& d = v.dir;
+    if (auto ok = read_pack_head(r, kMagic, kPackVersion, d); !ok) return ok.error();
     std::array<std::uint64_t, kPackTiles> sizes{};
     std::uint64_t total = 0;
     for (std::size_t i = 0; i < kPackTiles; ++i) {
@@ -149,6 +167,39 @@ Result<PackView> decode_pack(std::span<const std::uint8_t> bytes) {
         v.containers[i] = c;
     }
     return v;
+}
+
+Result<std::vector<std::uint8_t>> encode_pack_directory(const PackDirectory& dir) {
+    ByteWriter w;
+    if (auto ok = write_pack_head(w, kDirMagic, kDirVersion, dir); !ok) return ok.error();
+    for (const PackEntry& e : dir.entries) {
+        if (static_cast<std::uint8_t>(e.state) > 3) return make_error(ErrorCode::InvalidArgument, "pack directory: bad state");
+        if (e.state != PackTileState::Present && !is_zero(e.body_hash)) {
+            return make_error(ErrorCode::InvalidArgument, "pack directory: non-present entry with a hash");
+        }
+        w.u8(static_cast<std::uint8_t>(e.state));
+        w.bytes(e.body_hash);
+    }
+    return w.take();
+}
+
+Result<PackDirectory> decode_pack_directory(std::span<const std::uint8_t> bytes) {
+    ByteReader r(bytes);
+    PackDirectory d;
+    if (auto ok = read_pack_head(r, kDirMagic, kDirVersion, d); !ok) return ok.error();
+    for (PackEntry& e : d.entries) {
+        const std::uint8_t st = r.u8();
+        const auto h = r.bytes(32);
+        if (!r.ok()) return make_error(ErrorCode::Truncated, "pack directory: truncated");
+        if (st > 3) return make_error(ErrorCode::Malformed, "pack directory: bad state");
+        e.state = static_cast<PackTileState>(st);
+        std::copy(h.begin(), h.end(), e.body_hash.begin());
+        if (e.state != PackTileState::Present && !is_zero(e.body_hash)) {
+            return make_error(ErrorCode::Malformed, "pack directory: non-present entry with a hash");
+        }
+    }
+    if (r.remaining() != 0) return make_error(ErrorCode::Malformed, "pack directory: trailing bytes");
+    return d;
 }
 
 } // namespace g2m
