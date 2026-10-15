@@ -9,6 +9,7 @@
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/src_osm.h"
 #include "g2m/layer/tile_container.h"
+#include "g2m/world/buildings.h"
 #include "g2m/world/road_ribbons.h"
 #include "g2m/world/road_structures.h"
 #include "g2m/world/ticket.h"
@@ -85,10 +86,8 @@ struct RawTile {
 // phase 3a: build_structure_set / build_road_ribbons over a RoadGeomTile the caller
 // hands in. The service delivers them through the producer the caller installs
 // (TerrainService::set_*_producer); until then the matching request is Failed.
-// BuildingSet is phase 3b.
-struct BuildingSet {
-    TileKey key;
-};
+// BuildingSet (buildings.h) is filled in by phase 3b: build_building_set over the OsmTile of a level-2 tile and a
+// ground sampler, delivered the same way (TerrainService::set_buildings_producer).
 // Hash of the producer's option struct (part of the job key and the cache key), 0 when it has none.
 struct ProductOptions {
     std::uint64_t hash = 0;

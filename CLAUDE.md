@@ -173,9 +173,8 @@ geo2map_engine/
     ticket.h                         Priority (Gate, Physics, Prefetch, Render, Warm), TileState
                                       (Pending/Ready/Absent/Failed/Cancelled), Ticket<T> (state()/value()
                                       lock-free reads, wait_for for tools, cancel = drop of the last copy)
-    products.h                       Outcome<T>, RoadSegmentsTile, RawTile, phase-3 payload placeholders
-                                      (BuildingSet; StructureSet and RoadRibbonTile are the phase-3a
-                                      types below)
+    products.h                       Outcome<T>, RoadSegmentsTile, RawTile, ProductOptions; the phase-3
+                                      payloads (StructureSet, RoadRibbonTile, BuildingSet) are the types below
     road_structures.h                (phase 3a) RoadDeck (incl. start_ref), road_deck_height, build_road_decks
                                       (bridge / tunnel-floor decks + inferred tunnel roofs, client-side until
                                       served, owner Q4; + approach decks of grade-separated crossings under the
@@ -183,6 +182,17 @@ geo2map_engine/
     road_ribbons.h                   (phase 3a) RoadRibbonVertex/RoadRibbonTile, build_road_ribbons(geometry,
                                       key, ground fn, lift) incl. junction surfaces and markings,
                                       add_junction_surfaces, road_priority_rank (StVO 18(3) rank)
+    buildings.h                      (phase 3b) Building/BuildingPoint/BuildingGround/BuildingParams,
+                                      extract_buildings, BuildingSet + build_building_set(OsmTile, ground)
+    view_streamer.h                  (phase 3b) render LOD around a focus: ViewChunk (mesh + class ids, carve
+                                      state, session origin, consumer rgba), ViewSource (lod params, lookups,
+                                      carve state fn, optional colour hook, road LOD), chunk_window_carve,
+                                      select_view_keys, build_view_chunks, build_static_view, speed/urgency
+                                      helpers, changed_road_lod_levels, ViewStreamer (one worker, one ViewDiff in
+                                      flight, adds-before-removals contract in the header)
+    ring_streamer.h                  (phase 3b) RingStreamer(Config): level-2 tile tiers of ring products (road
+                                      ribbons, buildings): jobs nearest first (behind penalty), next_job() any
+                                      thread, accept(), frame() -> shown/downgraded/evicted changes
     terrain_service.h                TerrainService (terrain migration phase 2): open (stores, layer opt-ins,
                                       release, in-process server, ONE worker pool), async height/road_geom/
                                       road_segments/source_osm/raw_tile/structures/road_ribbons/buildings ->
@@ -191,7 +201,9 @@ geo2map_engine/
                                       (IHeightTileFetch; blocks on the caller, which is a loader thread),
                                       product<T>(kind, key, ...) + ProductContext for caller producers
   src/world/                          g2m_world implementation: road_structures.cpp, road_ribbons.cpp (phase 3a,
-                                      ported from racing_game 0c027dc + 945455a, libm -> det), terrain_service.cpp, job_scheduler.{h,cpp}
+                                      ported from racing_game 0c027dc + 945455a, libm -> det), buildings.cpp,
+                                      view_streamer.cpp, ring_streamer.cpp (phase 3b, from racing_game 5a3baed),
+                                      terrain_service.cpp, job_scheduler.{h,cpp}
                                       (internal: priority queue, per-job registry, interest counting, nested
                                       join / inline run), tile_cache.h (internal: byte-weighted LRU of
                                       decoded tiles), tile_fetch.cpp, height_sampler.cpp,
@@ -524,6 +536,19 @@ end of `CMakeLists.txt`):
   `refgen/refgen_meshes.cpp`, target `g2m_world_mesh_refgen` only with
   `-DG2M_WORLD_MESH_REFGEN_DIR=<dir>`), plus the game's two junction-surface
   tests. g2m_world_tests links `g2m_decode` and reads the OSM fixtures.
+  Phase 3b (`buildings`, `view_streamer`, `ring_streamer`): tests
+  `test_buildings.cpp` (`[buildings]`; synthetic tag scene + every fixture tile
+  with buildings == `building_pins.inc`), `test_view_streamer.cpp`
+  (`[view_streamer]`; static builds, key selection, urgency order and every step
+  of a streamer drive incl. velocity, road-LOD and view-distance changes ==
+  `view_pins.inc`, 1 vs 3 threads, colour hook, cancel), both recorded from
+  racing_game 5a3baed's own C++ (`refgen/extract_view_ref.sh` +
+  `refgen/refgen_view.cpp`, target `g2m_world_view_refgen` only with
+  `-DG2M_WORLD_VIEW_REFGEN_DIR=<dir>`); `test_ring_streamer.cpp`
+  (`[ring_streamer]`) replays `ring_pins.inc`, recorded by running the game's
+  road_stream.gd / building_stream.gd headless in Godot over 8 focus steps
+  (`refgen/extract_ring_ref.sh` + `refgen/ring_harness.gd`; job order within
+  1 m because GDScript works in float32), plus reject/downgrade/evict cases.
 - `g2m_ps_bridge` (STATIC, `bridges/physics_sim/`, PLAN.md R2.2 section 1b,
   G5/G6): `src/version.cpp`, `src/g2m_terrain_source.cpp`; PUBLIC `ps_core`
   (physics_sim's own target, embedded via `G2M_PS_SOURCE_DIR` - see "CMake
