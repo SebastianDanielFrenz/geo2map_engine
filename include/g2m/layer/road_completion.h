@@ -2,7 +2,8 @@
 // Street fidelity P2 slice 6: the profile completion tier of design 6.6, a port of racing_game's
 // complete_road_profiles and its 20 m retry that runs after the strict pass of build_road_geom_tile and flags every
 // profile it adds (ProfileProvenance). Terrain migration phase 4 (decision D47) adds the game's tunnel floors
-// (TunnelFloor: DEM floor, or the portal chord above RoadCompletionOptions::tunnel_chord_min_length_m; never carved)
+// (TunnelFloor: DEM floor, or the portal chord above RoadCompletionOptions::tunnel_chord_min_length_m, served 200 m
+// from de.json since the owner's straight-grade ruling, D52; never carved)
 // and the game's accepted-bridge anchors (an accepted bridge stretch's end plane ahead of the walk, recomputed from
 // the node so the result stays tile-invariant), plus a walk that tries every incident bridge edge.
 //

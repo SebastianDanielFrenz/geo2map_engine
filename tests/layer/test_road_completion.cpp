@@ -840,9 +840,11 @@ namespace {
 const Tags kTunnel = {{"highway", "primary"}, {"tunnel", "yes"}, {"layer", "-1"}};
 // What the release before phase 4 served: the tier without tunnel floors and without D47's anchors.
 // The completion of the release before terrain migration phase 4: no tunnel floors, no accepted-bridge anchors, 60 m walk.
-RoadCompletionOptions previous_served() { auto o = served_road_completion_options(); o.tunnel_floors = false; o.bridge_anchor_reuse = false; o.abutment_path_m = 60; return o; }
-// Phase 4's release (D47 at the 60 m walk), before D48.
-RoadCompletionOptions phase4_served() { auto o = served_road_completion_options(); o.abutment_path_m = 60; return o; }
+RoadCompletionOptions previous_served() { auto o = served_road_completion_options(); o.tunnel_floors = false; o.bridge_anchor_reuse = false; o.abutment_path_m = 60; o.tunnel_chord_min_length_m = 0; return o; }
+// Phase 4's release (D47 at the 60 m walk), before D48 and before the straight-grade ruling.
+RoadCompletionOptions phase4_served() { auto o = served_road_completion_options(); o.abutment_path_m = 60; o.tunnel_chord_min_length_m = 0; return o; }
+// Phase 5's release (D48), before the owner's straight-grade ruling: every tunnel follows the DEM.
+RoadCompletionOptions phase5_served() { auto o = served_road_completion_options(); o.tunnel_chord_min_length_m = 0; return o; }
 RoadGeomTile build_with(const Env& env, const RoadCompletionOptions& o, RoadCompletionStats* stats = nullptr) {
     auto g = build_road_geom_tile(env.tile, *env.dem, env.limits, &env.context, builtin_road_rules_de(), o, stats); REQUIRE(g);
     return std::move(*g);
@@ -907,6 +909,9 @@ TEST_CASE("tunnel floors: the game's tunnel step byte for byte on a straight and
         CHECK(identical);
         CHECK(lib.entries[t].profile->reference.length_m == game.entries[t].profile->reference.length_m);
         // Sabotages: no tunnel step leaves it declined; a 10 m sample spacing is another profile than the game's.
+        // Below the served straight-grade threshold (200 m) the served tier gives this 180 m tunnel the same DEM floor.
+        { const auto served = build_with(*env, served_road_completion_options()); REQUIRE(served.entries[t].profile);
+          CHECK(same_vertical(served.entries[t].profile->vertical, lib.entries[t].profile->vertical)); }
         auto off = served_road_completion_options(); off.tunnel_floors = false;
         CHECK_FALSE(build_with(*env, off).entries[t].profile);
         auto coarse = served_road_completion_options(); coarse.tunnel_spacing_m = 10;
@@ -931,10 +936,10 @@ TEST_CASE("tunnel floors: the game's tunnel step byte for byte on a straight and
     }
 }
 
-TEST_CASE("tunnel floors: three long tunnels (539, 499, 498 m) follow the DEM by default; the chord threshold is configuration (D47, owner Q1 open)", "[layer][roads][completion][tunnel][D47]") {
-    // A 45 m high ridge over every tunnel and portals 12 m apart in height: the DEM floor rides over the ridge (the
-    // owner's deep-tunnel concern); with tunnel_chord_min_length_m = 150 the floor is the straight portal chord, along
-    // the curve too. Straight, one arc and an S of two arcs.
+TEST_CASE("tunnel floors: three long tunnels (539, 499, 498 m) follow the straight portal grade as served; the DEM floor below the threshold (owner ruling 2026-10-15)", "[layer][roads][completion][tunnel][D47]") {
+    // A 45 m high ridge over every tunnel and portals 12 m apart in height: the DEM floor (threshold 0, the release
+    // before the ruling) rides over the ridge (the owner's deep-tunnel concern); the served threshold (de.json, 200 m)
+    // gives the straight portal chord, along the curve too. Straight, one arc and an S of two arcs.
     const Fn ridge = [](double e, double n) {
         const double x = e - kOriginE, y = n - kOriginN;
         return 100.0 + 0.012 * x + 0.004 * y + 45.0 * std::exp(-(x * x + y * y) / (2 * 120.0 * 120.0));
@@ -957,8 +962,11 @@ TEST_CASE("tunnel floors: three long tunnels (539, 499, 498 m) follow the DEM by
         const auto t = index_of(floor, 30, 0);
         REQUIRE(floor.entries[t].profile); CHECK(floor.origins[t].provenance == ProfileProvenance::TunnelFloor);
         const double L = floor.entries[t].profile->reference.length_m;
-        auto chord_opts = served_road_completion_options(); chord_opts.tunnel_chord_min_length_m = 150;
+        const auto chord_opts = served_road_completion_options();
+        REQUIRE(chord_opts.tunnel_chord_min_length_m == 200);
         RoadCompletionStats chord_stats; const auto chord = build_with(*env, chord_opts, &chord_stats);
+        { RoadCompletionStats s5; const auto before = build_with(*env, phase5_served(), &s5);   // the previous release: the DEM floor
+          REQUIRE(before.entries[t].profile); CHECK(same_vertical(before.entries[t].profile->vertical, floor.entries[t].profile->vertical)); CHECK(s5.tunnel_chord == 0); }
         REQUIRE(chord.entries[t].profile); CHECK(chord.origins[t].provenance == ProfileProvenance::TunnelFloor);
         const auto& fp = *floor.entries[t].profile; const auto& cp = *chord.entries[t].profile;
         double max_grade = 0; for (const auto& s : fp.vertical.segments) max_grade = std::max({max_grade, std::fabs(s.grade0), std::fabs(s.grade1)});
@@ -1000,6 +1008,61 @@ TEST_CASE("tunnel floors: three long tunnels (539, 499, 498 m) follow the DEM by
             auto entries = strict.entries; std::vector<RoadProfileOrigin> origins;
             CHECK_FALSE(complete_road_profiles(entries, origins, *builder, *env->dem, zone, env->limits, o));
         }
+    }
+}
+
+TEST_CASE("tunnel floors: a long curved, sloped tunnel across a tile edge takes one straight grade, the same from both tiles; the tile graph and a clipped-length rule are the controls", "[layer][roads][completion][tunnel][invariance]") {
+    // A 450 m tunnel on a 400 m arc from x = 360 (west tile 455) to (683, 279) (east tile 456), under a 40 m ridge on a
+    // 1.5 % slope. Only ~150 m of it lie in the west tile: the threshold applies to the stretch, never to a tile's part.
+    const Fn ridge = [](double e, double n) {
+        const double x = e - kOriginE, y = n - kOriginN;
+        return 100.0 + 0.015 * x - 0.005 * y + 40.0 * std::exp(-((x - 560) * (x - 560) + (y - 90) * (y - 90)) / (2 * 110.0 * 110.0));
+    };
+    const auto nodes = arc(100, 360, 0, 0.15, 400, 450, 15);
+    const auto world = tunnel_world(nodes);
+    const auto west = make_env(world, kTile, ridge), east = make_env(world, kTileEast, ridge);
+    const auto served = served_road_completion_options();
+    REQUIRE(served.tunnel_chord_min_length_m == 200);
+    RoadCompletionStats sw, se;
+    const auto a = build_with(*west, served, &sw), b = build_with(*east, served, &se);
+    const auto tw = index_of(a, 30, 0), te = index_of(b, 30, 0);
+    REQUIRE(a.entries[tw].profile); REQUIRE(b.entries[te].profile);
+    CHECK(a.origins[tw].provenance == ProfileProvenance::TunnelFloor); CHECK(b.origins[te].provenance == ProfileProvenance::TunnelFloor);
+    CHECK(sw.tunnel_chord == 1); CHECK(se.tunnel_chord == 1);
+    CHECK(same_outcome(a.entries[tw], a.origins[tw], b.entries[te], b.origins[te]));
+    const auto& p = *a.entries[tw].profile;
+    const double L = p.reference.length_m;
+    CHECK(L == b.entries[te].profile->reference.length_m);
+    CHECK(std::fabs(L - 450) < 2.0);
+    CHECK(chord_departure(p) < 1e-6);   // one constant grade along the curved reference
+    double west_part = 0;               // the tunnel's length inside the west tile (x < 512)
+    for (std::size_t i = 1; i < nodes.size(); ++i) if (nodes[i].x < 512) west_part += std::hypot(nodes[i].x - nodes[i - 1].x, nodes[i].y - nodes[i - 1].y);
+    CHECK(west_part < 200);
+    // The portal heights are the DEM-floor profile's own end samples (the phase-4 anchors).
+    const auto floor_west = build_with(*west, phase5_served()); REQUIRE(floor_west.entries[tw].profile);
+    const auto& fp = *floor_west.entries[tw].profile;
+    CHECK(p.at(0)->height_m == fp.at(0)->height_m); CHECK(p.at(L)->height_m == fp.at(L)->height_m);
+    const double grade = (p.at(L)->height_m - p.at(0)->height_m) / L;
+    std::printf("straight-grade tunnel across a tile edge: %.1f m (%.1f m in the west tile), grade %.4f, DEM floor departs %.2f m from it, served departs %.2e m\n",
+        L, west_part, grade, chord_departure(fp), chord_departure(p));
+    CHECK(chord_departure(fp) > 15.0);
+    // Control 1: a rule measured on the tile's own part (west: ~150 m < 200 m, so the DEM floor) would disagree with the
+    // east tile's straight grade by metres at the same stations.
+    {
+        const auto d = max_delta(fp, *b.entries[te].profile);
+        std::printf("control (clipped-length rule): west DEM floor vs east straight grade, max |dz| %.2f m\n", d.height);
+        CHECK(d.height > 15.0);
+    }
+    // Control 2: hand the tier the TILE graph of the west tile as its context. The ground way past the east portal is
+    // not in it, so the stretch's reference (and the profile along it) is not the one the east tile computes.
+    {
+        const auto strict = build(*west, false);
+        auto entries = strict.entries; std::vector<RoadProfileOrigin> origins;
+        const auto narrow = RoadReferenceBuilder::make(west->tile.graph); REQUIRE(narrow);
+        REQUIRE(complete_road_profiles(entries, origins, *narrow, *west->dem, zone, west->limits, served));
+        const bool same = same_outcome(entries[tw], origins[tw], b.entries[te], b.origins[te]);
+        std::printf("control (tile graph instead of the context): tunnel profiled %d, same as the east tile %d\n", entries[tw].profile.has_value() ? 1 : 0, same ? 1 : 0);
+        CHECK_FALSE(same);
     }
 }
 
@@ -1158,5 +1221,76 @@ TEST_CASE("completion: release cost of the 200 m walk on the fixtures (D48)", "[
         }
         CHECK(modes[1].bridges >= modes[0].bridges);
         CHECK(modes[1].dem >= modes[0].dem);
+    }
+}
+
+TEST_CASE("tunnel floors: the straight-grade ruling on the fixture tunnels (measurement, owner ruling 2026-10-15)", "[layer][roads][completion][tunnel][fixtures]") {
+    // Every tunnel stretch of both fixtures on the tilted bumpy DEM, the release before the ruling (DEM floor for every
+    // length) against the served tier. Also counts tunnel chains: tunnel stretches joined end to end at a node no other
+    // road meets, whose own stretches are each judged by their own length.
+    for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
+        const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + pbf);
+        const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
+        std::set<TileKey> keys;
+        for (const auto& n : world->nodes) if (const auto k = tile_key_at(g2m_test::kZone32N, 2, static_cast<double>(n.position.x) / 1000.0, static_cast<double>(n.position.y) / 1000.0)) keys.insert(*k);
+        const auto encode = [&](const TileKey& key, const RoadCompletionOptions& o) {
+            g2m_test::GeomOptions go; go.height_m = Fn(tilted_fixture_dem); go.completion = o;
+            auto g = g2m_test::geometry_in_tile_with(*world, key, go); REQUIRE(g); return std::move(*g);
+        };
+        struct Seen { double length = 0, delta = 0, grade = 0; bool straight = false; std::int64_t a = 0, b = 0; };
+        std::map<std::pair<std::int64_t, std::uint32_t>, Seen> tunnels;
+        std::size_t inconsistent = 0;
+        for (const auto& key : keys) {
+            const auto before = encode(key, phase5_served()), now = encode(key, served_road_completion_options());
+            REQUIRE(before.entries.size() == now.entries.size());
+            for (std::size_t i = 0; i < now.entries.size(); ++i) {
+                const auto& e = now.entries[i];
+                if (kind_of(now, e) != "tunnel") continue;
+                // Everything that is not a tunnel profile is unchanged by the ruling.
+                Seen s;
+                const auto* w = &*std::lower_bound(world->ways.begin(), world->ways.end(), e.way_id, [](const auto& x, auto id) { return x.osm_id < id; });
+                s.a = w->node_ids[e.stretch.start_ref]; s.b = w->node_ids[e.stretch.end_ref];
+                if (e.profile) {
+                    REQUIRE(before.entries[i].profile);
+                    s.length = e.profile->reference.length_m;
+                    s.straight = chord_departure(*e.profile) < 1e-6 && s.length >= 200;
+                    s.delta = max_delta(*before.entries[i].profile, *e.profile).height;
+                    s.grade = (e.profile->at(s.length)->height_m - e.profile->at(0)->height_m) / s.length;
+                    if (s.length < 200) CHECK(same_vertical(before.entries[i].profile->vertical, e.profile->vertical));
+                }
+                const auto [it, fresh] = tunnels.emplace(std::make_pair(e.way_id, e.stretch.start_ref), s);
+                if (!fresh && (it->second.length != s.length || it->second.delta != s.delta)) ++inconsistent;
+            }
+            for (std::size_t i = 0; i < now.entries.size(); ++i) if (kind_of(now, now.entries[i]) != "tunnel")
+                CHECK(same_outcome(before.entries[i], before.origins[i], now.entries[i], now.origins[i]));
+        }
+        CHECK(inconsistent == 0);
+        // Tunnel chains through nodes that join exactly two tunnel stretches and nothing else.
+        std::map<std::int64_t, int> degree; for (const auto& e : world->edges) { ++degree[e.from_node]; ++degree[e.to_node]; }
+        std::map<std::int64_t, std::vector<std::pair<std::int64_t, std::uint32_t>>> at;
+        for (const auto& [id, s] : tunnels) { at[s.a].push_back(id); at[s.b].push_back(id); }
+        std::map<std::pair<std::int64_t, std::uint32_t>, std::pair<std::int64_t, std::uint32_t>> parent;
+        for (const auto& [id, s] : tunnels) parent[id] = id;
+        const std::function<std::pair<std::int64_t, std::uint32_t>(std::pair<std::int64_t, std::uint32_t>)> root = [&](auto x) { return parent[x] == x ? x : parent[x] = root(parent[x]); };
+        for (const auto& [node, list] : at) if (list.size() == 2 && degree[node] == 2) parent[root(list[0])] = root(list[1]);
+        std::map<std::pair<std::int64_t, std::uint32_t>, std::pair<double, int>> chains;
+        for (const auto& [id, s] : tunnels) { auto& c = chains[root(id)]; c.first += s.length; ++c.second; }
+        std::size_t profiled = 0, straight = 0, multi = 0, missed = 0; double max_delta_m = 0, max_len = 0, max_grade = 0;
+        for (const auto& [id, s] : tunnels) {
+            if (s.length > 0) ++profiled;
+            if (s.straight) { ++straight; max_grade = std::max(max_grade, std::fabs(s.grade)); }
+            max_delta_m = std::max(max_delta_m, s.delta); max_len = std::max(max_len, s.length);
+        }
+        for (const auto& [r, c] : chains) {
+            if (c.second < 2) continue;
+            ++multi;
+            bool any_long = false;
+            for (const auto& [id, s] : tunnels) if (root(id) == r && s.length >= 200) any_long = true;
+            if (c.first >= 200 && !any_long) ++missed;
+        }
+        std::printf("[tunnel straight grade] %s: %zu tunnel stretches (%zu profiled, longest %.1f m), %zu now on one straight grade (max |grade| %.4f), max |dz| vs the DEM floor %.2f m; %zu chains of several tunnel stretches, %zu of them >= 200 m with no stretch >= 200 m\n",
+            pbf, tunnels.size(), profiled, max_len, straight, max_grade, max_delta_m, multi, missed);
+        for (const auto& [id, s] : tunnels) if (s.length >= 100)
+            std::printf("    way %lld ref %u: %.1f m, %s, max |dz| %.2f m\n", static_cast<long long>(id.first), id.second, s.length, s.straight ? "straight grade" : "DEM floor", s.delta);
     }
 }

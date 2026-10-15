@@ -2238,7 +2238,8 @@ rejected.
   A function of the entry's own way and the DEM along it: tile-invariant. Owner question Q1 (deep tunnels) is open: a
   tunnel at least `tunnel_chord_min_length_m` long takes the straight chord between its two portal samples (a constant
   grade along the curved reference; skipped when the chord exceeds the grade bound) instead. The served value is 0
-  (never), the game's rule; curved and sloped tunnels work in both modes (test `[tunnel]`).
+  (never), the game's rule; curved and sloped tunnels work in both modes (test `[tunnel]`). Superseded by D52: served
+  200 m from de.json.
 - A tunnel profile is never carved (`terrain_carve` skips tunnel entries), never paints grip (`envelope_road_segments`
   skips it) and stays a `Tunnel` junction approach. The validator certifies TunnelFloor profiles at the outer option
   bounds (30 %, 20 m), accepts a tunnel profile only as TunnelFloor and a Tunnel approach with one.
@@ -2329,6 +2330,33 @@ carved, not the reverse (terrain migration phase 6).**
   (B8 at s ~ 2852 / 4453 / 5261) and the DEM-masking decision wait for the store.
 - Not done here: the render `ClassWindow` from terrain.class (slice 11), the junction / carve census of section 12 on the
   home tiles.
+
+**D52. Long tunnels follow one straight grade between their portals (owner ruling 2026-10-15).**
+- Ruling (racing_game PR #5, asked "should long tunnels follow the straight line between their portals, and above what
+  length?"): "long tunnels should follow straight lines... for now". Above-ground roads first; the rule may be revisited.
+- The served completion takes D47's chord mode: a tunnel stretch whose fitted reference is at least
+  `RoadCompletionOptions::tunnel_chord_min_length_m` long gets one constant grade between its two portal samples (the
+  DEM at the stretch ends, the anchors D47's floor already starts and ends on), fitted with start and end grade equal to
+  that grade, so the profile is a single straight grade along the curved OSM reference. A grade over the 30 % tunnel
+  bound falls back to the DEM floor. Shorter tunnels and underpasses keep the DEM floor bit for bit.
+- The threshold is data: `tunnel.straight_grade_min_length_m` in `data/road_rules/de.json` (`TunnelRules`, integer
+  metres 0..100000, 0 = never), served 200 m; `served_road_completion_options()` reads it, the struct default stays 0.
+  200 m: cut-and-cover underpasses and short galleries under a road or railway are well below it, the deep tunnels the
+  migration plan names (300 to 540 m) are above it. A guess, not a measurement; the owner may move it.
+- Tile invariance: the threshold is compared with the whole stretch's reference length and the portals are the stretch's
+  own ends, so the outcome is a function of the stretch and the DEM along it (D47's argument unchanged). Test
+  `[tunnel][invariance]`: a 450 m curved, sloped tunnel across a tile edge (150 m of it in the west tile) is identical
+  from both tiles; controls: a clipped-length rule would serve the west tile the DEM floor (35.6 m apart), and the
+  west tile graph as context gives another reference.
+- Limit: the rule is per stretch. A long tunnel split into several OSM ways (or stretches at an interior junction) is
+  judged piece by piece, and its interior joins sit at the DEM height there. Both fixtures have no such chain of 200 m
+  or more (hoechst_a66: one chain of several tunnel stretches, shorter); a chain rule would need a bounded walk with its
+  own stage-2 dependencies, like D48.
+- Effect: the fixture tunnels are all under 200 m (frankfurt_hoechst longest 17.8 m, hoechst_a66 57.0 m), so no served
+  byte of the fixtures and no golden changes; the de.json bytes (SHA `2a5997c5...c4e4`) and the config text
+  (`tunnel-floor=.../chord:200`) move the roads.geom release id and every id built on it. The structure scene's 308 m
+  and 250 m tunnels change: the phase-3a mesh pins of `structure_scene` (.holed, .sep) were regenerated with the
+  game's mesh code (refgen, 945455a) and the ported code matches them.
 
 ---
 

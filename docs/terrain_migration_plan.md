@@ -454,7 +454,7 @@ Phases 1-3 and 6 are independent of each other once phase 2's ticket type exists
 5. **Adapter location.** Keep the `ITerrainSource` adapter in geo2map's opt-in physics_sim bridge, as G2M-001 already decided and this plan assumes? The alternative is to move it physically into racing_game, as the brief's wording suggests.
 
 ## Owner answers (2026-10-12)
-- Q1 long tunnels: NOT decided. Owner will test tricky Frankfurt cases later, incl. a tunnel with significant turns and slopes. Phase 4 must handle curved, sloped tunnels; keep the straight-fit threshold configurable and do not lock in either option until those tests run.
+- Q1 long tunnels: decided 2026-10-15 on racing_game PR #5: "long tunnels should follow straight lines... for now"; served as D52 (de.json `tunnel.straight_grade_min_length_m` 200 m). Earlier note: NOT decided. Owner will test tricky Frankfurt cases later, incl. a tunnel with significant turns and slopes. Phase 4 must handle curved, sloped tunnels; keep the straight-fit threshold configurable and do not lock in either option until those tests run.
 - Q2 bridge walk: 200 m.
 - Q3 release-id bumps: three (phases 4 and 5 stay separate).
 - Q4 tunnel roofs: geo2map serves them.
