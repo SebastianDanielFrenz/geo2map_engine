@@ -9,6 +9,7 @@
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/terrain_carve.h"
+#include "g2m/layer/terrain_class.h"
 #include "g2m/server/server.h"
 
 #include <string>
@@ -25,22 +26,24 @@ namespace g2m {
 struct BuiltinTerrainDerivers {
     ElevBaseDeriver elev;
     TerrainHeightDeriver height;
-    // PLAN.md G2.5: TerrainClassDeriver for g2m.terrain.class goes here,
-    // appended last in ordered() (its input is g2m.src.landcover, a raw
-    // layer, so ordering relative to elev/height does not matter, but a
-    // fixed slot keeps this struct's layout stable across increments).
-
     RoadGraphDeriver roads;
     RoadGeomDeriver geometry;
     // Street fidelity P2 slice 9: g2m.terrain.carved (reads elev.base and roads.geom; coverage follows elev.base).
     TerrainCarvedDeriver carved;
+    // Street fidelity P2 slice 10 (terrain migration phase 6, G-5): g2m.terrain.class (reads elev.base, roads.geom and
+    // src.landcover; coverage follows elev.base).
+    TerrainClassDeriver classes;
     // Explicit opt-in preserves existing terrain-only release identities. The carved layer implies both road layers
-    // (one release, one geometry: design 6.1).
-    std::vector<const IDeriver*> ordered(bool include_roads = false, bool include_geometry = false, bool include_carved = false) const {
+    // (one release, one geometry: design 6.1); the class layer implies the carved layer too (its ownership is the
+    // carve's), while a carved-only release keeps its slice-9 identity (D49).
+    std::vector<const IDeriver*> ordered(bool include_roads = false, bool include_geometry = false, bool include_carved = false,
+                                         bool include_classes = false) const {
+        include_carved = include_carved || include_classes;
         std::vector<const IDeriver*> result{&elev, &height};
         if (include_roads || include_geometry || include_carved) result.push_back(&roads);
         if (include_geometry || include_carved) result.push_back(&geometry);
         if (include_carved) result.push_back(&carved);
+        if (include_classes) result.push_back(&classes);
         return result;
     }
 };
@@ -52,6 +55,6 @@ struct BuiltinTerrainDerivers {
 // calling make_local_release() if the caller needs otherwise.
 LocalReleaseParams builtin_local_release_params(std::string scope, const BuiltinTerrainDerivers& derivers,
                                                 std::vector<ReleaseSource> sources, bool include_roads = false, bool include_geometry = false,
-                                                bool include_carved = false);
+                                                bool include_carved = false, bool include_classes = false);
 
 } // namespace g2m

@@ -8,8 +8,8 @@ Back to [pipeline overview](README.md). Code: `include/g2m/layer/{terrain_layers
 |---|---|---|---|---|---|
 | `g2m.elev.base` | 1 | 0 | 1 (SrcElev) | `g2m.src.elev.dgm1` (the one level-2 ancestor tile) | `g2m.elev.base/1 dgm1-only` |
 | `g2m.terrain.height` | 1 | 0 to 6 | 1 (SrcElev) | L0: `g2m.elev.base` same key. L1 to L6: the 4 children of the same layer one level down | `g2m.terrain.height/2 L0-passthrough-of-elev.base; L1-L6 mean-of-4 half-even pyramid` |
-| `g2m.terrain.carved` | 1 | 0 to 6 | 1 (SrcElev) | L0: `g2m.elev.base` 3 x 3 neighbourhood + `g2m.roads.geom` L2 tiles within 192 m. L1 to L6: the 4 children of the same layer | `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 junction=D42 carve=<sha256>; L1-L6 mean-of-4 half-even` ([format](../formats/terrain_carved.md)) |
-| `g2m.terrain.class` | 1 | 0 to 6 (declared) | 2 (SrcLandcover) | none, **no deriver** | none |
+| `g2m.terrain.carved` | 1 | 0 to 6 | 1 (SrcElev) | L0: `g2m.elev.base` 3 x 3 neighbourhood + `g2m.roads.geom` L2 tiles within 192 m. L1 to L6: the 4 children of the same layer | `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=8 radius=192 junction=D42 carve=<sha256>; L1-L6 mean-of-4 half-even` ([format](../formats/terrain_carved.md)) |
+| `g2m.terrain.class` | 1 | 0 to 6 | 7 (TerrainClass) | L0: the carved L0 inputs + `g2m.src.landcover` L2 tiles holding any of its nodes. L1 to L6: the 4 x 4 same-layer tiles of level L-1 around the children (D49) | `g2m.terrain.class/1 nodes=257 L0 carve-ownership ...; L1-L6 rank-max 3x3 centre-then-row-major window=4x4` ([format](../formats/terrain_class.md)) |
 
 ```mermaid
 flowchart TD
@@ -27,8 +27,15 @@ flowchart TD
   EB -->|"3 x 3 neighbourhood"| C0
   RG --> C0
   C0 -->|"mean of 4, half-even"| C1
+  LC["g2m.src.landcover L2"]
+  K0["terrain.class L0: 257 x 257 nodes, carve ownership"]
+  K1["terrain.class L1 to L6: rank-max 3 x 3"]
+  EB --> K0
+  RG --> K0
+  LC --> K0
+  K0 --> K1
   classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
-  class SRC,EB,L0,L1,L2,L6,RG,C0,C1 done;
+  class SRC,EB,L0,L1,L2,L6,RG,C0,C1,LC,K0,K1 done;
 ```
 
 ## Lattice and units
@@ -42,7 +49,7 @@ flowchart TD
 
 - No road carving in `terrain.height`: it serves raw DGM1 heights. The carved heights are the separate opt-in layer `g2m.terrain.carved` (street fidelity P2 slice 9; section 2.4 of the [overview](README.md), [format](../formats/terrain_carved.md)), which no consumer reads yet.
 - No blending with other elevation sources, no halo. (PLAN.md 6.1 describes both; the code does not.)
-- No `terrain.class` tiles. Land colour and grip in the game come from `g2m.src.landcover` and `g2m.src.osm` directly, see [client_side.md](client_side.md).
+- `terrain.class` tiles exist (opt-in, [format](../formats/terrain_class.md)) but no consumer reads them yet: land colour and grip in the game still come from `g2m.src.landcover` and `g2m.src.osm` directly, see [client_side.md](client_side.md). The physics bridge can already fill from them (class mode).
 
 ## Consumers
 

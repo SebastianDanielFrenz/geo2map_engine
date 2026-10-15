@@ -18,6 +18,14 @@ Result<std::vector<InputTileRef>> road_dem_dependencies(const RoadGraph& graph,
 // within 32 m of the far end lies in the far end's roads.graph tile, and the walk's DEM reads lie within 65 m of the
 // span's end. Sorted and unique; a way whose attributes do not resolve is not a bridge here (the anchor declines on
 // it anyway). One hop only: the far end's own neighbours are complete in its tile, no chain is followed.
+// Decision D48 (terrain migration phase 5): the completion tier's abutment walk starts at a node of such a bridge way
+// (an end node of a tile entry, or the far end of an accepted incident bridge, D47) and reads nodes and DEM within
+// its path budget of that node, through further bridges and over ground. `walk_margin_mm` > 0 adds, around EVERY node
+// of every listed bridge way, the elev.base tiles and the roads.graph tiles intersecting the square of that half-width
+// (every way incident to a node within the square lies in that node's roads.graph tile). The deriver passes
+// kRoadBridgeWalkMarginMm; 0 is the pre-D48 set (tests, negative controls). No further discovery stage is needed: the
+// walk's start nodes are nodes of the stage-2 bridges, which the stage-1 context already names.
+inline constexpr std::int64_t kRoadBridgeWalkMarginMm = 205000;
 Result<std::vector<InputTileRef>> road_bridge_dependencies(const RoadGraph& tile_graph, const RoadGraph& context,
-    geo::UtmZone zone, const TileKey* exclude = nullptr);
+    geo::UtmZone zone, const TileKey* exclude = nullptr, std::int64_t walk_margin_mm = kRoadBridgeWalkMarginMm);
 }

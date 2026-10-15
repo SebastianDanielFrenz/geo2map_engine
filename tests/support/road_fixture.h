@@ -89,7 +89,9 @@ struct RoadGeomInputs {
     g2m::RoadGraph context;
     std::vector<g2m::TileKey> dem_keys;
 };
-inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world, const g2m::TileKey& key, bool bridge_far_end = true) {
+// `walk_margin_mm`: the D48 squares of road_bridge_dependencies (0 = the pre-D48 stage 2, a negative control).
+inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world, const g2m::TileKey& key, bool bridge_far_end = true,
+        std::int64_t walk_margin_mm = g2m::kRoadBridgeWalkMarginMm) {
     using namespace g2m;
     RoadGeomInputs in;
     auto tile = select_road_graph_tile(world, key); if (!tile) return tile.error();
@@ -107,7 +109,7 @@ inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world,
     };
     auto context = merge(); if (!context) return context.error();
     if (bridge_far_end) {
-        const auto bridges = road_bridge_dependencies(in.tile.graph, *context, key.zone, &key); if (!bridges) return bridges.error();
+        const auto bridges = road_bridge_dependencies(in.tile.graph, *context, key.zone, &key, walk_margin_mm); if (!bridges) return bridges.error();
         for (const auto& d : *bridges) (d.layer == kRoadGraphLayer ? graph_keys : dem_keys).insert(d.key);
         context = merge(); if (!context) return context.error();
     }
@@ -140,6 +142,8 @@ struct GeomOptions {
     std::function<double(double, double)> height_m = {};      // replaces the flat 100 m DEM
     g2m::RoadCompletionOptions completion = {};
     g2m::RoadCompletionStats* stats = nullptr;
+    // Called on the built tile with the tile's own DEM sampler before it is returned (e.g. the game's completion code).
+    std::function<void(g2m::RoadGeomTile&, const g2m::RoadDemSampler&)> post = {};
 };
 inline g2m::Result<g2m::RoadGeomTile> geometry_in_tile_with(const g2m::RoadGraph& world, const g2m::TileKey& key, const GeomOptions& o) {
     using namespace g2m;
@@ -149,8 +153,9 @@ inline g2m::Result<g2m::RoadGeomTile> geometry_in_tile_with(const g2m::RoadGraph
     for (std::size_t i = 0; i < heights.size(); ++i) { heights[i].key = in->dem_keys[i]; fill_dem(heights[i], o.height_m); views.push_back(&heights[i]); }
     const auto dem = RoadDemSampler::make(views); if (!dem) return dem.error();
     RoadProfileLimits limits; limits.reference.allow_curvature_exceptions = true;
-    if (!o.with_context) return build_road_geom_tile(in->tile, *dem, limits, nullptr, builtin_road_rules_de(), o.completion, o.stats);
-    return build_road_geom_tile(in->tile, *dem, limits, &in->context, builtin_road_rules_de(), o.completion, o.stats);
+    auto tile = build_road_geom_tile(in->tile, *dem, limits, o.with_context ? &in->context : nullptr, builtin_road_rules_de(), o.completion, o.stats);
+    if (tile && o.post) o.post(*tile, *dem);
+    return tile;
 }
 // The tile RoadGeomDeriver serves (slice 8): context graph, the served completion options.
 inline g2m::Result<g2m::RoadGeomTile> served_geometry_in_tile(const g2m::RoadGraph& world, const g2m::TileKey& key,

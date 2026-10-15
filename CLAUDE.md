@@ -195,8 +195,26 @@ geo2map_engine/
     ticket.h                         Priority (Gate, Physics, Prefetch, Render, Warm), TileState
                                       (Pending/Ready/Absent/Failed/Cancelled), Ticket<T> (state()/value()
                                       lock-free reads, wait_for for tools, cancel = drop of the last copy)
-    products.h                       Outcome<T>, RoadSegmentsTile, RawTile, phase-3 payload placeholders
-                                      (StructureSet, RoadRibbonTile, BuildingSet)
+    products.h                       Outcome<T>, RoadSegmentsTile, RawTile, ProductOptions; the phase-3
+                                      payloads (StructureSet, RoadRibbonTile, BuildingSet) are the types below
+    road_structures.h                (phase 3a) RoadDeck (incl. start_ref), road_deck_height, build_road_decks
+                                      (bridge / tunnel-floor decks + inferred tunnel roofs, client-side until
+                                      served, owner Q4; + approach decks of grade-separated crossings under the
+                                      caller's RoadSeparation), StructureSet + build_structure_set(RoadGeomTile)
+    road_ribbons.h                   (phase 3a) RoadRibbonVertex/RoadRibbonTile, build_road_ribbons(geometry,
+                                      key, ground fn, lift) incl. junction surfaces and markings,
+                                      add_junction_surfaces, road_priority_rank (StVO 18(3) rank)
+    buildings.h                      (phase 3b) Building/BuildingPoint/BuildingGround/BuildingParams,
+                                      extract_buildings, BuildingSet + build_building_set(OsmTile, ground)
+    view_streamer.h                  (phase 3b) render LOD around a focus: ViewChunk (mesh + class ids, carve
+                                      state, session origin, consumer rgba), ViewSource (lod params, lookups,
+                                      carve state fn, optional colour hook, road LOD), chunk_window_carve,
+                                      select_view_keys, build_view_chunks, build_static_view, speed/urgency
+                                      helpers, changed_road_lod_levels, ViewStreamer (one worker, one ViewDiff in
+                                      flight, adds-before-removals contract in the header)
+    ring_streamer.h                  (phase 3b) RingStreamer(Config): level-2 tile tiers of ring products (road
+                                      ribbons, buildings): jobs nearest first (behind penalty), next_job() any
+                                      thread, accept(), frame() -> shown/downgraded/evicted changes
     terrain_service.h                TerrainService (terrain migration phase 2): open (stores, layer opt-ins,
                                       release, in-process server, ONE worker pool), async height/road_geom/
                                       road_segments/source_osm/raw_tile/structures/road_ribbons/buildings ->
@@ -204,7 +222,10 @@ geo2map_engine/
                                       resident tiles, warm() -> WarmJob, physics_fetch() -> PhysicsFetch
                                       (IHeightTileFetch; blocks on the caller, which is a loader thread),
                                       product<T>(kind, key, ...) + ProductContext for caller producers
-  src/world/                          g2m_world implementation: terrain_service.cpp, job_scheduler.{h,cpp}
+  src/world/                          g2m_world implementation: road_structures.cpp, road_ribbons.cpp (phase 3a,
+                                      ported from racing_game 0c027dc + 945455a, libm -> det), buildings.cpp,
+                                      view_streamer.cpp, ring_streamer.cpp (phase 3b, from racing_game 5a3baed),
+                                      terrain_service.cpp, job_scheduler.{h,cpp}
                                       (internal: priority queue, per-job registry, interest counting, nested
                                       join / inline run), tile_cache.h (internal: byte-weighted LRU of
                                       decoded tiles), tile_fetch.cpp, height_sampler.cpp,
@@ -463,7 +484,7 @@ geo2map_engine/
                                       Dijkstra (node and point), route validators and GraphBuilder; route_scenes.h = the
                                       synthetic cross and random restricted grids
     golden/                           golden.h/.cpp + golden_g1.cpp + golden_g1c.cpp (g2m_golden, milestone G1c I6),
-                                      dump_main.cpp (g2m_golden_dump [g0|g1|g1c]), test_golden.cpp (g2m_golden_tests)
+                                      dump_main.cpp (g2m_golden_dump [g0|g1|g1c|...|g3c]), test_golden.cpp (g2m_golden_tests)
     fuzz/                             libFuzzer targets for g2m_decode (fuzz_zip, fuzz_tiff, fuzz_pbf) over a
                                       fuzz-instrumented copy of G2M_DECODE_SOURCES; same G2M_BUILD_FUZZERS gate and
                                       CTest `fuzz` label as fuzz_formats (WSL clang legs)
@@ -542,6 +563,29 @@ end of `CMakeLists.txt`):
   `test_server.cpp` "concurrent cold requests derive each tile exactly once").
   `g2m_terrain_service_bench` (tests/world/bench_terrain_service.cpp, not a
   CTest test): cold-store throughput, serial server vs pool vs warm.
+  Phase 3a (`road_structures`, `road_ribbons`): tests `test_road_meshes.cpp`
+  (tags `[road_structures]`, `[road_ribbons]`, `[junction]`): deck and ribbon
+  bytes of 55 cases (`road_mesh_test_data.h`: three synthetic scenes incl. a
+  motorway overpass, every tile of both OSM fixtures, smooth and holed ground,
+  grade separation off and on) equal `road_mesh_pins.inc`, recorded from
+  racing_game 945455a's own code (the cases without separation are unchanged
+  from 0c027dc) (`refgen/extract_mesh_ref.sh` +
+  `refgen/refgen_meshes.cpp`, target `g2m_world_mesh_refgen` only with
+  `-DG2M_WORLD_MESH_REFGEN_DIR=<dir>`), plus the game's two junction-surface
+  tests. g2m_world_tests links `g2m_decode` and reads the OSM fixtures.
+  Phase 3b (`buildings`, `view_streamer`, `ring_streamer`): tests
+  `test_buildings.cpp` (`[buildings]`; synthetic tag scene + every fixture tile
+  with buildings == `building_pins.inc`), `test_view_streamer.cpp`
+  (`[view_streamer]`; static builds, key selection, urgency order and every step
+  of a streamer drive incl. velocity, road-LOD and view-distance changes ==
+  `view_pins.inc`, 1 vs 3 threads, colour hook, cancel), both recorded from
+  racing_game 5a3baed's own C++ (`refgen/extract_view_ref.sh` +
+  `refgen/refgen_view.cpp`, target `g2m_world_view_refgen` only with
+  `-DG2M_WORLD_VIEW_REFGEN_DIR=<dir>`); `test_ring_streamer.cpp`
+  (`[ring_streamer]`) replays `ring_pins.inc`, recorded by running the game's
+  road_stream.gd / building_stream.gd headless in Godot over 8 focus steps
+  (`refgen/extract_ring_ref.sh` + `refgen/ring_harness.gd`; job order within
+  1 m because GDScript works in float32), plus reject/downgrade/evict cases.
 - `g2m_ps_bridge` (STATIC, `bridges/physics_sim/`, PLAN.md R2.2 section 1b,
   G5/G6): `src/version.cpp`, `src/g2m_terrain_source.cpp`; PUBLIC `ps_core`
   (physics_sim's own target, embedded via `G2M_PS_SOURCE_DIR` - see "CMake
@@ -1049,6 +1093,41 @@ without it unchanged. Decisions D36-D41 in `docs/street_fidelity/p2_junction_des
 (T12-T15, T17, T19, smoothing parity, server + 4-worker bake), fixture `tests/support/carve_fixture.h` (`CarveFixture`,
 `fixture_world`, `carve_tilted_dem`); golden `g3d` (`tests/golden/golden_g3d.cpp`, `testdata/golden/g3d_golden.txt`, 4 tiles,
 1 vs 4 workers checked, Windows = Linux).
+
+Terrain migration phase 4 (design D47, 2026-10-15): `roads.geom` encoding 8 (`kRoadGeomEncoding` 8,
+`LayerEncoding::RoadGeomTunnels`; the byte layout of 7, which still decodes and is written on request without tunnel floors).
+`complete_road_profiles` step 2a builds tunnel floors (`ProfileProvenance::TunnelFloor` = 4; the game's DEM-floor step,
+options `tunnel_floors`, `tunnel_spacing_m` 5, `tunnel_max_grade` 0.30, `tunnel_min_radius_m` 20,
+`tunnel_chord_min_length_m` 0 = never, owner Q1 open); tunnel profiles are never carved, never paint grip and stay `Tunnel`
+approaches. `bridge_anchor_reuse`: the end plane of an accepted incident bridge stretch (recomputed tile-invariantly, one
+level) wins over the base anchor; a ground stretch at a bridging node with no accepted bridge ends on the DEM plane, and
+falls back to the base anchors when those planes leave no cubic (`ground_base_fallback`). `Walk::anchor` tries every incident
+bridge edge. Config text `enc=8 ... tunnel-floor=5/0.29999999999999999/20/chord:0 bridge-anchor-reuse=1` (release id bump);
+terrain.carved names `roads.geom enc=8`. Tests `[D47]` (test_road_completion.cpp, against the game's live completion in
+`tests/support/road_completion_reference.h` `complete_road_profiles_live`; roadcmp on both fixtures 0 game-only entries).
+
+Terrain migration phase 5 (design D48, 2026-10-15): the completion's abutment walk is served at 200 m
+(`kRoadCompletionMaxAbutmentPathM` 201.5); `road_bridge_dependencies(..., walk_margin_mm = kRoadBridgeWalkMarginMm)` (205 m)
+adds, in the second discovery stage, the elev.base and roads.graph tiles of a 205 m square around every node of every bridge
+incident to the tile's nodes (0 = the pre-D48 set). Config text `completion-abutment=32/200 ... bridge-walk-margin=205`
+(release id bump #2). Tests `[D48]` (fence, 60/200/500 m walks, fixture cost) in test_road_completion.cpp.
+
+Terrain migration phase 6 (served carve readiness, designs D49-D51, 2026-10-15): G-1 / D50: `IDeriver::rejected_input_is_absent(ref)`,
+`InputTile::rejected`, `rejected_input_marker(ref)` (server.cpp): a roads.geom input of terrain.carved / terrain.class that fails to
+resolve counts as absent (no roads) and its marker goes into the output header inputs; errors are not cached. Slice 10 / D49:
+`g2m.terrain.class` v1 L0-L6, body encoding 7 (`include/g2m/layer/terrain_class.h`, `src/layer/terrain_class.cpp`,
+`docs/formats/terrain_class.md`): 257 x 257 nodes at integer metres, planes land_class / surface / role (`TerrainRole`) / rank; L0
+from the carve ownership (`CarveModel::classify`) over ESA land cover, L1-L6 rank-max 3 x 3 over a 4 x 4 window of L-1 tiles.
+Opt-in (`include_classes` in `builtin_local_release_params` / `BuiltinTerrainDerivers::ordered`, bake `--layers g2m.terrain.class`,
+implies carved + roads); release ids without it unchanged. D51 / G-2/G-3/G-5: `FetchResult::classes`, `TransportHeightTileFetch(...,
+layer, class_layer)`, `LoaderConfig::require_classes`, `ResidentHeightSet` entries carry the class tile (4-arg install/find),
+`include/g2m/phys/fill_physics_classes.h` (cell centre -> class node, full `SurfaceIdTable` resolve), bridge
+`ClassSurfaceConfig` ctor of `G2mTerrainSource` (Snapshot prefetch compares the class tile identity). G-6:
+`include/g2m/layer/road_underpass.h` `road_underpass_census` (dip = chord over +-60 m minus profile at grade-separated crossings),
+`g2m_road_probe --underpasses`. Tests: `tests/layer/test_terrain_class.cpp` ([terrain_class]), G-1 case in test_terrain_carve.cpp,
+`tests/layer/test_road_underpass.cpp` ([underpass]), `tests/phys/test_class_mode.cpp` ([classes]),
+`bridges/physics_sim/tests/test_carved_prefetch.cpp` ([classes], bridge leg); golden `g3c` (`tests/golden/golden_g3c.cpp`,
+`testdata/golden/g3c_golden.txt`). Open: render `ClassWindow` from terrain.class, the home-region G-6 run.
 
 Junction gradient (design D42, after slice 9): the junction surface blends v_i = b_i + phi_i (p_i - b_i) + psi_i (z_i - p_i)
 instead of z_i (b base, p paved band only, z full approach surface; `junction_approach_heights` returns all three), with

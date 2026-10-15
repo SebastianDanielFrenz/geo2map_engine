@@ -13,6 +13,7 @@
 # ps_core's operator new").
 add_executable(g2m_bridge_tests
   test_prefetch_snapshot.cpp
+  test_carved_prefetch.cpp
   test_smoke.cpp
   test_g2m_terrain_source.cpp
   test_g2m_terrain_source_roads.cpp

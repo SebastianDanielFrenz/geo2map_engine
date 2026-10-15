@@ -6,9 +6,13 @@
 #include <optional>
 namespace g2m {
 inline constexpr std::string_view kRoadGeomLayer = "g2m.roads.geom";
+// Encoding 8 (terrain migration phase 4, decision D47): the byte layout of encoding 7, with provenance 4 (TunnelFloor)
+// allowed in section 7 and a profile on a tunnel stretch carrying it. The deriver writes 8.
+inline constexpr std::uint16_t kRoadGeomEncoding = 8;
 // Encoding 7 (street fidelity P2 slice 8): encoding 6 plus junctions (section 5), furniture (section 6) and the
-// profile provenance (section 7). The deriver writes 7.
-inline constexpr std::uint16_t kRoadGeomEncoding = 7;
+// profile provenance (section 7, values 0..3). Still decoded, and written when RoadGeomTile::encoding asks for it (a
+// tile without tunnel floors).
+inline constexpr std::uint16_t kRoadGeomEncodingJunctions = 7;
 // The P1 body format (cross-sections and features, no junctions, furniture or provenance). Still decoded, and written
 // when RoadGeomTile::encoding asks for it (a tile without junctions, furniture and completed profiles): the
 // compatibility tests reproduce the encoding-6 bodies with it. The deriver never writes it.
@@ -47,6 +51,7 @@ enum class ProfileProvenance : std::uint8_t {
     Retry = 1,               // 20 m samples, 16384 iterations, same limits (game parity)
     BridgeCompleted = 2,     // span re-fitted between abutments at relaxed limits
     GroundCompleted = 3,     // relaxed ground fit of a stretch the strict pass declined
+    TunnelFloor = 4,         // tunnel stretch fitted to the DEM floor (or the portal chord), encoding 8 only (D47)
 };
 struct RoadProfileOrigin {
     ProfileProvenance provenance = ProfileProvenance::Strict;
@@ -61,10 +66,27 @@ struct RoadCompletionOptions {
     double retry_spacing_m = 20;          // step 1: the game's retry
     int retry_iterations = 16384;
     double abutment_ground_m = 32;        // ground path to a support point (game: 32 m)
-    double abutment_path_m = 60;          // total walk, bridge edges included (design D25: DEM and graph locality)
+    double abutment_path_m = 200;         // total walk, bridge edges included (D25 locality; 200 m since D48, owner Q2)
     double ground_spacing_m = 40;         // step 3 samples
     double ground_ramp_m = 32;            // step 3 anchor ramps
+    // Tunnel floors (D47, the game's tunnel step): DEM samples every tunnel_spacing_m along the reference, fitted at
+    // tunnel_max_grade / tunnel_min_radius_m with the clamped first/last sample secants as end grades. A tunnel at
+    // least tunnel_chord_min_length_m long is fitted to the straight chord between its two portal samples instead (the
+    // DEM above a deep tunnel is the mountain, not the floor); 0 = never (every tunnel follows the DEM, the game's
+    // rule). Owner question Q1 is open: the threshold is configuration, the served default keeps the game's rule.
+    bool tunnel_floors = true;
+    double tunnel_spacing_m = 5;
+    double tunnel_max_grade = 0.30;
+    double tunnel_min_radius_m = 20;
+    double tunnel_chord_min_length_m = 0;
+    // D47: at a bridge end node the end plane of an accepted bridge stretch ending there (its height, its end grade
+    // along its heading) takes precedence over the walk, as the game's anchor map does; the walk tries every incident
+    // bridge edge in order, not only the first.
+    bool bridge_anchor_reuse = true;
 };
+// The outer bounds of the tunnel options; the validator certifies a TunnelFloor profile against them.
+inline constexpr double kRoadCompletionMaxTunnelGrade = 0.30;
+inline constexpr double kRoadCompletionMinTunnelRadiusM = 20;
 // The completion options of the served roads.geom tiles: the tier on, every value at its default. RoadGeomDeriver
 // builds with them and writes each value into its config hash text; the goldens and the tests that mean "what the
 // deriver serves" use this function too.
@@ -76,7 +98,10 @@ struct RoadCompletionStats {
     std::size_t ground_candidates = 0, ground_completed = 0, ground_failed = 0;
     std::size_t ground_bridge_anchored = 0;  // completed stretches with at least one end on a bridge abutment plane
     std::size_t ground_grades_eased = 0;     // completed only after easing both end grades toward the chord (D43)
-    std::size_t tunnel_skipped = 0;
+    std::size_t ground_base_fallback = 0;    // completed on the base anchors after the accepted bridge planes left no cubic (D47)
+    std::size_t tunnel_candidates = 0, tunnel_completed = 0, tunnel_chord = 0, tunnel_failed = 0;
+    std::size_t bridge_anchor_reused = 0;    // end nodes whose plane came from an accepted bridge stretch (D47), once per node
+    std::size_t walk_other_side = 0;         // bridging nodes whose walk found support only away from a later bridge edge (D47)
     std::size_t strict_anchors = 0;          // bridging end nodes that took the strict pass's anchor (D30), once per node
 };
 // Every graph stretch has exactly one accepted profile or explicit decline.
@@ -89,8 +114,8 @@ struct RoadGeomTile {
     // (adjust_features_for_junctions), which only the owner tile holds, so a consumer applies them with the junctions
     // it has loaded. Sorted by (entry_index, station bits, node_id).
     std::vector<ProfileFeature> features;
-    // 7 for everything built; 6 or 5 for a decoded older body. 6 has no junctions, furniture or origins; 5 also no
-    // cross-sections or features (consumers fall back to the symmetric RoadAttributes::width_mm path).
+    // 8 for everything built; 7, 6 or 5 for a decoded older body. 7 has no tunnel floors; 6 has no junctions, furniture
+    // or origins; 5 also no cross-sections or features (consumers fall back to the symmetric RoadAttributes::width_mm path).
     std::uint16_t encoding = kRoadGeomEncoding;
     // One per entry (design 6.6, section 7 of encoding 7): every built tile has them (all Strict without the
     // completion tier). Empty for a decoded encoding-6/5 body.

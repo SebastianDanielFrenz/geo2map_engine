@@ -5,6 +5,7 @@
 //
 // Test state shared with pool threads is atomics or mutex-guarded, so the file is TSan-clean.
 #include "g2m/world/terrain_service.h"
+#include "g2m/layer/terrain_class.h"
 
 #include "g2m/core/hash.h"
 #include "g2m/layer/road_geom_tile.h"
@@ -254,7 +255,6 @@ TEST_CASE("service: open validates its configuration", "[world][terrain_service]
     };
     CHECK(bad([](auto& c) { c.zone = geo::UtmZone{0, geo::Hemisphere::North}; }).find("zone") != std::string::npos);
     CHECK_FALSE(bad([](auto& c) { c.e0_m = 1500; }).empty());
-    CHECK_FALSE(bad([](auto& c) { c.layers.classes = true; }).empty());
     CHECK_FALSE(bad([](auto& c) { c.layers.roads = false; c.layers.geometry = true; }).empty());
     CHECK_FALSE(bad([](auto& c) { c.stores.source_scope.clear(); }).empty());
     CHECK_FALSE(bad([](auto& c) {
@@ -295,6 +295,30 @@ TEST_CASE("service: release id and coverage match the plain local release", "[wo
     auto carved = w.open(cc);
     CHECK(carved->height_layer() == kTerrainCarvedLayer);
     CHECK(carved->release_id() != svc->release_id());
+
+    // The class opt-in (phase 6, G-5) adds terrain.class and, implied, terrain.carved; height() follows `carved`.
+    TerrainServiceConfig ck = w.config("derived_classes");
+    ck.layers.classes = true;
+    auto classes = w.open(ck);
+    CHECK(classes->has_layer(kTerrainClassLayer));
+    CHECK(classes->has_layer(kTerrainCarvedLayer));
+    CHECK(classes->height_layer() == kTerrainHeightLayer);
+    CHECK(classes->release_id() != carved->release_id());
+    auto manifest_classes = make_local_release(**sources, builtin_local_release_params(kScope, derivers, {}, true, true, false, true));
+    REQUIRE(manifest_classes);
+    CHECK(classes->release_id() == manifest_classes->rid);
+    const auto c0 = classes->covered_tiles(kTerrainClassLayer, 0);
+    REQUIRE_FALSE(c0.empty());
+    auto ticket = classes->raw_tile(std::string(kTerrainClassLayer), c0.front(), Priority::Render);
+    REQUIRE(ticket.wait_for(kLong));
+    REQUIRE(ticket.state() == TileState::Ready);
+    TerrainClassTile decoded;
+    const auto view = parse_container(ticket.value()->container);
+    REQUIRE(view);
+    CHECK(view->header.layer == kTerrainClassLayer);
+    const auto body = decode_body(view->body);
+    REQUIRE(body);
+    CHECK(decode_terrain_class(*body, c0.front(), decoded));
 }
 
 TEST_CASE("service: concurrent requests for one tile derive it exactly once", "[world][terrain_service][dedup]") {
@@ -780,7 +804,7 @@ TEST_CASE("service: phase-3 products fail until a producer is installed", "[worl
         calls++;
         const auto segs = ctx.road_segments(k);
         if (!segs.ready()) return Outcome<StructureSet>::failed("no roads");
-        return Outcome<StructureSet>::ready(std::make_shared<const StructureSet>(StructureSet{k}), 16);
+        return Outcome<StructureSet>::ready(std::make_shared<const StructureSet>(StructureSet{k, {}}), 16);
     });
     auto a = svc->structures(l2(0, 0), Priority::Render);
     auto b = svc->structures(l2(0, 0), Priority::Prefetch);
@@ -796,7 +820,7 @@ TEST_CASE("service: phase-3 products fail until a producer is installed", "[worl
     // Options are part of the identity of a ribbon/building product.
     svc->set_road_ribbons_producer([&](ProductContext&, const TileKey& k) {
         calls++;
-        return Outcome<RoadRibbonTile>::ready(std::make_shared<const RoadRibbonTile>(RoadRibbonTile{k}), 16);
+        return Outcome<RoadRibbonTile>::ready(std::make_shared<const RoadRibbonTile>(RoadRibbonTile{k, {}, {}}), 16);
     });
     auto r1 = svc->road_ribbons(l2(0, 0), Priority::Render, RibbonOptions{1});
     auto r2 = svc->road_ribbons(l2(0, 0), Priority::Render, RibbonOptions{2});

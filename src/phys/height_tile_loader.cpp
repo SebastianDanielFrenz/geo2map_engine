@@ -13,8 +13,9 @@ namespace g2m::phys {
 
 // ---- TransportHeightTileFetch ----
 
-TransportHeightTileFetch::TransportHeightTileFetch(ITransport& transport, ReleaseId rid, std::string layer)
-    : transport_(transport), rid_(rid), layer_(std::move(layer)) {}
+TransportHeightTileFetch::TransportHeightTileFetch(ITransport& transport, ReleaseId rid, std::string layer,
+                                                   std::string class_layer)
+    : transport_(transport), rid_(rid), layer_(std::move(layer)), class_layer_(std::move(class_layer)) {}
 
 FetchResult TransportHeightTileFetch::fetch(const TileKey& key) {
     const Response response = transport_.send(Request{TileRequest{rid_, layer_, key, std::nullopt}});
@@ -46,10 +47,26 @@ FetchResult TransportHeightTileFetch::fetch(const TileKey& key) {
             h = static_cast<std::int32_t>(v);
         }
     }
-    // TransportHeightTileFetch stays heights-only (PLAN.md G2.5a-grip
+    // TransportHeightTileFetch never provides roads (PLAN.md G2.5a-grip
     // section 3) - roads is always null; provides_roads() (default false)
     // reflects this.
-    return FetchResult{Status::Ok, std::move(tile), nullptr};
+    if (class_layer_.empty()) return FetchResult{Status::Ok, std::move(tile), nullptr};
+
+    // Class mode (G-2/G-5): the same key's class tile, or Internal.
+    const Response class_response = transport_.send(Request{TileRequest{rid_, class_layer_, key, std::nullopt}});
+    const auto* class_tile_response = std::get_if<TileResponse>(&class_response);
+    if (class_tile_response == nullptr || class_tile_response->meta.status != Status::Ok) {
+        return FetchResult{Status::Internal, nullptr, nullptr};
+    }
+    const Result<ContainerView> class_view = parse_container(class_tile_response->container);
+    if (!class_view || class_view->header.layer != class_layer_ || !(class_view->header.key == key)) {
+        return FetchResult{Status::Internal, nullptr, nullptr};
+    }
+    const Result<TileBody> class_body = decode_body(class_view->body);
+    if (!class_body) return FetchResult{Status::Internal, nullptr, nullptr};
+    auto classes = std::make_shared<TerrainClassTile>();
+    if (!decode_terrain_class(*class_body, key, *classes)) return FetchResult{Status::Internal, nullptr, nullptr};
+    return FetchResult{Status::Ok, std::move(tile), nullptr, std::move(classes)};
 }
 
 // ---- DelayedFetch ----
@@ -89,11 +106,12 @@ FetchResult DelayedFetch::fetch(const TileKey& key) {
 namespace {
 enum class Disposition { Ready, Absent, Retry, Fail };
 
-Disposition classify(const FetchResult& r, bool require_roads) {
+Disposition classify(const FetchResult& r, bool require_roads, bool require_classes) {
     switch (r.status) {
     case Status::Ok:
         if (!r.tile) return Disposition::Retry; // 200 without a tile: treat like a 500
         if (require_roads && !r.roads) return Disposition::Retry; // PLAN.md G2.5a-grip section 3: ditto for roads
+        if (require_classes && !r.classes) return Disposition::Retry; // class mode (G-2): ditto for the class tile
         return Disposition::Ready;
     case Status::NotFound:
         return Disposition::Absent;
@@ -208,11 +226,12 @@ void HeightTileLoader::worker_main() {
 
             result.attempts = attempt;
             result.last_status = fr.status;
-            const Disposition d = classify(fr, config_.require_roads);
+            const Disposition d = classify(fr, config_.require_roads, config_.require_classes);
             if (d == Disposition::Ready) {
                 result.outcome = LoadOutcome::Ready;
                 result.tile = std::move(fr.tile);
                 result.roads = std::move(fr.roads);
+                result.classes = std::move(fr.classes);
                 break;
             }
             if (d == Disposition::Absent) {

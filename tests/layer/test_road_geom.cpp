@@ -39,16 +39,21 @@ TEST_CASE("roads.geom round trips complete profiles and explicit declines", "[la
     auto previous = *geometry; previous.encoding = kRoadGeomEncodingPrevious;
     const auto body6 = encode_road_geom(previous); REQUIRE(body6); CHECK(body6->sections.size() == 4);
     CHECK(to_hex(content_hash(*encode_body(*body6))) == "17d9b7c708b1bda9513ae80f8be1255d1f7c7cc1d6977af8e98a24dfd05ee2f9");
+    // Encoding 7 (written on request, no tunnel floor here): unchanged since P2 slice 8.
+    auto junctions7 = *geometry; junctions7.encoding = kRoadGeomEncodingJunctions;
+    const auto body7 = encode_road_geom(junctions7); REQUIRE(body7);
+    CHECK(to_hex(content_hash(*encode_body(*body7))) == "a453aed52159ea3e3bac6ce41c3e98eaaebaeb57f0cc68004cf66e4d6791a618");
     const auto body = encode_road_geom(*geometry); REQUIRE(body);
-    // Encoding 7: sections 1-4 byte for byte the encoding-6 ones, then empty junction and furniture sections and the
-    // provenance of the two entries (count 2, two Strict records).
-    CHECK(to_hex(content_hash(*encode_body(*body))) == "a453aed52159ea3e3bac6ce41c3e98eaaebaeb57f0cc68004cf66e4d6791a618");
+    // Encoding 8 (D47): sections 1-4 byte for byte the encoding-6 ones, then empty junction and furniture sections and
+    // the provenance of the two entries (count 2, two Strict records); only the encoding id differs from encoding 7.
+    for (std::size_t section = 0; section < 7; ++section) CHECK(body->sections[section].data == body7->sections[section].data);
+    CHECK(to_hex(content_hash(*encode_body(*body))) == "3b9bd9c548e078e03c0d919165d99b197c22c0630b7272f50745ecbf4e397720");
     const auto decoded = decode_road_geom(*body); REQUIRE(decoded);
     CHECK(decoded->source == graph);
     CHECK(decoded->entries[0].profile->at(50)->height_m == 100);
     CHECK(decoded->entries[1].decline->message == geometry->entries[1].decline->message);
     CHECK(*encode_body(*encode_road_geom(*decoded)) == *encode_body(*body));
-    CHECK(body->encoding == 7); REQUIRE(body->sections.size() == 7);
+    CHECK(body->encoding == 8); REQUIRE(body->sections.size() == 7);
     for (std::size_t section = 0; section < 4; ++section) CHECK(body->sections[section].data == body6->sections[section].data);
     CHECK(body->sections[4].data.size() == 1); CHECK(body->sections[5].data.size() == 1);
     CHECK(body->sections[6].data == std::vector<std::uint8_t>{2, 0, 0, 0, 0, 0, 0});
@@ -172,8 +177,9 @@ TEST_CASE("roads.geom discovers the far end of an incident bridge in a second st
     CHECK(a.stage2.size() > a.stage1.size());
     CHECK(std::includes(a.stage2.begin(), a.stage2.end(), a.stage1.begin(), a.stage1.end()));
     REQUIRE(a.result);
-    // The east tile holds the bridge itself: its stage 1 is already complete, stage 2 adds nothing.
-    const auto b = run(east, true); CHECK(b.stage2 == b.stage1); REQUIRE(b.result);
+    // The east tile holds the bridge itself: its stage 1 already names the far end; stage 2 adds only the D48 walk
+    // squares (DEM and graph tiles within 205 m of the bridge's nodes).
+    const auto b = run(east, true); CHECK(std::includes(b.stage2.begin(), b.stage2.end(), b.stage1.begin(), b.stage1.end())); REQUIRE(b.result);
     const auto entry_of = [](const DeriveResult& r) {
         const auto geometry = decode_road_geom(*decode_body(r.body)); REQUIRE(geometry);
         for (const auto& e : geometry->entries) if (e.way_id == 10) return e;

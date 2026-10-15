@@ -9,9 +9,11 @@
 
 #include "g2m/core/hash.h"
 #include "g2m/layer/carve_params.h"
+#include "g2m/layer/deriver.h"
 #include "g2m/layer/height_tile.h"
 #include "g2m/layer/road_surface.h"
 #include "g2m/layer/terrain_carve.h"
+#include "g2m/layer/terrain_class.h"
 #include "g2m/layer/terrain_layers.h"
 #include "g2m/layer/tile_container.h"
 #include "g2m/layer/src_elev.h"
@@ -769,7 +771,7 @@ TEST_CASE("carve: layer description, inputs and config text", "[layer][carve]") 
     for (int l = 0; l <= 6; ++l) CHECK(has_level(d.levels, l));
     CHECK_FALSE(has_level(d.levels, 7));
     const auto& sha = builtin_carve_default().content_sha256;
-    CHECK(terrain_carved_config_text() == "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=7 radius=192 junction=D42 carve=" +
+    CHECK(terrain_carved_config_text() == "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=8 radius=192 junction=D42 carve=" +
         to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even");
     // carve_road_geom_keys: one level-2 tile in the middle, four at a level-2 corner.
     CHECK(carve_road_geom_keys(l0(1821, 21685)).size() == 1);
@@ -842,6 +844,112 @@ TEST_CASE("carve: server and four-worker bake serve terrain.carved L0 and L1", "
     REQUIRE(parent.meta.status == Status::Ok);
     const auto stored1 = (*baked)->get({report->release_id_hex, std::string(kTerrainCarvedLayer), TileKey{zone, 1, 0, 0}}); REQUIRE(stored1); REQUIRE(*stored1);
     CHECK((*stored1)->container() == parent.container);
+}
+
+// G-1 (terrain migration phase 6): a roads.geom input whose derivation fails (a deterministic rejection, e.g.
+// "reference endpoints" at the region edge) is absent for terrain.carved: the tile is Found, carved without those roads,
+// and its header carries rejected_input_marker. Negative control: a carved deriver that does not accept the rejection
+// fails the tile, as every deriver did before.
+namespace {
+class RejectingGeometry final : public IDeriver {   // roads.geom whose every tile is rejected by validation
+public:
+    explicit RejectingGeometry(const IDeriver& inner) : inner_(inner) {}
+    const LayerDesc& output() const override { return inner_.output(); }
+    ContentHash config_hash() const override { return inner_.config_hash(); }
+    std::span<const std::string> coverage_inputs() const override { return inner_.coverage_inputs(); }
+    std::vector<InputTileRef> inputs_for(const TileKey& t) const override { return inner_.inputs_for(t); }
+    Result<std::vector<InputTileRef>> additional_inputs_for(const DeriveRequest& r) const override { return inner_.additional_inputs_for(r); }
+    std::size_t discovery_stages() const override { return inner_.discovery_stages(); }
+    Result<DeriveResult> derive(const DeriveRequest&) const override {
+        return make_error(ErrorCode::Malformed, "roads.geom: reference endpoints (test rejection)");
+    }
+private:
+    const IDeriver& inner_;
+};
+class StrictCarved final : public IDeriver {   // terrain.carved without the G-1 acceptance
+public:
+    const LayerDesc& output() const override { return inner_.output(); }
+    ContentHash config_hash() const override { return inner_.config_hash(); }
+    std::span<const std::string> coverage_inputs() const override { return inner_.coverage_inputs(); }
+    std::vector<InputTileRef> inputs_for(const TileKey& t) const override { return inner_.inputs_for(t); }
+    Result<DeriveResult> derive(const DeriveRequest& r) const override { return inner_.derive(r); }
+private:
+    TerrainCarvedDeriver inner_;
+};
+} // namespace
+
+TEST_CASE("carve G-1: a carved tile over a rejected roads.geom tile is Found, without roads, flagged", "[layer][carve][terrain][G-1]") {
+    struct Temp {
+        std::filesystem::path path = std::filesystem::temp_directory_path() /
+            ("g2m_carve_g1_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        ~Temp() { std::error_code ec; std::filesystem::remove_all(path, ec); }
+    } temp;
+    const geo::UtmZone zone{32, geo::Hemisphere::North};
+    const auto input = [](std::string layer, TileKey key, const TileBody& body, VerticalDatum datum) {
+        InputTile out; out.ref = {std::move(layer), key}; out.body = *encode_body(body);
+        TileHeader h; h.layer = out.ref.layer; h.layer_version = 1; h.key = key; h.datum = datum;
+        h.body_size = out.body.size(); h.body_hash = content_hash(out.body); out.header = h; return out;
+    };
+    auto sources = TileStore::open({temp.path, "sources"}); REQUIRE(sources);
+    const TileKey key2{zone, 2, 0, 0}; const geo::Utm utm(geo::kGRS80);
+    osm::OsmBuilder builder;
+    for (const auto [id, east] : {std::pair<std::int64_t, double>{1, 10}, {2, 110}}) {
+        const auto point = utm.reverse(zone, east, 10.5);
+        builder.add_node(id, static_cast<std::int32_t>(std::llround(point.lat * 1e7)), static_cast<std::int32_t>(std::llround(point.lon * 1e7)));
+    }
+    builder.add_way(10, {1, 2}, {{"highway", "residential"}});
+    const auto osm = builder.build(); REQUIRE(osm);
+    auto raw = input(std::string(kSrcOsmLayer), key2, *encode_src_osm(OsmTile{64, *osm}), VerticalDatum::None);
+    REQUIRE((*sources)->put({"carve_g1", raw.ref.layer, key2}, *raw.header, raw.body, true));
+    for (int y = -1; y <= 1; ++y) for (int x = -1; x <= 1; ++x) {
+        const TileKey k{zone, 2, x, y}; ElevTile elev; elev.georef = *tile_georef(k, 1024, SampleRegistration::Cell);
+        elev.georef.row_order = RowOrder::NorthToSouth; elev.heights = HeightRaster(1024, 1024);
+        std::fill(elev.heights.data().begin(), elev.heights.data().end(), 25600);
+        auto data = input(std::string(kSrcElevDgm1Layer), k, *encode_src_elev(elev), VerticalDatum::DHHN2016);
+        REQUIRE((*sources)->put({"carve_g1", data.ref.layer, k}, *data.header, data.body, true));
+    }
+    BuiltinTerrainDerivers derivers;
+    const RejectingGeometry rejecting(derivers.geometry);
+    const StrictCarved strict;
+    const auto manifest = make_local_release(**sources, builtin_local_release_params("carve_g1", derivers, {}, false, false, true, true));
+    REQUIRE(manifest);
+    LocalSourceUpstream upstream(**sources);
+    const TileKey key0{zone, 0, 0, 0};
+    const InputTileRef geom_ref{std::string(kRoadGeomLayer), key2};
+    for (const bool accept : {true, false}) {
+        auto live = TileStore::open({temp.path, accept ? "live_accept" : "live_strict"}); REQUIRE(live);
+        ServerConfig config; config.offline = true; config.derived_store = live->get(); config.upstreams = {&upstream};
+        config.derivers = {&derivers.elev, &derivers.height, &derivers.roads, &rejecting,
+                           accept ? static_cast<const IDeriver*>(&derivers.carved) : &strict, &derivers.classes};
+        Server server(config); REQUIRE(server.add_release(*manifest, "carve_g1"));
+        // The roads.geom tile itself fails.
+        CHECK(server.tile({manifest->rid, std::string(kRoadGeomLayer), key2, {}}).meta.status != Status::Ok);
+        const auto response = server.tile({manifest->rid, std::string(kTerrainCarvedLayer), key0, {}});
+        if (!accept) {   // negative control: before G-1 the rejection failed the carved tile
+            CHECK(response.meta.status != Status::Ok);
+            continue;
+        }
+        INFO(response.meta.message);
+        REQUIRE(response.meta.status == Status::Ok);
+        const auto view = parse_container(response.container); REQUIRE(view);
+        CHECK(header_has_rejected_input(view->header, geom_ref));
+        CHECK(view->header.inputs.size() == 10);   // 9 elev.base + the marker
+        CHECK_FALSE(header_has_rejected_input(view->header, InputTileRef{std::string(kRoadGeomLayer), TileKey{zone, 2, 1, 0}}));
+        HeightTile carved; REQUIRE(decode_height_tile(*decode_body(view->body), key0, carved));
+        // No roads: the flat DEM everywhere, including the cells the residential road lowers when roads.geom is served.
+        CHECK(carved.h[11 * 256 + 60] == 25600);
+        CHECK(std::all_of(carved.h.begin(), carved.h.end(), [](std::int32_t v) { return v == 25600; }));
+        // L1 above it is served too.
+        CHECK(server.tile({manifest->rid, std::string(kTerrainCarvedLayer), TileKey{zone, 1, 0, 0}, {}}).meta.status == Status::Ok);
+        // terrain.class takes the same rule: Found, flagged, no road nodes.
+        const auto cls = server.tile({manifest->rid, std::string(kTerrainClassLayer), key0, {}});
+        INFO(cls.meta.message);
+        REQUIRE(cls.meta.status == Status::Ok);
+        const auto cview = parse_container(cls.container); REQUIRE(cview);
+        CHECK(header_has_rejected_input(cview->header, geom_ref));
+        TerrainClassTile classes; REQUIRE(decode_terrain_class(*decode_body(cview->body), key0, classes));
+        CHECK(std::all_of(classes.rank.begin(), classes.rank.end(), [](std::uint8_t r) { return r == 0; }));
+    }
 }
 
 // ---- measurement (diag) ----
