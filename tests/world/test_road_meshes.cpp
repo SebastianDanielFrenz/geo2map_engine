@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -240,4 +241,34 @@ TEST_CASE("Junction surface skips declined junctions, bridge junctions and rings
     CHECK(mesh.vertices.empty()); CHECK(mesh.indices.empty());
     g2m::world::add_junction_surfaces(mesh, tile, kKey, flat, 0.0);
     CHECK_FALSE(mesh.indices.empty());
+}
+
+// Ribbon flag 16384 (kSett) marks natural stone on top of 2048 (stones): sett / cobblestone = 2048|16384, paving stones = 2048.
+TEST_CASE("Ribbon flags: sett and cobblestone carry 2048|16384, paving stones 2048 only", "[world][road_ribbons][flags]") {
+    const auto flags_with_surface = [](const std::string& surface) {
+        auto graph = g2m_mesh_test::structure_scene_graph();
+        for (auto& w : graph.ways) { w.tags.emplace_back("surface", surface); std::sort(w.tags.begin(), w.tags.end()); }
+        g2m_test::GeomOptions o;
+        o.height_m = g2m_mesh_test::structure_scene_dem;
+        o.completion = g2m::served_road_completion_options();
+        auto tile = g2m_test::geometry_in_tile_with(graph, g2m_mesh_test::kStructureSceneTile, o);
+        if (!tile) throw std::runtime_error(tile.error().message);
+        const auto ribbon = g2m::world::build_road_ribbons(*tile, g2m_mesh_test::kStructureSceneTile,
+            [](double e, double n) -> std::optional<double> { return 100.0 + 1e-5 * e - 1e-5 * n; }, 0.018, g2m::world::RoadSeparation{});
+        std::map<int, int> histogram;
+        for (const auto& v : ribbon.vertices) ++histogram[static_cast<int>(v.flags)];
+        return histogram;
+    };
+    for (const char* sett : {"sett", "cobblestone", "unhewn_cobblestone"}) {
+        INFO(sett);
+        const auto h = flags_with_surface(sett);
+        CHECK(h.count(2048 | 16384) == 1);
+        for (const auto& [flags, count] : h) if (flags & 2048) CHECK(flags == (2048 | 16384));
+    }
+    for (const char* paving : {"paving_stones", "paving_stones:30", "grass_paver"}) {
+        INFO(paving);
+        const auto h = flags_with_surface(paving);
+        CHECK(h.count(2048) == 1);
+        for (const auto& [flags, count] : h) CHECK((flags & 16384) == 0);
+    }
 }

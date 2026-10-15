@@ -75,11 +75,14 @@ namespace {
 // Lane layout of one paved stretch as the ribbon draws it (the fragment shader reads lanes, forward and the flags).
 struct LaneLayout { std::string highway,direction; bool one=false,fast=false; double width=0; int lanes=1,forward=1,flags=0; };
 enum MarkFlag : int { kMarking=1, kEdgeLines=2, kSolidSeparator=4, kFast=8, kPaint=16, kOverlay=32, kLeftEdgeBroken=64, kRightEdgeBroken=128,
-                     kLeftEdgeHidden=512, kRightEdgeHidden=1024, kStones=2048, kConcrete=4096, kUnpaved=8192 };
+                     kLeftEdgeHidden=512, kRightEdgeHidden=1024, kStones=2048, kConcrete=4096, kUnpaved=8192, kSett=16384 };
 // Paving surface of a way (OSM surface=*) as the ribbon shader draws it: stones (paving stones, sett, cobblestone),
-// concrete, else asphalt.
+// concrete, else asphalt. Natural stone (sett, cobblestone) also carries kSett on top of kStones.
+// Two arms pave alike when they differ at most in the natural-stone bit (a sett and a paving-stone arm share one patch piece).
+bool same_paving(int a,int b){return (a&~kSett)==(b&~kSett);}
 int surface_flags(const std::string& surface) {
- if(surface.starts_with("paving_stones")||surface=="sett"||surface=="cobblestone"||surface=="unhewn_cobblestone"||surface=="grass_paver")return kStones;
+ if(surface=="sett"||surface=="cobblestone"||surface=="unhewn_cobblestone")return kStones|kSett;
+ if(surface.starts_with("paving_stones")||surface=="grass_paver")return kStones;
  if(surface.starts_with("concrete"))return kConcrete;
  return 0;
 }
@@ -118,7 +121,7 @@ std::optional<LaneLayout> lane_layout(const g2m::RoadGeomEntry& entry,const g2m:
  const bool marking=tag(w,"lane_markings")!="no"&&l.width/l.lanes>=2.4&&highway!="living_street";
  const int paving=surface_flags(tag(w,"surface"));
  // A paving-stone or cobbled road carries no painted lines.
- l.flags=paving==kStones?paving:((marking?kMarking:0)|(edge_lines?kEdgeLines:0)|(tag(w,"overtaking")=="no"?kSolidSeparator:0)|(l.fast?kFast:0)|paving);
+ l.flags=(paving&kStones)!=0?paving:((marking?kMarking:0)|(edge_lines?kEdgeLines:0)|(tag(w,"overtaking")=="no"?kSolidSeparator:0)|(l.fast?kFast:0)|paving);
  return l;
 }
 const g2m::RoadGraphWay* find_way(const g2m::RoadGeomTile& geometry,std::int64_t id) {
@@ -210,7 +213,7 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
    arms.push_back({{pose->x-det::sin(pose->heading)*centre-ox,pose->y+det::cos(pose->heading)*centre-oy},{det::cos(heading),det::sin(heading)},
                    (span.bed_left-span.bed_right)/2,surface,road_priority_rank(*w)});
   }
-  const bool mixed=std::any_of(arms.begin(),arms.end(),[&](const Arm& a){return a.surface!=arms.front().surface;});
+  const bool mixed=std::any_of(arms.begin(),arms.end(),[&](const Arm& a){return !same_paving(a.surface,arms.front().surface);});
   // The major road's centre line through the ring (a polyline with its half width per point) and its arms; with one
   // paving everywhere the first arm stands for the whole patch. While a paved road meets there, an unpaved one never
   // carries the major road (the track joins the road, not the other way round). A through pair may change paving
@@ -223,7 +226,7 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
    for(std::size_t i=0;i<arms.size();++i)for(std::size_t k=i+1;k<arms.size();++k) {
     const double dev=det::acos(std::clamp(-(arms[i].in.x*arms[k].in.x+arms[i].in.y*arms[k].in.y),-1.0,1.0));
     const int rank=std::min(weight(arms[i]),weight(arms[k]));if(dev>35*kPi/180||rank<0)continue;
-    const bool same=arms[i].surface==arms[k].surface;
+    const bool same=same_paving(arms[i].surface,arms[k].surface);
     if(rank>best_rank||(rank==best_rank&&(same>best_same||(same==best_same&&dev<best_dev))))
      {best_rank=rank;best_same=same;best_dev=dev;best_i=static_cast<int>(i);best_j=static_cast<int>(k);}
    }
@@ -331,7 +334,7 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
      // Split the (convex, at most 1 m) cell along the road bed edge; the distance is close to linear across it.
      std::vector<double> d;for(const auto& p:cell)d.push_back(inside_major(p));
      const auto [in,out]=split(cell,d);
-     if(major.size()==2&&arms[major[0]].surface!=arms[major[1]].surface) {
+     if(major.size()==2&&!same_paving(arms[major[0]].surface,arms[major[1]].surface)) {
       const P2 a=arms[major[0]].cut,b=arms[major[1]].cut,m{(a.x+b.x)/2,(a.y+b.y)/2};
       std::vector<double> e;for(const auto& p:in)e.push_back((p.x-m.x)*(b.x-a.x)+(p.y-m.y)*(b.y-a.y));
       const auto [near_a,near_b]=split(in,e);emit(near_a,static_cast<int>(major[0]));emit(near_b,static_cast<int>(major[1]));
@@ -340,7 +343,7 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
      // Outside it, the cell is shared between the two nearest other arms along the line of equal distance to both.
      P2 c{0,0};for(const auto& p:out){c.x+=p.x/out.size();c.y+=p.y/out.size();}
      const auto [ai,aj]=minor_arms(c);
-     if(aj<0||arms[static_cast<std::size_t>(ai)].surface==arms[static_cast<std::size_t>(aj)].surface){emit(out,ai);continue;}
+     if(aj<0||same_paving(arms[static_cast<std::size_t>(ai)].surface,arms[static_cast<std::size_t>(aj)].surface)){emit(out,ai);continue;}
      std::vector<double> h;for(const auto& p:out)h.push_back(arm_distance(static_cast<std::size_t>(ai),p)-arm_distance(static_cast<std::size_t>(aj),p));
      const auto [near_i,near_j]=split(out,h);emit(near_i,ai);emit(near_j,aj);
     }
