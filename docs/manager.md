@@ -14,7 +14,6 @@ Last updated: 2026-10-16.
 
 | Item | Where | State |
 |---|---|---|
-| G4 routing slice 3: turn restrictions in `roads.graph` (encoding 6), via-way rules, one release-id bump | [#14](https://github.com/SebastianDanielFrenz/geo2map_engine/pull/14) | draft PR ready for review; the release id moves for roads.graph and roads.geom |
 
 ## Waiting on the owner
 
@@ -52,6 +51,7 @@ These items are open in [pipeline/README.md](pipeline/README.md) section 9:
 
 | Date | Item | PR |
 |---|---|---|
+| 2026-10-16 | G4 routing slice 3: turn restrictions in `roads.graph` (encoding 6), via-way rules | #14 |
 | 2026-10-16 | P2 slice 11: render class window from `g2m.terrain.class` (D62) | #15 |
 | 2026-10-15 | Underpass decks over lower roads in a cutting, steep walls, tag rules for parking structures and covered tunnels (D53-D61); racing_game #16 pinned to main | #13 |
 | 2026-10-15 | Long tunnels follow one straight grade between their portals (D52, threshold 200 m) | #11 |
