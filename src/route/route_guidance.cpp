@@ -43,7 +43,203 @@ bool is_ring(const RoadGraphWay* way) {
 bool is_link(std::string_view highway) { return highway.ends_with("_link"); }
 bool is_major(std::string_view highway) { return highway == "motorway" || highway == "trunk"; }
 
+std::uint16_t lane_token(std::string_view t) {
+    using namespace lane_dir;
+    if (t == "left") return kLeft;
+    if (t == "slight_left") return kSlightLeft;
+    if (t == "through") return kThrough;
+    if (t == "slight_right") return kSlightRight;
+    if (t == "right") return kRight;
+    if (t == "sharp_left") return kSharpLeft;
+    if (t == "sharp_right") return kSharpRight;
+    if (t == "merge_to_left") return kMergeToLeft;
+    if (t == "merge_to_right") return kMergeToRight;
+    if (t == "reverse") return kReverse;
+    return 0;
+}
+
+// A tier of acceptable directions; the first tier that any lane satisfies decides. For kThrough,
+// edge_through restricts it to the outer lane on that side (-1 left, +1 right, 0 either outer lane
+// for an untagged lane / any lane for a tagged one).
+struct Tier {
+    std::uint16_t mask = 0;
+    int edge_through = 0;
+};
+struct Wanted {
+    Tier tier[3];
+    int count = 0;
+    void add(std::uint16_t mask, int edge = 0) { tier[count++] = {mask, edge}; }
+};
+
+// cls: 0 straight, 1 slight, 2 turn, 3 sharp; left: side of the turn. fork: keep left / keep right.
+Wanted wanted_for(int cls, bool left, bool fork) {
+    using namespace lane_dir;
+    const std::uint16_t sl = left ? kSlightLeft : kSlightRight, l = left ? kLeft : kRight, sh = left ? kSharpLeft : kSharpRight;
+    const int edge = left ? -1 : 1;
+    Wanted w;
+    if (fork) {
+        w.add(static_cast<std::uint16_t>(sl | l));
+        w.add(kThrough);
+    } else if (cls == 0) {
+        w.add(kThrough);
+    } else if (cls == 1) {
+        w.add(sl);
+        w.add(static_cast<std::uint16_t>(l | kThrough), edge);
+    } else if (cls == 2) {
+        w.add(l);
+        w.add(static_cast<std::uint16_t>(sl | sh));
+    } else {
+        w.add(sh);
+        w.add(static_cast<std::uint16_t>(l | sl));
+    }
+    return w;
+}
+
+bool lane_matches(std::size_t idx, std::size_t count, std::uint16_t dir, const Tier& t) {
+    const bool outer_left = idx == 0, outer_right = idx + 1 == count;
+    const bool edge_ok = t.edge_through == 0 ? true : (t.edge_through < 0 ? outer_left : outer_right);
+    if (dir == 0) return (t.mask & lane_dir::kThrough) != 0 && (outer_left || outer_right) && edge_ok;
+    if ((dir & t.mask & ~lane_dir::kThrough) != 0) return true;
+    return (dir & t.mask & lane_dir::kThrough) != 0 && edge_ok;
+}
+
+// turn:lanes of the way in the travelled direction, or empty.
+std::string_view approach_turn_lanes(const RoadGraphWay& way, bool forward, std::string_view& lane_count_tag) {
+    const auto oneway = tag_value(way, "oneway");
+    const auto highway = tag_value(way, "highway");
+    int dir = 0; // +1 one-way along the ref order, -1 against it
+    if (oneway == "yes" || oneway == "1" || oneway == "true") dir = 1;
+    else if (oneway == "-1" || oneway == "reverse") dir = -1;
+    else if (oneway.empty() && (highway == "motorway" || highway == "motorway_link")) dir = 1;
+    const auto split = tag_value(way, forward ? "turn:lanes:forward" : "turn:lanes:backward");
+    if (!split.empty()) {
+        lane_count_tag = tag_value(way, forward ? "lanes:forward" : "lanes:backward");
+        return split;
+    }
+    if (dir != 0 && (dir > 0) == forward) {
+        lane_count_tag = tag_value(way, "lanes");
+        return tag_value(way, "turn:lanes");
+    }
+    return {};
+}
+
+bool parse_count(std::string_view s, std::size_t& out) {
+    if (s.empty() || s.size() > 3) return false;
+    std::size_t v = 0;
+    for (const char c : s) {
+        if (c < '0' || c > '9') return false;
+        v = v * 10 + static_cast<std::size_t>(c - '0');
+    }
+    out = v;
+    return true;
+}
+
+void build_lane_hints(const RoadGraphWay& way, bool forward, ManeuverKind kind, double angle, const RouteConfig& rc,
+                      std::vector<LaneHint>& out) {
+    out.clear();
+    std::string_view count_tag;
+    const auto text = approach_turn_lanes(way, forward, count_tag);
+    if (text.empty()) return;
+    std::vector<std::uint16_t> dirs;
+    if (!parse_turn_lanes(text, dirs)) return;
+    std::size_t tagged = 0;
+    if (parse_count(count_tag, tagged) && tagged != dirs.size()) return; // inconsistent tags: say nothing
+    const double mag = std::fabs(angle);
+    const bool left = angle > 0.0;
+    int cls = 0;
+    bool fork = false, ramp_off = false;
+    switch (kind) {
+    case ManeuverKind::Continue: cls = 0; break;
+    case ManeuverKind::SlightLeft: case ManeuverKind::SlightRight: cls = 1; break;
+    case ManeuverKind::Left: case ManeuverKind::Right: cls = 2; break;
+    case ManeuverKind::SharpLeft: case ManeuverKind::SharpRight: cls = 3; break;
+    case ManeuverKind::KeepLeft: case ManeuverKind::KeepRight: fork = true; break;
+    case ManeuverKind::RampOff: case ManeuverKind::RampOn: case ManeuverKind::Merge:
+        ramp_off = kind == ManeuverKind::RampOff;
+        cls = mag <= rc.straight_max_deg ? 0 : mag <= rc.slight_max_deg ? 1 : mag <= rc.turn_max_deg ? 2 : 3;
+        break;
+    case ManeuverKind::UTurn: {
+        Wanted w;
+        w.add(lane_dir::kReverse);
+        w.add(lane_dir::kLeft);
+        for (int t = 0; t < w.count; ++t) {
+            bool any = false;
+            for (std::size_t i = 0; i < dirs.size(); ++i) any = any || (dirs[i] & w.tier[t].mask) != 0;
+            if (!any) continue;
+            out.resize(dirs.size());
+            for (std::size_t i = 0; i < dirs.size(); ++i) out[i] = {dirs[i], (dirs[i] & w.tier[t].mask) != 0};
+            return;
+        }
+        return;
+    }
+    default: return; // Depart, Arrive, roundabouts: no hint
+    }
+    const bool is_left = fork ? kind == ManeuverKind::KeepLeft : left;
+    Wanted w;
+    if (ramp_off) {
+        // The exit lane is tagged by side (slight_right / right ...) even when the ramp leaves nearly straight.
+        const bool exit_left = mag > 0.0 && left;
+        using namespace lane_dir;
+        w.add(exit_left ? static_cast<std::uint16_t>(kSlightLeft | kLeft | kSharpLeft)
+                        : static_cast<std::uint16_t>(kSlightRight | kRight | kSharpRight));
+        const Wanted by_angle = wanted_for(cls, exit_left, false);
+        for (int t = 0; t < by_angle.count; ++t) w.tier[w.count++] = by_angle.tier[t];
+    } else {
+        w = wanted_for(cls, is_left, fork);
+    }
+    for (int t = 0; t < w.count; ++t) {
+        bool any = false;
+        for (std::size_t i = 0; i < dirs.size() && !any; ++i) any = lane_matches(i, dirs.size(), dirs[i], w.tier[t]);
+        if (!any) continue;
+        out.resize(dirs.size());
+        for (std::size_t i = 0; i < dirs.size(); ++i) out[i] = {dirs[i], lane_matches(i, dirs.size(), dirs[i], w.tier[t])};
+        return;
+    }
+}
+
 } // namespace
+
+std::string lane_directions_to_string(std::uint16_t directions) {
+    using namespace lane_dir;
+    static constexpr std::pair<std::uint16_t, const char*> names[] = {
+        {kLeft, "left"}, {kSlightLeft, "slight_left"}, {kSharpLeft, "sharp_left"}, {kThrough, "through"},
+        {kSlightRight, "slight_right"}, {kRight, "right"}, {kSharpRight, "sharp_right"},
+        {kMergeToLeft, "merge_to_left"}, {kMergeToRight, "merge_to_right"}, {kReverse, "reverse"}};
+    std::string s;
+    for (const auto& [bit, name] : names) {
+        if (!(directions & bit)) continue;
+        if (!s.empty()) s += ';';
+        s += name;
+    }
+    return s.empty() ? "none" : s;
+}
+
+bool parse_turn_lanes(std::string_view value, std::vector<std::uint16_t>& lanes) {
+    lanes.clear();
+    if (value.empty()) return false;
+    std::size_t pos = 0;
+    while (true) {
+        const std::size_t bar = value.find('|', pos);
+        const std::string_view lane = value.substr(pos, bar == std::string_view::npos ? std::string_view::npos : bar - pos);
+        std::uint16_t mask = 0;
+        std::size_t p = 0;
+        while (p <= lane.size()) {
+            const std::size_t semi = lane.find(';', p);
+            const std::string_view tok = lane.substr(p, semi == std::string_view::npos ? std::string_view::npos : semi - p);
+            if (!tok.empty() && tok != "none") {
+                const std::uint16_t bit = lane_token(tok);
+                if (bit == 0) { lanes.clear(); return false; }
+                mask = static_cast<std::uint16_t>(mask | bit);
+            }
+            if (semi == std::string_view::npos) break;
+            p = semi + 1;
+        }
+        lanes.push_back(mask);
+        if (bar == std::string_view::npos) break;
+        pos = bar + 1;
+    }
+    return true;
+}
 
 const char* to_string(ManeuverKind kind) {
     switch (kind) {
@@ -102,6 +298,11 @@ Result<std::vector<Maneuver>> build_guidance(const RoutingGraph& graph, const Ro
         m.ref = std::string(info[step].ref);
         m.destination = std::string(info[step].destination);
         m.destination_ref = std::string(info[step].destination_ref);
+        if (step > 0 && kind != ManeuverKind::Depart && kind != ManeuverKind::Arrive) {
+            const RouteArc& approach = arcs[route.arcs[step - 1]];
+            if (const RoadGraphWay* aw = find_way(roads, approach.way_id))
+                build_lane_hints(*aw, approach.forward, kind, angle, rc, m.lanes);
+        }
         out.push_back(std::move(m));
     };
     // Exits passed on a roundabout from step `first` on: nodes where an allowed exit leaves the ring.
