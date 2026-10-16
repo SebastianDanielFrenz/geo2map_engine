@@ -15,6 +15,7 @@ Last updated: 2026-10-16.
 | Item | Where | State |
 |---|---|---|
 | G4 routing slice 3: turn restrictions in `roads.graph` (encoding 6), via-way rules, one release-id bump | [#14](https://github.com/SebastianDanielFrenz/geo2map_engine/pull/14) | draft PR ready for review; the release id moves for roads.graph and roads.geom |
+| P2 slice 11: render class window from `g2m.terrain.class` (D62; slice 10 itself landed in #7) | [#15](https://github.com/SebastianDanielFrenz/geo2map_engine/pull/15) | draft PR ready for review; library only, no release-id change |
 
 ## Waiting on the owner
 
