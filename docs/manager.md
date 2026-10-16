@@ -15,7 +15,6 @@ Last updated: 2026-10-16.
 | Item | Where | State |
 |---|---|---|
 | G4 routing slice 3: turn restrictions in `roads.graph` (encoding 6), via-way rules, one release-id bump | [#14](https://github.com/SebastianDanielFrenz/geo2map_engine/pull/14) | draft PR ready for review; the release id moves for roads.graph and roads.geom |
-| P2 slice 11: render class window from `g2m.terrain.class` (D62; slice 10 itself landed in #7) | [#15](https://github.com/SebastianDanielFrenz/geo2map_engine/pull/15) | draft PR ready for review; library only, no release-id change |
 
 ## Waiting on the owner
 
@@ -32,7 +31,7 @@ Last updated: 2026-10-16.
 | G4 routing follow-ups | Lane hints in guidance and timing on the real store ([routing_design.md](routing_design.md)). |
 | Long tunnels split into several OSM ways | D52 judges each stretch by its own length. A long tunnel made of several short ways keeps DEM heights at its inner joins. The owner kept the per-stretch default (#11); revisit once above-ground roads look right. |
 | Koenigstein `roads.geom` tile rejected by the deriver | Tile `utm32n/2/452/5428`. racing_game falls back to smoothed terrain there (`RG_ROAD_SURFACE unavailable reason=deriver_rejected`). Find out why the deriver rejects it and fix it. |
-| Consumer switches in racing_game | Render class window from `g2m.terrain.class`; served carved heights (phase 7). |
+| Consumer switches in racing_game | Render class window from `g2m.terrain.class` (library side done in #15); served carved heights (phase 7). |
 | G3-E / G3-F | Ribbons, markings and bridge bodies; route acceptance on a 20-junction route. |
 | P2 slices 10-12, P3 markings | [street_fidelity/p2_junction_design.md](street_fidelity/p2_junction_design.md), [street_fidelity/plan.md](street_fidelity/plan.md). |
 | G5 land cover, buildings, water, vegetation | racing_game brief lane E2. |
@@ -53,6 +52,7 @@ These items are open in [pipeline/README.md](pipeline/README.md) section 9:
 
 | Date | Item | PR |
 |---|---|---|
+| 2026-10-16 | P2 slice 11: render class window from `g2m.terrain.class` (D62) | #15 |
 | 2026-10-15 | Underpass decks over lower roads in a cutting, steep walls, tag rules for parking structures and covered tunnels (D53-D61); racing_game #16 pinned to main | #13 |
 | 2026-10-15 | Long tunnels follow one straight grade between their portals (D52, threshold 200 m) | #11 |
 | 2026-10-15 | Junction patches split between sett and paving-stone arms; sett ribbon flag | #9, #10 |
