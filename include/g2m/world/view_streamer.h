@@ -40,6 +40,7 @@
 #include "g2m/mesh/lod_select.h"
 #include "g2m/mesh/terrain_chunk.h"
 #include "g2m/world/chunk_road_classes.h"
+#include "g2m/world/chunk_terrain_classes.h"
 
 #include <atomic>
 #include <chrono>
@@ -86,6 +87,10 @@ struct ViewSource {
     void* ctx = nullptr;
     // Null fn = every chunk built without road classes (build_chunk with no ClassWindow).
     ClassLookup class_lookup{};
+    // The served alternative (P2 slice 11, D62): a non-null fn takes precedence over class_lookup, and the window is
+    // read from g2m.terrain.class (chunk_terrain_classes.h). Its `lod` follows the same convention as
+    // class_lookup.lod (point it at road_lod).
+    TerrainClassLookup terrain_classes{};
     // Null = every chunk reports NotCarved; called with `ctx`.
     TileCarveFn carve_state = nullptr;
     // Optional colour hook (see ChunkColourFn).

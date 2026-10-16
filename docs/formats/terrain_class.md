@@ -73,3 +73,12 @@ coarse levels (rank-max keeps 10465 road nodes on the hoechst_a66 test tile wher
 Every value is a function of the world position only, so neighbouring tiles agree on their shared edge nodes (tested on
 level-0 and level-2 seams and at level 1). The model is the carve's (double arithmetic in a fixed order, no libm, no FMA);
 golden `testdata/golden/g3c_golden.txt` (four level-0 tiles and one level-1 tile).
+
+## Consumers
+
+- Physics (class mode): the node at each physics cell centre, `fill_physics_classes` (`include/g2m/phys/`).
+- Render (D62, `include/g2m/world/chunk_terrain_classes.h`): a render vertex (i, j) of chunk (L, cx, cy) sits at
+  (64 cx + i) 2^L + 0.5 m and takes the node at floor of its position, its south-west node 64 cx + i (same for y), in
+  tile (L, floor(cx / 4), floor(cy / 4)). One tile per chunk. Render and physics differ by at most half a cell at a
+  class border (design 10.1). Road nodes (rank > 0) the caller's `RenderRoadLod` excludes at the chunk level (no policy,
+  or rank below `min_rank`) are written Unknown.

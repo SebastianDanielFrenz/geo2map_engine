@@ -8,6 +8,7 @@ add_executable(g2m_world_tests
   test_tile_fetch.cpp
   test_height_sampler.cpp
   test_chunk_road_classes.cpp
+  test_chunk_terrain_classes.cpp
   test_surface_id_table.cpp
   test_terrain_service.cpp
   test_road_meshes.cpp

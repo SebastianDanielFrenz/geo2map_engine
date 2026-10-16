@@ -189,6 +189,11 @@ geo2map_engine/
     chunk_road_classes.h             ClassLookup/RoadSegmentsFn, road_class_lattice,
                                       src_osm_tiles_for_chunk, rasterize_chunk_road_classes (owner rule;
                                       ClassLookup::lod = the caller's RenderRoadLod, null = default)
+    chunk_terrain_classes.h          (P2 slice 11, D62) the served alternative: TerrainClassLookup/
+                                      TerrainClassTileFn, terrain_class_tile_for_chunk, terrain_class_window
+                                      (vertex = the class node at floor of its position, road nodes filtered
+                                      by the RenderRoadLod on the rank plane), fill_chunk_terrain_classes;
+                                      ViewSource::terrain_classes takes precedence over class_lookup
     surface_id_table.h               g2m::classes::SurfaceIdTable (SurfaceKind + LandClass -> consumer
                                       id; road cell with a known kind -> kind id, else land class id;
                                       to_road_value_lut)
@@ -217,7 +222,7 @@ geo2map_engine/
                                       thread, accept(), frame() -> shown/downgraded/evicted changes
     terrain_service.h                TerrainService (terrain migration phase 2): open (stores, layer opt-ins,
                                       release, in-process server, ONE worker pool), async height/road_geom/
-                                      road_segments/source_osm/raw_tile/structures/road_ribbons/buildings ->
+                                      road_segments/source_osm/raw_tile/terrain_class (D62)/structures/road_ribbons/buildings ->
                                       Ticket<T>, peek_* (never start work), surface_height_exact/bilinear on
                                       resident tiles, warm() -> WarmJob, physics_fetch() -> PhysicsFetch
                                       (IHeightTileFetch; blocks on the caller, which is a loader thread),
@@ -1127,7 +1132,15 @@ layer, class_layer)`, `LoaderConfig::require_classes`, `ResidentHeightSet` entri
 `g2m_road_probe --underpasses`. Tests: `tests/layer/test_terrain_class.cpp` ([terrain_class]), G-1 case in test_terrain_carve.cpp,
 `tests/layer/test_road_underpass.cpp` ([underpass]), `tests/phys/test_class_mode.cpp` ([classes]),
 `bridges/physics_sim/tests/test_carved_prefetch.cpp` ([classes], bridge leg); golden `g3c` (`tests/golden/golden_g3c.cpp`,
-`testdata/golden/g3c_golden.txt`). Open: render `ClassWindow` from terrain.class, the home-region G-6 run.
+`testdata/golden/g3c_golden.txt`). Open: the home-region G-6 run.
+
+Slice 11 render class window (design D62, 2026-10-16): `include/g2m/world/chunk_terrain_classes.h` /
+`src/world/chunk_terrain_classes.cpp` build a chunk's `ClassWindow` from the `g2m.terrain.class` tile of its level (one tile per
+chunk: (L, floor(cx/4), floor(cy/4)); the vertex at (64 cx + i) 2^L + 0.5 m takes node 64 cx + i, its south-west node; road
+nodes with rank below the `RenderRoadLod` level's min_rank, or at a level without a policy, become Unknown). `ViewSource::
+terrain_classes` (precedence over `class_lookup`), `TerrainService::terrain_class` / `peek_terrain_class` (job kind 10). Library
+only: no layer, config text, release id or golden change. Tests `tests/world/test_chunk_terrain_classes.cpp`
+(`[terrain_class_window]`) and the served case in `test_terrain_service.cpp`.
 
 Junction gradient (design D42, after slice 9): the junction surface blends v_i = b_i + phi_i (p_i - b_i) + psi_i (z_i - p_i)
 instead of z_i (b base, p paved band only, z full approach surface; `junction_approach_heights` returns all three), with
