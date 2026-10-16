@@ -2,6 +2,7 @@
 #include "g2m/layer/src_osm.h"
 #include "g2m/core/hash.h"
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <set>
 
@@ -29,7 +30,8 @@ const geom::PointMm& position(const RoadGraph& graph, std::int64_t id) {
 }
 }
 
-Result<RoadGraphTile> select_road_graph_tile(const RoadGraph& graph, const TileKey& key) {
+Result<RoadGraphTile> select_road_graph_tile(const RoadGraph& graph, const TileKey& key,
+    std::span<const TurnRestriction> restrictions) {
     if (!key.valid() || key.level != 2) return make_error(ErrorCode::InvalidArgument, "roads.graph: level-2 target required");
     // Validate before exact predicates, additions or binary-search dereferences.
     const auto source_valid = validate_road_graph(graph); if (!source_valid) return source_valid.error();
@@ -65,12 +67,29 @@ Result<RoadGraphTile> select_road_graph_tile(const RoadGraph& graph, const TileK
         if (floor_div(floor_div(a.x + b.x, 2), size) == key.x && floor_div(floor_div(a.y + b.y, 2), size) == key.y)
             result.owned_edges.push_back(static_cast<std::uint32_t>(i));
     }
+    // Restrictions held by the tile: the via node or a via way is in the tile graph (design: "complete in every touching tile").
+    const auto way_in_tile = [&](std::int64_t id) {
+        const auto it = std::lower_bound(result.graph.ways.begin(), result.graph.ways.end(), id,
+            [](const auto& w, auto value) { return w.osm_id < value; });
+        return it != result.graph.ways.end() && it->osm_id == id;
+    };
+    const auto node_in_tile = [&](std::int64_t id) {
+        const auto it = std::lower_bound(result.graph.nodes.begin(), result.graph.nodes.end(), id,
+            [](const auto& n, auto value) { return n.osm_id < value; });
+        return it != result.graph.nodes.end() && it->osm_id == id;
+    };
+    for (const auto& r : restrictions) {
+        bool held = r.via_node != 0 && node_in_tile(r.via_node);
+        for (const auto way : r.via_ways) held = held || way_in_tile(way);
+        if (held) result.restrictions.push_back(r);
+    }
+    std::sort(result.restrictions.begin(), result.restrictions.end(), restriction_key_less);
     const auto valid = validate_road_graph_tile(result); if (!valid) return valid.error();
     return result;
 }
 
 ContentHash RoadGraphDeriver::config_hash() const {
-    return Sha256::of("g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours node-tags=1 enc=5");
+    return Sha256::of("g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours node-tags=1 enc=6 restrictions=1 via-way=1");
 }
 std::vector<InputTileRef> RoadGraphDeriver::inputs_for(const TileKey& target) const {
     std::vector<InputTileRef> result;
@@ -89,6 +108,7 @@ Result<DeriveResult> RoadGraphDeriver::derive(const DeriveRequest& request) cons
     std::set<InputTileRef> seen;
     std::map<std::int64_t, NodeInput> nodes;
     std::map<std::int64_t, WayInput> ways;
+    std::vector<TurnRestriction> restrictions; // copies from every input tile, deduplicated after the loop
     std::size_t input_bytes = 0, ref_count = 0, tag_count = 0;
     for (const auto& input : request.inputs) {
         if (input.body.size() > kMaxBodyRawSize - input_bytes)
@@ -107,6 +127,13 @@ Result<DeriveResult> RoadGraphDeriver::derive(const DeriveRequest& request) cons
         auto body = decode_body(input.body); if (!body) return body.error();
         auto osm_tile = decode_src_osm(*body); if (!osm_tile) return osm_tile.error();
         const auto& data = osm_tile->data;
+        {
+            auto found = extract_turn_restrictions(data); if (!found) return found.error();
+            restrictions.insert(restrictions.end(), std::make_move_iterator(found->restrictions.begin()),
+                std::make_move_iterator(found->restrictions.end()));
+            if (restrictions.size() > 9 * kRoadGraphMaxRestrictions)
+                return make_error(ErrorCode::LimitExceeded, "roads.graph: merged restrictions");
+        }
         for (const auto& node : data.nodes) {
             NodeInput value{node.lat, node.lon, tags_of(data, data.tags_of(node))};
             const auto [it, inserted] = nodes.emplace(node.id, value);
@@ -130,7 +157,20 @@ Result<DeriveResult> RoadGraphDeriver::derive(const DeriveRequest& request) cons
     for (const auto& [id, way] : ways) builder.add_way(id, way.refs, way.tags);
     auto merged = builder.build(); if (!merged) return merged.error();
     auto graph = build_road_graph(*merged, request.target.zone); if (!graph) return graph.error();
-    auto tile = select_road_graph_tile(*graph, request.target); if (!tile) return tile.error();
+    // One copy per (relation, from, to); a relation is complete in every tile that has it, so copies are equal.
+    std::stable_sort(restrictions.begin(), restrictions.end(), restriction_key_less);
+    {
+        std::vector<TurnRestriction> unique;
+        for (auto& r : restrictions) {
+            if (!unique.empty() && !restriction_key_less(unique.back(), r)) {
+                if (!(unique.back() == r)) return make_error(ErrorCode::Malformed, "roads.graph: conflicting restriction copies");
+                continue;
+            }
+            unique.push_back(std::move(r));
+        }
+        restrictions = std::move(unique);
+    }
+    auto tile = select_road_graph_tile(*graph, request.target, restrictions); if (!tile) return tile.error();
     auto body = encode_road_graph(*tile); if (!body) return body.error();
     auto bytes = encode_body(*body); if (!bytes) return bytes.error();
     return DeriveResult{std::move(*bytes), VerticalDatum::None, 0};

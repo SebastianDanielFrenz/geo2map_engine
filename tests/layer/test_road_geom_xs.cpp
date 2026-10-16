@@ -111,7 +111,7 @@ TEST_CASE("roads.geom encoding 6 keeps sections 1 to 2 as before and decodes enc
     auto tile = base_tile(); tile.encoding = kRoadGeomEncodingPrevious; const auto body = encoded(tile); REQUIRE(body);
     REQUIRE(body->sections.size() == 4);
     // The embedded graph is the encoding-5 payload, byte for byte.
-    CHECK(body->sections[0].data == encode_road_graph(tile.source, kRoadGraphEncoding)->sections[0].data);
+    CHECK(body->sections[0].data == encode_road_graph(tile.source, kRoadGraphEncodingTags)->sections[0].data);
     // Section 2 is unchanged: with the legacy graph it reproduces the encoding-5 golden body of the synthetic fixture.
     const auto legacy_graph = encode_road_graph(tile.source, kRoadGraphEncodingLegacy); REQUIRE(legacy_graph);
     const TileBody legacy{kRoadGeomEncodingLegacy, 1, {legacy_graph->sections[0], body->sections[1]}};

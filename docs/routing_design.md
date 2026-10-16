@@ -158,16 +158,29 @@ in. The original wording stays below for the record.
   - **U-turns:** a U-turn back along the same edge is offered only when no
     other transition is allowed (a dead end), and a No rule can still forbid
     it.
-- **Via-way rules (slice 3):** parsed and counted (`restrictions_via_way`),
-  not applied yet. The plan is the standard state expansion:
-  - the search state becomes (arc, progress), where progress is the number of
-    matched elements of one via-way rule;
-  - entering the from way and then the first via way advances progress; any
-    other arc resets it;
-  - the forbidden (or forced) final transition is checked at the last via
-    node;
-  - via-way rules are rare (0 in both fixtures), so the extra states cost
-    nothing measurable.
+- **Via-way rules (slice 3, built):** a rule F -> V1..Vk -> T is resolved to
+  node chains n0..nk, where n_j is a routing node shared by ways[j] and
+  ways[j+1]; consecutive nodes differ, F must arrive at n0, each V must leave
+  the node before it and T must leave nk. At most 8 chains per rule and 16
+  via ways. A rule with no chain (a way is not routable, or the ways do not
+  meet like that) is counted in `restrictions_unmatched` and ignored.
+  - **Search state:** still an arc. An arc that is part of a partly driven
+    sequence gets a "ghost" copy (appended after the real arcs, one per set of
+    open rule positions), found by a breadth-first walk from the arcs that
+    arrive on F at n0. Ghosts have their own successor lists; all other arcs
+    use the context-free lists. `arcs()` stays the real arcs, `state_count()`
+    includes ghosts, routes contain real arcs only, ALT stays admissible.
+  - **No rule:** forbids the step onto T after the whole sequence was driven.
+  - **Only rule:** each step must follow the sequence: at n_j take ways[j+1],
+    and along V_j keep to V_j until n_j.
+  - **Several Only rules at one point:** the allowed next ways are the union,
+    as for via-node rules.
+  - **Cost:** `RouteBuildStats::via_way_instances`, `via_way_states`. The OSM
+    fixtures have no via-way relation (0 in both), so their tests add
+    synthetic rules chained at way ends; the cost is the ghost arcs of those
+    rules only.
+  - **Not seen by `successors()`:** it stays the context-free via-node list;
+    guidance and snapping use real arcs only.
 
 ## 4. Hierarchy and speed-up
 
@@ -509,9 +522,15 @@ or disappear per level with the policy.
        tile, equals the whole-world graph. The restrictions merged from the
        per-tile `clip_osm` src.osm tiles equal the whole-file restrictions.
    - Open: timing on the real home store, on the owner machine.
-3. **Restrictions in roads.graph and via-way rules.** The restriction section
-   in roads.graph (encoding 6, release id change) and via-way rules through
-   state expansion.
+3. **Done: restrictions in roads.graph and via-way rules.** roads.graph
+   encoding 6 carries the restrictions each tile holds (release ids of
+   roads.graph and roads.geom change; terrain unchanged); the region assembles
+   them (`assemble_region`) and via-way rules are applied by ghost states
+   (section 3). Tests: a history-based reference Dijkstra (run based, not
+   sharing code with the library) against A* and A*+ALT on random restricted
+   grids with via-way rules; both OSM fixtures through the real deriver and
+   codec, region equals whole-world including restrictions, negative controls
+   (no rules, no via-way rules). Open: real home-store routes, lane hints.
 4. **Done: guidance.** The manoeuvre list (section 5), synthetic tests per
    kind and the pinned 21-manoeuvre hoechst_a66 route. Open: lane hints.
 5. **Done: map geometry.** Map tiles at three LODs and the route polyline

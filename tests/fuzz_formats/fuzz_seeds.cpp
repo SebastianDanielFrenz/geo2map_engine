@@ -340,7 +340,16 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         auto legacy = body(must(g2m::encode_road_graph(tile, g2m::kRoadGraphEncodingLegacy), "encode_road_graph legacy"));
         tile.graph.nodes[0].tags = {{"highway", "crossing"}, {"traffic_calming", "table"}, {"traffic_calming:length", "6"}};
         tile.graph.nodes[1].tags = {{"barrier", "bollard"}};
-        return {std::move(first), std::move(loop), std::move(legacy), body(must(g2m::encode_road_graph(tile), "encode_road_graph tags"))};
+        auto tags5 = body(must(g2m::encode_road_graph(tile, g2m::kRoadGraphEncodingTags), "encode_road_graph tags 5"));
+        // Encoding 6 with turn restrictions: a via-node No rule and a via-way Only rule.
+        g2m::TurnRestriction no_rule;
+        no_rule.relation_id = 100; no_rule.value = "no_left_turn"; no_rule.kind = g2m::RestrictionKind::No;
+        no_rule.from_way = 10; no_rule.to_way = 11; no_rule.via_node = 1;
+        g2m::TurnRestriction only_rule;
+        only_rule.relation_id = 101; only_rule.value = "only_straight_on"; only_rule.kind = g2m::RestrictionKind::Only;
+        only_rule.from_way = 11; only_rule.to_way = 12; only_rule.via_ways = {10};
+        tile.restrictions = {no_rule, only_rule};
+        return {std::move(first), std::move(loop), std::move(legacy), std::move(tags5), body(must(g2m::encode_road_graph(tile), "encode_road_graph restrictions"))};
     }
     case Target::Pack: return {pack()};
     case Target::Manifest: return manifests();
