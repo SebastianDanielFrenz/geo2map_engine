@@ -205,6 +205,109 @@ TEST_CASE("Guidance: U-turn at a dead end on a point route", "[route][guidance][
     CHECK((*steps)[2].position == geom::PointMm{120000, 0});
 }
 
+namespace {
+// 4-way crossing at node 1 (west 4, east 5, north 3, south 2). `approach` tags the way from the south.
+RoadGraph lane_scene(const Tags& approach, bool reversed_way = false) {
+    GraphBuilder b;
+    b.node(1, 0, 0); b.node(2, 0, -100); b.node(3, 0, 100); b.node(4, -100, 0); b.node(5, 100, 0);
+    b.way(10, reversed_way ? std::vector<std::int64_t>{1, 2} : std::vector<std::int64_t>{2, 1}, approach);
+    b.way(30, {1, 3}, Tags{{"name", "Nordweg"}});
+    b.way(20, {1, 4}, Tags{{"name", "Westweg"}});
+    b.way(40, {1, 5}, Tags{{"name", "Ostweg"}});
+    return b.build();
+}
+std::vector<LaneHint> lanes_of(const RoadGraph& roads, std::int64_t to, K expect) {
+    const auto r = guide_nodes(roads, 2, to);
+    REQUIRE(r.steps.size() == 3);
+    CHECK(r.steps[1].kind == expect);
+    return r.steps[1].lanes;
+}
+std::vector<bool> valid_of(const std::vector<LaneHint>& l) {
+    std::vector<bool> v;
+    for (const auto& h : l) v.push_back(h.valid);
+    return v;
+}
+} // namespace
+
+TEST_CASE("Lane hints: parse and print turn:lanes", "[route][guidance][lanes]") {
+    std::vector<std::uint16_t> lanes;
+    REQUIRE(parse_turn_lanes("left|through|through;right", lanes));
+    REQUIRE(lanes.size() == 3);
+    CHECK(lanes[0] == lane_dir::kLeft);
+    CHECK(lanes[2] == (lane_dir::kThrough | lane_dir::kRight));
+    CHECK(lane_directions_to_string(lanes[2]) == "through;right");
+    REQUIRE(parse_turn_lanes("none||slight_left;merge_to_right", lanes));
+    CHECK(lanes.size() == 3);
+    CHECK(lanes[0] == 0);
+    CHECK(lanes[1] == 0);
+    CHECK(lane_directions_to_string(0) == "none");
+    CHECK_FALSE(parse_turn_lanes("left|banana", lanes));
+    CHECK(lanes.empty());
+    CHECK_FALSE(parse_turn_lanes("", lanes));
+}
+
+TEST_CASE("Lane hints: 3-lane approach left|through|through;right", "[route][guidance][lanes]") {
+    const auto roads = lane_scene({{"oneway", "yes"}, {"lanes", "3"}, {"turn:lanes", "left|through|through;right"}});
+    const auto right = lanes_of(roads, 5, K::Right);
+    REQUIRE(right.size() == 3);
+    CHECK(valid_of(right) == std::vector<bool>{false, false, true});
+    CHECK(right[2].directions == (lane_dir::kThrough | lane_dir::kRight));
+    CHECK(valid_of(lanes_of(roads, 4, K::Left)) == std::vector<bool>{true, false, false});
+    // Straight on onto another name: both through lanes.
+    CHECK(valid_of(lanes_of(roads, 3, K::Continue)) == std::vector<bool>{false, true, true});
+    // Depart / Arrive carry nothing.
+    const auto r = guide_nodes(roads, 2, 5);
+    CHECK(r.steps.front().lanes.empty());
+    CHECK(r.steps.back().lanes.empty());
+}
+
+TEST_CASE("Lane hints: fallbacks and untagged lanes", "[route][guidance][lanes]") {
+    // No lane says right: a right turn falls back to nothing valid -> no hint, never a guess.
+    CHECK(lanes_of(lane_scene({{"oneway", "yes"}, {"turn:lanes", "left|through|through"}}), 5, K::Right).empty());
+    // Untagged (none / empty) lanes are through on the outer lanes only.
+    const auto roads = lane_scene({{"oneway", "yes"}, {"turn:lanes", "left|none|"}});
+    CHECK(valid_of(lanes_of(roads, 3, K::Continue)) == std::vector<bool>{false, false, true});
+    const auto mid = lane_scene({{"oneway", "yes"}, {"turn:lanes", "left|none|none|right"}});
+    CHECK(lanes_of(mid, 3, K::Continue).empty()); // inner untagged lanes are not through: nothing can take it
+    // A slight right without a slight_right lane: the right lane takes it, through only on the right edge.
+    GraphBuilder s;
+    s.node(1, 0, 0); s.node(2, 0, -100); s.node(3, 60, 100);
+    s.way(10, {2, 1}, Tags{{"oneway", "yes"}, {"turn:lanes", "left|through|right"}});
+    s.way(20, {1, 3}, Tags{{"name", "Rueckweg"}});
+    s.node(4, -100, 0); s.way(30, {1, 4});
+    const auto sharp = guide_nodes(s.build(), 2, 3);
+    REQUIRE(sharp.steps.size() == 3);
+    CHECK(sharp.steps[1].kind == K::SlightRight);
+    // slight right, no slight_right lane: through falls back on the right edge lane only.
+    CHECK(valid_of(sharp.steps[1].lanes) == std::vector<bool>{false, false, true});
+}
+
+TEST_CASE("Lane hints: forward/backward split and direction rules", "[route][guidance][lanes]") {
+    const Tags split{{"lanes", "5"}, {"lanes:forward", "2"}, {"lanes:backward", "3"}, {"turn:lanes:forward", "left|through"},
+                     {"turn:lanes:backward", "left|through|right"}};
+    // Way {2,1}: travelling 2 -> 1 is forward.
+    const auto fwd = lane_scene(split);
+    CHECK(valid_of(lanes_of(fwd, 4, K::Left)) == std::vector<bool>{true, false});
+    CHECK(lanes_of(fwd, 5, K::Right).empty()); // forward has no right lane
+    // Way {1,2}: travelling 2 -> 1 is backward.
+    const auto bwd = lane_scene(split, true);
+    const auto br = lanes_of(bwd, 5, K::Right);
+    REQUIRE(br.size() == 3);
+    CHECK(valid_of(br) == std::vector<bool>{false, false, true});
+    // Plain turn:lanes on a two-way road is ambiguous: no hint. With oneway=-1 it applies against the ref order.
+    CHECK(lanes_of(lane_scene({{"turn:lanes", "left|through|right"}}), 5, K::Right).empty());
+    CHECK(valid_of(lanes_of(lane_scene({{"oneway", "-1"}, {"turn:lanes", "left|through|right"}}, true), 5, K::Right)) ==
+          std::vector<bool>{false, false, true});
+    // lanes disagreeing with turn:lanes: no hint.
+    CHECK(lanes_of(lane_scene({{"oneway", "yes"}, {"lanes", "4"}, {"turn:lanes", "left|through|right"}}), 5, K::Right).empty());
+}
+
+TEST_CASE("Lane hints: no tag, no hint", "[route][guidance][lanes]") {
+    const auto roads = lane_scene({{"oneway", "yes"}, {"lanes", "3"}});
+    CHECK(lanes_of(roads, 5, K::Right).empty());
+    CHECK(lanes_of(roads, 4, K::Left).empty());
+}
+
 TEST_CASE("Guidance on the hoechst_a66 fixture: invariants and a pinned route", "[route][guidance][real-data]") {
     const auto data = g2m_test::read_route_fixture("hoechst_a66");
     const auto roads = build_road_graph(data, g2m_test::kZone32N);
@@ -215,7 +318,7 @@ TEST_CASE("Guidance on the hoechst_a66 fixture: invariants and a pinned route", 
     REQUIRE(g);
     RouteSearcher searcher(*g);
     g2m_test::SplitMix64 rng(0x6d1);
-    std::size_t routes = 0, total_steps = 0;
+    std::size_t routes = 0, total_steps = 0, hinted = 0, unhinted_junction = 0;
     std::vector<Maneuver> longest;
     Route longest_route;
     for (int q = 0; q < 200; ++q) {
@@ -229,6 +332,15 @@ TEST_CASE("Guidance on the hoechst_a66 fixture: invariants and a pinned route", 
         check_invariants(*r, *steps);
         ++routes;
         total_steps += steps->size();
+        for (const auto& m : *steps) {
+            if (m.lanes.empty()) { ++unhinted_junction; continue; }
+            ++hinted;
+            bool any_valid = false;
+            for (const auto& l : m.lanes) any_valid = any_valid || l.valid;
+            CHECK(any_valid);
+            CHECK(m.kind != ManeuverKind::Depart);
+            CHECK(m.kind != ManeuverKind::Arrive);
+        }
         if (steps->size() > longest.size()) {
             longest = *steps;
             longest_route = *r;
@@ -236,10 +348,13 @@ TEST_CASE("Guidance on the hoechst_a66 fixture: invariants and a pinned route", 
     }
     std::printf("guidance on hoechst_a66: %zu routes, %zu manoeuvres; longest %zu manoeuvres over %.0f m:\n", routes,
                 total_steps, longest.size(), static_cast<double>(longest_route.length_mm) / 1000.0);
+    std::printf("lane hints: %zu manoeuvres with a hint, %zu without\n", hinted, unhinted_junction);
     std::string seq;
     for (const auto& m : longest) {
         std::printf("  %8.0f m  %-16s %4d deg exit %u  %s %s\n", static_cast<double>(m.distance_from_start_mm) / 1000.0,
                     to_string(m.kind), m.angle_deg, m.exit_number, m.name.c_str(), m.ref.c_str());
+        for (const auto& l : m.lanes)
+            std::printf("             lane %-24s %s\n", lane_directions_to_string(l.directions).c_str(), l.valid ? "valid" : "-");
         seq += std::string(to_string(m.kind)) + " ";
     }
     CHECK(routes > 100);

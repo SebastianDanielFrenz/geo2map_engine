@@ -271,7 +271,8 @@ looked up by way id).
 - heading change (deg, rounded, positive = left);
 - the road it enters: `name`, `ref`, `destination`, `destination_ref` (OSM
   `destination`, `destination:ref`);
-- the exit number for roundabouts.
+- the exit number for roundabouts;
+- `lanes`: the lane hints (below), empty when there are none.
 
 **Kinds:**
 - depart and arrive;
@@ -298,8 +299,37 @@ holds:
 Staying on a main road past a slip road is silent: a `*_link` exit does not
 make a fork unless the route changes name or ref there. Allowed exits come
 from `RoutingGraph::successors`, so a restricted or one-way exit never makes
-a fork. Lane hints (`turn:lanes`) come later. Instruction text and
-localisation stay in the game.
+a fork. Instruction text and localisation stay in the game.
+
+**Lane hints** (`Maneuver::lanes`, a `LaneHint{directions, valid}` per lane,
+left to right in the driving direction). Source: the approach way's tags
+(roads.graph keeps all way tags), never a guess:
+- the value is `turn:lanes:forward` / `turn:lanes:backward` for the travelled
+  direction, else plain `turn:lanes` only when the way is one-way in the
+  travelled direction (`oneway` yes/1/true along the ref order, -1/reverse
+  against it, implied for motorway and motorway_link). Plain `turn:lanes` on a
+  two-way road is ambiguous and gives no hint;
+- if `lanes` (or `lanes:forward/backward`) is tagged and disagrees with the
+  number of lanes in the value, or a token is unknown, there is no hint;
+- `directions` is a bit mask (`lane_dir::`) of left, slight_left, sharp_left,
+  through, slight_right, right, sharp_right, merge_to_left, merge_to_right,
+  reverse; "none" and an empty lane are the empty mask;
+- `valid`: the first of these tiers that any lane satisfies decides, and
+  every lane satisfying it is valid. Continue: through. Slight: the slight
+  direction, then turn or through on the outer lane of the turn side. Turn:
+  the turn direction, then slight or sharp of that side. Sharp: sharp, then
+  turn or slight. Keep left/right: slight or turn of that side, then
+  through. Ramp off: any slight/turn/sharp lane of the exit side (the angle
+  of a ramp can be near straight), then the angle class as above. Ramp on and
+  merge: the angle class. U-turn: reverse, then left. An untagged ("none")
+  lane counts as through only when it is the leftmost or rightmost lane;
+- if no lane satisfies any tier the hint is dropped (empty) rather than shown
+  with nothing valid; Depart, Arrive and roundabout manoeuvres carry none.
+  Lane lists are only built for manoeuvres that are emitted: a silent straight
+  crossing gets no hint.
+Open: lane hints on the approach to a roundabout, `lanes:both_ways` and
+conditional or per-vehicle lanes (ignored), lane changes needed before the
+junction (the tags of the last way only).
 
 **Tests** (`tests/route/test_route_guidance.cpp`, `[guidance]`): synthetic
 scenes for every kind (distances, names, refs, destination, exit numbers 1-3,
@@ -307,7 +337,11 @@ silence on a same-name straight and past a slip road, U-turn on a point
 route). On the hoechst_a66 fixture, 200 random node pairs (148 reachable,
 1,478 manoeuvres) check the invariants: Depart first at 0, Arrive last at the
 route length, monotone distances, distances to the next summing to the route
-length. The longest of them (3.4 km, 21 manoeuvres, through Unterliederbach
+length. On the same routes, every manoeuvre has either no lane hint or at
+least one valid lane (293 of the 1,478 manoeuvres carry one). Synthetic scenes
+cover a 3-lane `left|through|through;right` approach with right, left and
+through, the untagged-lane and fallback rules, a forward/backward split,
+oneway -1, ambiguous and inconsistent tags and the untagged case. The longest of them (3.4 km, 21 manoeuvres, through Unterliederbach
 onto the B 8, off at the Main-Taunus-Zentrum ramp) has its kind sequence
 pinned. Guidance of all 148 routes takes well under 1 ms each.
 
@@ -530,9 +564,9 @@ or disappear per level with the policy.
    sharing code with the library) against A* and A*+ALT on random restricted
    grids with via-way rules; both OSM fixtures through the real deriver and
    codec, region equals whole-world including restrictions, negative controls
-   (no rules, no via-way rules). Open: real home-store routes, lane hints.
+   (no rules, no via-way rules). Open: real home-store routes.
 4. **Done: guidance.** The manoeuvre list (section 5), synthetic tests per
-   kind and the pinned 21-manoeuvre hoechst_a66 route. Open: lane hints.
+   kind and the pinned 21-manoeuvre hoechst_a66 route. Lane hints from `turn:lanes` follow in a separate step (section 5).
 5. **Done: map geometry.** Map tiles at three LODs and the route polyline
    (section 6). Tests: Douglas-Peucker bounds on random walks, a synthetic
    scene pinning ownership across a level-2 border, LOD filters, flags,
