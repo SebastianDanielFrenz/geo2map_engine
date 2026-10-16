@@ -66,7 +66,7 @@ flowchart TD
 ## `g2m.roads.graph` (G3 slices A and B: implemented)
 
 - Code: `src/layer/derive_road_graph.cpp`, `road_graph.cpp`, `road_graph_tile.cpp`, `road_attributes.cpp`, `road_rules.cpp` (street fidelity P1 country rules, `data/road_rules/de.json` embedded through CMake, `builtin_road_rules_de()`); public `include/g2m/layer/{road_graph,road_graph_tile,road_attributes,road_rules}.h`.
-- Version 1, level 2, encoding 5 ([road_graph.md](../formats/road_graph.md)): nodes carry the whitelisted tags (`traffic_calming`, `crossing`, `barrier`, ...); encoding 4 without node tags still decodes.
+- Version 1, level 2, encoding 6 ([road_graph.md](../formats/road_graph.md)): nodes carry the whitelisted tags (`traffic_calming`, `crossing`, `barrier`, ...); each tile also carries the turn restrictions (`type=restriction` relations for cars) whose via node or via way it holds, read by the deriver from the nine src.osm inputs (G4 slice 3); encodings 5 (no restrictions) and 4 (no node tags either) still decode. `roads.geom` embeds encoding 5 and carries no restrictions.
 - Needs the exact 9 neighbouring level-2 `g2m.src.osm` tiles. Absent ones are explicit empty inputs.
 - Keeps every complete way that touches the tile grown by 128 m, with its original ids and tags. Connectivity comes from shared OSM node ids, never from geometric crossings.
 - An edge is owned by the tile that holds its midpoint (floor-rounded integer mm). Halo copies keep the same edge identity.

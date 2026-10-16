@@ -4,6 +4,8 @@
 # compared against lives in route_reference.h (test-only).
 add_executable(g2m_route_tests
   test_turn_restrictions.cpp
+  test_via_way.cpp
+  test_route_restrictions.cpp
   test_route_search.cpp
   test_route_fixture.cpp
   test_route_slice2.cpp

@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -77,7 +79,182 @@ std::uint64_t cell_key(std::int64_t cx, std::int64_t cy) {
     return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(cx)) << 32) | static_cast<std::uint32_t>(cy);
 }
 
+
+// ---- Via-way rules (G4 slice 3) -------------------------------------------------------------
+//
+// A rule F -> V1 .. Vk -> T (k >= 1) resolves to node chains n0 .. nk, n_j = a decision node
+// both ways[j] and ways[j+1] pass through (F = ways[0], T = ways[k+1]). Arriving on F at n0,
+// leaving onto V1, running along V1 (through its inner decision nodes) to n1, onto V2, ..., onto
+// T at nk is "the sequence". No: the last step (leaving V_k onto T at n_k) is forbidden after
+// the whole sequence. Only: after arriving on F at n0 only V1 may follow, and so on up to T
+// (a vehicle on V_j may only continue along V_j to n_j, then must take ways[j+1]).
+//
+// The search state is an arc; the part of the sequence already driven is history. States with
+// history are "ghost" copies of the arc, one per (arc, set of rule positions): a position
+// (rule, j) means the path so far ends with the driven part of the sequence up to ways[j]
+// (j = 0: just arrived on F at n0, which is implied by the arc itself and needs no ghost).
+// Ghosts are found by a breadth-first walk from the arcs that arrive on a rule's F at n0.
+constexpr std::size_t kMaxViaWays = 16;       // via ways of one rule
+constexpr std::size_t kMaxInstancesPerRule = 8; // node chains of one rule
+constexpr std::size_t kMaxGhostStates = 1u << 20;
+
+struct ViaRule {
+    RestrictionKind kind = RestrictionKind::No;
+    std::vector<std::int64_t> ways;  // F, V1..Vk, T
+    std::vector<std::uint32_t> nodes; // n0..nk (routing node indices)
+};
+
 } // namespace
+
+struct ViaBuilder {
+    using Position = std::uint32_t; // rule << 8 | j
+    static Position pack(std::size_t rule, std::size_t j) { return static_cast<Position>(rule << 8 | j); }
+
+    // Resolves one via-way restriction to its node chains and appends them to `out`.
+    static void instances(const RoutingGraph& g, const RoadGraph& graph, const std::vector<std::vector<std::uint32_t>>& refs,
+                          const std::vector<std::uint32_t>& compact, const std::unordered_map<std::int64_t, char>& used_way,
+                          const TurnRestriction& tr, std::vector<ViaRule>& out) {
+        std::vector<std::int64_t> ways;
+        ways.push_back(tr.from_way);
+        ways.insert(ways.end(), tr.via_ways.begin(), tr.via_ways.end());
+        ways.push_back(tr.to_way);
+        // Routing nodes each way passes through.
+        std::vector<std::vector<std::uint32_t>> pass(ways.size());
+        for (std::size_t i = 0; i < ways.size(); ++i) {
+            if (!used_way.count(ways[i])) return;
+            const auto it = std::lower_bound(graph.ways.begin(), graph.ways.end(), ways[i],
+                                             [](const RoadGraphWay& w, std::int64_t id) { return w.osm_id < id; });
+            const auto w = static_cast<std::size_t>(it - graph.ways.begin());
+            for (const std::uint32_t n : refs[w]) if (compact[n] != kNoArc) pass[i].push_back(compact[n]);
+            std::sort(pass[i].begin(), pass[i].end());
+            pass[i].erase(std::unique(pass[i].begin(), pass[i].end()), pass[i].end());
+        }
+        std::vector<std::vector<std::uint32_t>> shared(ways.size() - 1);
+        for (std::size_t j = 0; j + 1 < ways.size(); ++j)
+            std::set_intersection(pass[j].begin(), pass[j].end(), pass[j + 1].begin(), pass[j + 1].end(), std::back_inserter(shared[j]));
+        const auto arrives = [&](std::int64_t way, std::uint32_t node) {
+            for (std::size_t a = 0; a < g.real_arcs_; ++a) if (g.arcs_[a].way_id == way && g.arcs_[a].to == node) return true;
+            return false;
+        };
+        const auto leaves = [&](std::int64_t way, std::uint32_t node) {
+            for (std::uint32_t a = g.nodes_[node].first_out; a < g.nodes_[node + 1].first_out; ++a) if (g.arcs_[a].way_id == way) return true;
+            return false;
+        };
+        std::vector<std::uint32_t> chain;
+        std::size_t found = 0;
+        const auto walk = [&](auto&& self, std::size_t j) -> void {
+            if (found >= kMaxInstancesPerRule) return;
+            if (j == shared.size()) {
+                if (!arrives(ways.front(), chain.front()) || !leaves(ways.back(), chain.back())) return;
+                // Every via way must start at the node before it.
+                for (std::size_t v = 1; v + 1 < ways.size(); ++v) if (!leaves(ways[v], chain[v - 1])) return;
+                out.push_back({tr.kind, ways, chain});
+                ++found;
+                return;
+            }
+            for (const std::uint32_t n : shared[j]) {
+                if (j > 0 && n == chain.back()) continue; // a via way runs from one node to another
+                chain.push_back(n);
+                self(self, j + 1);
+                chain.pop_back();
+            }
+        };
+        walk(walk, 0);
+    }
+
+    // The next positions for a path in positions `set` on arc `a` leaving onto `b`; false = forbidden.
+    static bool step(const std::vector<ViaRule>& rules, const std::vector<Position>& set, const RouteArc& a, const RouteArc& b,
+                     std::vector<Position>& next) {
+        next.clear();
+        bool only_constrained = false, only_ok = false;
+        for (const Position p : set) {
+            const std::size_t i = p >> 8, j = p & 255;
+            const ViaRule& r = rules[i];
+            const bool only = r.kind == RestrictionKind::Only;
+            only_constrained = only_constrained || only;
+            if (a.to == r.nodes[j]) {
+                if (b.way_id != r.ways[j + 1]) continue;
+                if (j + 2 == r.ways.size()) { // b leaves onto T: the sequence is complete
+                    if (!only) return false;
+                    only_ok = true;
+                } else {
+                    next.push_back(pack(i, j + 1));
+                    only_ok = only_ok || only;
+                }
+            } else if (b.way_id == r.ways[j]) { // inside via way j: keep going along it
+                next.push_back(pack(i, j));
+                only_ok = only_ok || only;
+            }
+        }
+        if (only_constrained && !only_ok) return false;
+        std::sort(next.begin(), next.end());
+        next.erase(std::unique(next.begin(), next.end()), next.end());
+        return true;
+    }
+
+    static Result<void> build(RoutingGraph& g, const std::vector<ViaRule>& rules) {
+        if (rules.size() >= (1u << 24)) return make_error(ErrorCode::LimitExceeded, "routing graph: via-way rules");
+        // Positions implied by an arc alone: arriving on F at n0.
+        std::map<std::uint32_t, std::vector<Position>> implied;
+        for (std::size_t i = 0; i < rules.size(); ++i)
+            for (std::uint32_t a = 0; a < g.real_arcs_; ++a)
+                if (g.arcs_[a].way_id == rules[i].ways.front() && g.arcs_[a].to == rules[i].nodes.front()) implied[a].push_back(pack(i, 0));
+        std::map<std::pair<std::uint32_t, std::vector<Position>>, std::uint32_t> ghost_id;
+        std::vector<std::pair<std::uint32_t, std::vector<Position>>> ghosts; // (arc, positions beyond the implied ones)
+        std::vector<std::pair<std::uint32_t, std::vector<Transition>>> lists; // (state, successors)
+        std::vector<Transition> base;
+        std::vector<Position> set, next;
+        const auto expand = [&](std::uint32_t state, std::uint32_t arc, const std::vector<Position>& history) -> Result<void> {
+            set = history;
+            if (const auto it = implied.find(arc); it != implied.end()) set.insert(set.end(), it->second.begin(), it->second.end());
+            std::sort(set.begin(), set.end());
+            set.erase(std::unique(set.begin(), set.end()), set.end());
+            g.successors(arc, base);
+            std::vector<Transition> list;
+            for (const Transition& t : base) {
+                if (!step(rules, set, g.arcs_[arc], g.arcs_[t.arc], next)) continue;
+                std::uint32_t target = t.arc;
+                if (!next.empty()) {
+                    const auto key = std::make_pair(t.arc, next);
+                    auto [it, inserted] = ghost_id.emplace(key, 0u);
+                    if (inserted) {
+                        if (ghosts.size() >= kMaxGhostStates) return make_error(ErrorCode::LimitExceeded, "routing graph: via-way states");
+                        it->second = static_cast<std::uint32_t>(g.real_arcs_ + ghosts.size());
+                        ghosts.push_back(key);
+                    }
+                    target = it->second;
+                }
+                list.push_back({target, t.turn_ms});
+            }
+            lists.emplace_back(state, std::move(list));
+            return {};
+        };
+        for (const auto& [arc, positions] : implied) {
+            const auto done = expand(arc, arc, {});
+            if (!done) return done;
+        }
+        for (std::size_t k = 0; k < ghosts.size(); ++k) { // ghosts grows while we walk it
+            const auto copy = ghosts[k];
+            const auto done = expand(static_cast<std::uint32_t>(g.real_arcs_ + k), copy.first, copy.second);
+            if (!done) return done;
+        }
+        // Ghost arcs: copies of their real arc.
+        g.ghost_origin_.reserve(ghosts.size());
+        for (const auto& [arc, positions] : ghosts) {
+            g.ghost_origin_.push_back(arc);
+            g.arcs_.push_back(g.arcs_[arc]);
+        }
+        g.special_slot_.assign(g.arcs_.size(), kNoArc);
+        g.special_first_.push_back(0);
+        for (const auto& [state, list] : lists) {
+            g.special_slot_[state] = static_cast<std::uint32_t>(g.special_first_.size() - 1);
+            g.special_succ_.insert(g.special_succ_.end(), list.begin(), list.end());
+            g.special_first_.push_back(static_cast<std::uint32_t>(g.special_succ_.size()));
+        }
+        return {};
+    }
+};
+
 
 WayDirections way_directions(const RoadGraphWay& way, const RouteConfig& config) {
     const auto oneway = tag_of(way, "oneway");
@@ -174,6 +351,15 @@ void RoutingGraph::successors(std::uint32_t arc_index, std::vector<Transition>& 
     // U-turn back along the same edge: only where nothing else may leave (dead end).
     if (out.empty() && in.reverse != kNoArc && allowed_onto(in.way_id, true))
         out.push_back({in.reverse, config_.u_turn_ms});
+}
+
+void RoutingGraph::state_successors(std::uint32_t state, std::vector<Transition>& out) const {
+    if (!special_slot_.empty() && special_slot_[state] != kNoArc) {
+        const std::uint32_t slot = special_slot_[state];
+        out.assign(special_succ_.begin() + special_first_[slot], special_succ_.begin() + special_first_[slot + 1]);
+        return;
+    }
+    successors(state, out); // an ordinary state is a real arc without history
 }
 
 std::uint64_t RoutingGraph::partial_cost_ms(std::uint32_t arc, std::uint32_t a, std::uint32_t b) const {
@@ -462,7 +648,7 @@ Result<RoutingGraph> build_routing_graph(const RoadGraph& graph, std::span<const
     for (const RouteArc& a : arcs) arrivals.emplace_back(a.to, a.way_id);
     std::sort(arrivals.begin(), arrivals.end());
     for (const TurnRestriction& tr : restrictions) {
-        if (tr.via_node == 0) { ++stats.restrictions_via_way; continue; }
+        if (tr.via_node == 0) continue; // via-way rules: step 7
         const std::uint32_t v = out.find_node(tr.via_node);
         bool from_arrives = false, to_leaves = false;
         if (v != kNoArc && used_way.count(tr.from_way) && used_way.count(tr.to_way)) {
@@ -512,6 +698,28 @@ Result<RoutingGraph> build_routing_graph(const RoadGraph& graph, std::span<const
     sentinel.first_out = static_cast<std::uint32_t>(arcs.size());
     sentinel.first_rule = static_cast<std::uint32_t>(out.rules_.size());
     out.nodes_.push_back(sentinel);
+    out.real_arcs_ = arcs.size();
+
+    // 7. Via-way rules: search states with history (see ViaRule above).
+    {
+        std::vector<ViaRule> via;
+        for (const TurnRestriction& tr : restrictions) {
+            if (tr.via_node != 0) continue;
+            ++stats.restrictions_via_way;
+            if (tr.via_ways.empty() || tr.via_ways.size() > kMaxViaWays) { ++stats.restrictions_unmatched; continue; }
+            const std::size_t before = via.size();
+            ViaBuilder::instances(out, graph, refs, compact, used_way, tr, via);
+            if (via.size() == before) ++stats.restrictions_unmatched;
+            else ++stats.restrictions_via_way_applied;
+        }
+        stats.via_way_instances = via.size();
+        if (!via.empty()) {
+            auto built = ViaBuilder::build(out, via);
+            if (!built) return built.error();
+        }
+        stats.via_way_states = out.arcs_.size() - out.real_arcs_;
+    }
+    if (out.arcs_.size() > config.max_arcs) return make_error(ErrorCode::LimitExceeded, "routing graph: max_arcs");
     return out;
 }
 

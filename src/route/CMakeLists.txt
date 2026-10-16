@@ -3,7 +3,6 @@
 # search. Engine-neutral, exception-free (Result<T>), deterministic integer
 # costs. Depends only on g2m_layers (RoadGraph, OsmData, RoadStyle).
 set(G2M_ROUTE_SOURCES
-  ${CMAKE_CURRENT_SOURCE_DIR}/turn_restriction.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/routing_graph.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/route_search.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/region_graph.cpp

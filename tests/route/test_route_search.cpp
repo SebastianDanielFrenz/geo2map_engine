@@ -219,8 +219,9 @@ TEST_CASE("Unknown nodes, unreachable components, unmatched and via-way restrict
     const std::vector<TurnRestriction> rules{via_node_rule(10, 1, 77, "no_left_turn"), via_node_rule(10, 4, 20, "no_left_turn"), via_way};
     const auto g = build_routing_graph(graph, rules);
     REQUIRE(g);
-    CHECK(g->stats().restrictions_unmatched == 2); // way 77 is absent; way 10 never reaches node 4
+    CHECK(g->stats().restrictions_unmatched == 3); // way 77 is absent; way 10 never reaches node 4; the rule has to leave the via way 40 at the node it entered it
     CHECK(g->stats().restrictions_via_way == 1);
+    CHECK(g->stats().restrictions_via_way_applied == 0);
     CHECK(g->stats().restrictions_applied == 0);
     CHECK_FALSE(solve(*g, 2, 100).reachable);
     CHECK(solve(*g, 2, 2).reachable);
