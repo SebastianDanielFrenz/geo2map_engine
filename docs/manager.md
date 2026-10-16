@@ -14,6 +14,7 @@ Last updated: 2026-10-16.
 
 | Item | Where | State |
 |---|---|---|
+| G4 lane hints in guidance (turn:lanes) | [#16](https://github.com/SebastianDanielFrenz/geo2map_engine/pull/16) | draft PR, three owner questions in the body |
 
 ## Waiting on the owner
 
