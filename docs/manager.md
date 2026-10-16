@@ -14,7 +14,7 @@ Last updated: 2026-10-16.
 
 | Item | Where | State |
 |---|---|---|
-| G4 routing slice 3: turn restrictions in `roads.graph` (encoding 6), via-way rules, one release-id bump | branch claude/route-slice3 | being built |
+| G4 routing slice 3: turn restrictions in `roads.graph` (encoding 6), via-way rules, one release-id bump | [#14](https://github.com/SebastianDanielFrenz/geo2map_engine/pull/14) | draft PR ready for review; the release id moves for roads.graph and roads.geom |
 
 ## Waiting on the owner
 
