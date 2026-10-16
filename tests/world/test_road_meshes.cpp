@@ -49,7 +49,7 @@ g2m::world::RoadSeparation separation_of(const g2m_mesh_test::MeshCase& c) {
     return s;
 }
 
-TEST_CASE("Structure decks and road ribbons equal racing_game's meshes byte for byte", "[world][road_structures][road_ribbons]") {
+TEST_CASE("Structure decks and road ribbons match the recorded fixture meshes", "[world][road_structures][road_ribbons]") {
     const auto& all = cases();
     REQUIRE(all.size() == std::size(kPins));
     int bridges = 0, inferred = 0, separated_extra = 0;
@@ -84,7 +84,7 @@ TEST_CASE("Structure decks and road ribbons equal racing_game's meshes byte for 
     CHECK(separated_extra > 0);
 }
 
-TEST_CASE("Approach decks: a short span's approach is carried over the motorway, a long span's is not", "[world][road_structures]") {
+TEST_CASE("Approach decks follow the full served road footprints", "[world][road_structures]") {
     const auto find = [](const std::string& name) -> const g2m_mesh_test::MeshCase& {
         for (const auto& c : cases()) if (c.name == name) return c;
         throw std::runtime_error(name);
@@ -105,7 +105,9 @@ TEST_CASE("Approach decks: a short span's approach is carried over the motorway,
     CHECK(g2m::world::build_road_decks(short_span.tile, g2m::world::RoadSeparation{2.5, 3.0, 0.0, true}).size() <= on.size());
     // A clearance above the embankment height (7.5 m) leaves no road "below": no approach deck.
     CHECK(g2m::world::build_road_decks(short_span.tile, g2m::world::RoadSeparation{20.0, 3.0, 60.0, true}).size() == 1);
-    CHECK(g2m::world::build_road_decks(find("overpass.h25.sep").tile).size() == 1);
+    // The complete shoulders/verges can still meet at the 25 m abutment; any inferred continuation is short.
+    const auto long_span=g2m::world::build_road_decks(find("overpass.h25.sep").tile);
+    for(const auto& d:long_span)if(d->inferred)CHECK(d->end_station-d->start_station<=10.0);
 }
 
 TEST_CASE("Structure decks: crowned heights along the deck, nothing past its ends", "[world][road_structures]") {
@@ -121,7 +123,15 @@ TEST_CASE("Structure decks: crowned heights along the deck, nothing past its end
         const double mid = 0.5 * (d->start_station + d->end_station);
         const auto centre = g2m::world::road_deck_height(*d, mid, 0.0), edge = g2m::world::road_deck_height(*d, mid, d->half_width);
         REQUIRE(centre); REQUIRE(edge);
-        CHECK(*edge <= *centre);  // crowned: the edge is never above the centre line
+        if(d->cross_section) {
+            const auto f=g2m::carve_footprint(*d->cross_section,mid);
+            const auto right=g2m::world::road_deck_height(*d,mid,f.roadbed_right);
+            const auto left=g2m::world::road_deck_height(*d,mid,f.roadbed_left);
+            REQUIRE(right);REQUIRE(left);
+            if(f.crown==g2m::CrownKind::OneSidedRight)CHECK(*right<=*left);
+            else if(f.crown==g2m::CrownKind::OneSidedLeft)CHECK(*left<=*right);
+            else CHECK(*edge<=*centre);
+        } else CHECK(*edge<=*centre);
         CHECK_FALSE(g2m::world::road_deck_height(*d, d->end_station + 5.0, 0.0).has_value());
     }
     // The primary over the residential tunnel and the motorway over the service tunnel get inferred roofs.

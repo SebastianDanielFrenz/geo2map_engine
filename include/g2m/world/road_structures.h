@@ -18,7 +18,8 @@
 namespace g2m::world {
 
 // One structure: the road surface of a profiled bridge or tunnel stretch (or an inferred roof span of an upper road)
-// between start_station and end_station of its profile, as a mesh. Mesh layout: 5 vertices across per 1 m station
+// between start_station and end_station of its profile, as a mesh. With a served cross-section the slab follows its
+// signed road-bed edges and crown; without one it uses the centred attribute width. Mesh layout: 5 vertices across per 1 m station
 // (rounded crown), then the same vertices 0.5 m lower (the slab's underside, normals down), then the two fascia sides.
 // Positions are float metres relative to mesh.origin (absolute UTM of the first station's reference point), indices
 // counter-clockwise from above on the top. bounds are absolute UTM metres over the mesh's vertices.
@@ -27,18 +28,20 @@ struct RoadDeck {
     std::uint32_t start_ref = 0;         // the stretch of way_id the stations belong to (a way can hold several stretches)
     double start_station = 0, end_station = 0;
     std::vector<VerticalCubic> vertical; // the profile's vertical segments (a roof: one cubic over [start, end])
-    double half_width = 0, crown = 0;    // metres, crossfall fraction (crown_per_mille / 1000)
+    double half_width = 0, crown = 0;    // conservative lateral bound about the reference (metres), crossfall fraction
     bool inferred = false;               // inferred: a roof span over a lower tunnel way, or a bridge approach deck
     bool tunnel_floor = false;           // the stretch is a tunnel (its floor)
     double min_easting = 0, max_easting = 0, min_northing = 0, max_northing = 0;
     LandClass land_class = LandClass::PavedRoad;
+    std::optional<RoadCrossSection> cross_section; // signed served bed and crown, shared by slab and ribbon
     mesh::TerrainChunkMesh mesh;
 };
 
 // Grade separation between ground roads, set by the caller (the game: world config "road_separation"). Two roads whose
 // surfaces differ by more than clearance_m cannot share terrain: one of them stands on a structure there.
 // build_road_decks continues a bridge onto its ground approach (an inferred deck) from the bridge end as far as the
-// approach's footprint (half width + shoulder) still comes within margin_m of the footprint of a road more than
+// approach's served outer footprint (attribute half width + shoulder without a cross-section) still comes within
+// margin_m of the footprint of a road more than
 // clearance_m below it, at most approach_reach_m along the approach, so the upper road is carried by the structure and
 // never by terrain carved for the road underneath (an OSM bridge way often ends over the lower road's verge). The
 // consumer's terrain patch uses the same numbers. enabled = false adds no approach decks (the 0c027dc behaviour).
