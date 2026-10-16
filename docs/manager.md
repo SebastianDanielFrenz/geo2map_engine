@@ -8,12 +8,13 @@ How it works:
 - **This file** is updated whenever an item changes state, so the PR diff always shows the current list.
 - **Owner decisions** are recorded here with the date, and also in the design doc the decision belongs to. Decisions keep their D-number (for example D52).
 
-Last updated: 2026-10-15.
+Last updated: 2026-10-16.
 
 ## In progress
 
 | Item | Where | State |
 |---|---|---|
+| G4 routing slice 3: turn restrictions in `roads.graph` (encoding 6), via-way rules, one release-id bump | branch claude/route-slice3 | being built |
 
 ## Waiting on the owner
 
@@ -27,7 +28,7 @@ Last updated: 2026-10-15.
 
 | Item | Notes |
 |---|---|
-| G4 routing slice 3 | Turn restrictions in `roads.graph` (encoding 6) and via-way rules, batched with one release-id bump ([routing_design.md](routing_design.md)). Lane hints in guidance remain open, and so does timing on the real store. |
+| G4 routing follow-ups | Lane hints in guidance and timing on the real store ([routing_design.md](routing_design.md)). |
 | Long tunnels split into several OSM ways | D52 judges each stretch by its own length. A long tunnel made of several short ways keeps DEM heights at its inner joins. The owner kept the per-stretch default (#11); revisit once above-ground roads look right. |
 | Koenigstein `roads.geom` tile rejected by the deriver | Tile `utm32n/2/452/5428`. racing_game falls back to smoothed terrain there (`RG_ROAD_SURFACE unavailable reason=deriver_rejected`). Find out why the deriver rejects it and fix it. |
 | Consumer switches in racing_game | Render class window from `g2m.terrain.class`; served carved heights (phase 7). |
