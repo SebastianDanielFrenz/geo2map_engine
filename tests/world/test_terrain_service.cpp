@@ -18,6 +18,8 @@
 #include "g2m/server/upstream.h"
 #include "g2m/client/in_process_transport.h"
 #include "g2m/world/tile_fetch.h"
+#include "g2m/world/chunk_terrain_classes.h"
+#include "g2m/world/view_streamer.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -28,6 +30,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <future>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -319,6 +322,104 @@ TEST_CASE("service: release id and coverage match the plain local release", "[wo
     const auto body = decode_body(view->body);
     REQUIRE(body);
     CHECK(decode_terrain_class(*body, c0.front(), decoded));
+}
+
+namespace {
+// Height lookup for build_view_chunks over a service: waits on the ticket (test only; a game peeks).
+struct ServiceHeights {
+    TerrainService* svc = nullptr;
+    std::mutex mu;
+    std::map<std::uint64_t, std::shared_ptr<const HeightTile>> tiles;
+    static const HeightTile* lookup(void* ctx, const TileKey& key) {
+        auto* c = static_cast<ServiceHeights*>(ctx);
+        {
+            std::lock_guard lock(c->mu);
+            const auto it = c->tiles.find(key.packed());
+            if (it != c->tiles.end()) return it->second.get();
+        }
+        auto t = c->svc->height(key, Priority::Render);
+        if (!t.wait_for(kLong) || t.state() != TileState::Ready) return nullptr;
+        std::lock_guard lock(c->mu);
+        return (c->tiles[key.packed()] = t.value()).get();
+    }
+    static std::shared_ptr<const TerrainClassTile> classes(void* ctx, const TileKey& key) {
+        auto* c = static_cast<ServiceHeights*>(ctx);
+        auto t = c->svc->terrain_class(key, Priority::Render);
+        if (!t.wait_for(kLong) || t.state() != TileState::Ready) return nullptr;
+        return t.value();
+    }
+};
+} // namespace
+
+TEST_CASE("service: terrain_class ticket and the render ClassWindow from terrain.class (D62)", "[world][terrain_service][terrain_class_window]") {
+    World w;
+    // Without the class opt-in the ticket fails at once.
+    {
+        auto plain = w.open();
+        auto t = plain->terrain_class(l0(0, 0), Priority::Render);
+        CHECK(t.state() == TileState::Failed);
+        CHECK(plain->peek_terrain_class(l0(0, 0)) == nullptr);
+    }
+    TerrainServiceConfig ck = w.config("derived_classes", 4);
+    ck.layers.classes = true;
+    auto svc = w.open(ck);
+    const TileKey key = l0(0, 0); // holds the service road of l2(0, 0): E 10..110 at N 10
+    auto t = svc->terrain_class(key, Priority::Render);
+    REQUIRE(t.wait_for(kLong));
+    REQUIRE(t.state() == TileState::Ready);
+    CHECK(svc->peek_terrain_class(key) == t.value());
+
+    // The typed ticket equals a decode of the raw container.
+    auto raw = svc->raw_tile(std::string(kTerrainClassLayer), key, Priority::Render);
+    REQUIRE(raw.wait_for(kLong));
+    REQUIRE(raw.state() == TileState::Ready);
+    const auto view = parse_container(raw.value()->container);
+    REQUIRE(view);
+    const auto body = decode_body(view->body);
+    REQUIRE(body);
+    TerrainClassTile decoded;
+    REQUIRE(decode_terrain_class(*body, key, decoded));
+    CHECK(decoded == *t.value());
+
+    std::size_t road_nodes = 0;
+    for (const auto r : t.value()->rank) road_nodes += r > 0 ? 1 : 0;
+    INFO("road nodes " << road_nodes);
+    REQUIRE(road_nodes > 0);
+
+    // The 16 chunks of the tile, built with the served classes at 1 and 4 threads.
+    ServiceHeights heights;
+    heights.svc = svc.get();
+    ViewSource src;
+    src.lookup = &ServiceHeights::lookup;
+    src.ctx = &heights;
+    src.terrain_classes = TerrainClassLookup{&ServiceHeights::classes, &heights, nullptr};
+    std::vector<mesh::ChunkKey> keys;
+    for (int cy = 0; cy < 4; ++cy)
+        for (int cx = 0; cx < 4; ++cx) keys.push_back({kZone, 0, cx, cy});
+    std::vector<ViewChunk> one, four;
+    REQUIRE(build_view_chunks(keys, src, 1, one));
+    REQUIRE(build_view_chunks(keys, src, 4, four));
+    std::size_t paved = 0, floor_vs_ne = 0;
+    for (std::size_t c = 0; c < keys.size(); ++c) {
+        CHECK(one[c].mesh.content_hash == four[c].mesh.content_hash);
+        mesh::ClassWindow win;
+        terrain_class_window(keys[c], t.value().get(), default_render_road_lod(), win);
+        for (std::size_t v = 0; v < win.c.size(); ++v) {
+            REQUIRE(one[c].mesh.land_class[v] == win.c[v]);
+            if (win.c[v] == static_cast<std::uint8_t>(LandClass::PavedRoad)) ++paved;
+        }
+        // Control: the north-east node instead of the south-west one (the other half-cell reading) differs at the
+        // road's edges, so the floor rule is what the comparison above checks.
+        const int i0 = 64 * keys[c].cx, j0 = 64 * keys[c].cy;
+        for (int j = 0; j + 1 < mesh::kChunkVerts; ++j)
+            for (int i = 0; i + 1 < mesh::kChunkVerts; ++i)
+                if (win.c[static_cast<std::size_t>(j * mesh::kChunkVerts + i)] !=
+                    t.value()->land_class[TerrainClassTile::index(i0 + i + 1, j0 + j + 1)])
+                    ++floor_vs_ne;
+    }
+    INFO("paved vertices " << paved << ", north-east reading differs at " << floor_vs_ne);
+    CHECK(paved > 0);
+    CHECK(floor_vs_ne > 0);
 }
 
 TEST_CASE("service: concurrent requests for one tile derive it exactly once", "[world][terrain_service][dedup]") {

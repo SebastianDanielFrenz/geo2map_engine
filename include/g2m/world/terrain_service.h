@@ -47,6 +47,10 @@
 #include <typeinfo>
 #include <vector>
 
+namespace g2m {
+struct TerrainClassTile; // g2m/layer/terrain_class.h (include it to use terrain_class())
+}
+
 namespace g2m::world {
 
 struct StoreConfig {
@@ -214,6 +218,9 @@ public:
 
     // ---- async requests (any thread, never derive on the calling thread) ----------------
     Ticket<HeightTile> height(const TileKey& key, Priority priority);
+    // The decoded g2m.terrain.class tile (any level; D62, the render ClassWindow's source). Failed at once when the
+    // release has no class layer (LayerOptIn::classes off).
+    Ticket<TerrainClassTile> terrain_class(const TileKey& key, Priority priority);
     // road_geom / road_segments / source_osm: `key` is the level-2 tile (a finer key is mapped to its level-2
     // ancestor, so L0 and L2 requests for the same area share one job).
     Ticket<RoadGeomTile> road_geom(const TileKey& l2, Priority priority);
@@ -231,6 +238,7 @@ public:
 
     // ---- non-blocking peeks: the cached value or null, never start work ----------------
     std::shared_ptr<const HeightTile> peek_height(const TileKey& key) const noexcept;
+    std::shared_ptr<const TerrainClassTile> peek_terrain_class(const TileKey& key) const noexcept;
     std::shared_ptr<const RoadGeomTile> peek_road_geom(const TileKey& l2) const noexcept;
     std::shared_ptr<const RoadSegmentsTile> peek_road_segments(const TileKey& l2) const noexcept;
     std::shared_ptr<const OsmTile> peek_source_osm(const TileKey& l2) const noexcept;

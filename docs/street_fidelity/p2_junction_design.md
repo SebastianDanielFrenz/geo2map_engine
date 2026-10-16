@@ -1284,6 +1284,7 @@ Each test is listed with its negative control or sabotage, which must make it fa
 | Junction gradient as implemented (D42) | `test_junction_gradient.cpp` over the junctions touching the four busy L0 tiles (71 flat, 20 tilted DEM), 0.5 m lattice of core points each junction owns: on the road bed and paved rings gradient ≤ max(B, 2·F_paved) + 0.02 at ≥ 2 m from every trim segment and ≤ max(B, own, 2·F_all) + 0.02 nearer (B steepest approach grade + crossfall, F the forced gradient between two approaches' trim points, own the approaches' slope at their trims): 0 over on both DEMs; where 2·F_paved ≤ B the interior meets B + 0.02 (worst excess over B 0.000 flat, 0.005 tilted); B + 0.02 met everywhere on the drivable rings at 36 of 71 flat junctions (D22-D24: 1), 6 of 20 tilted (5); 30 flat / 8 tilted junctions have F_paved > B + 0.02 (no surface can meet B) and are printed with their numbers. T5's no-overshoot reads the range of each approach's base, paved and full height | `CarveOptions::junction_relief_fade = false` (the D22-D24 surface): 14 flat junctions over their limit |
 | Slice 10 as implemented (terrain migration phase 6) | `test_terrain_class.cpp`: **T16** on A66 tiles 1820/21684 and 1822/21685: every approach-core node's role equals the footprint band of its projection (16388 and 2110 nodes, 0 mismatches; road bed 13066, sidewalk 886, verge 2479, junction road bed 196, blend 14445; 2400 bridge-deck nodes on 1822/21685); edge nodes equal on an L0 seam and an L2 seam; **T17 class half** on L1 910/10842: rank-max equals a brute-force reference over a global node map (0 differ), L1 edge equal to the neighbour (0 differ), 10465 road nodes vs 8038 subsampled; served path: server and 4-worker bake give the same containers, 11 inputs at L0, datum None; encoding round trip and every rejection | cell-centre (half-metre) registration: 244 and 99 of 807 / 188 road edge nodes classify differently; land cover from the ancestor only (D49): 220 of 257 L2 seam edge nodes differ |
 | G-1 / G-2 / G-5 as implemented (phase 6) | `[G-1]` (D50); `tests/phys/test_class_mode.cpp`: every cell of a 2 x 2 straddle equals `table.resolve` of its centre node, Absent / Missing / class-less tiles take the fallback (counts 1 / 2), zero allocation, roads kept beside the class tile, `require_classes` fails a class-less fetch after 3 attempts, the streamer installs both, `TransportHeightTileFetch` class layer (404 / wrong key = Internal); `bridges/physics_sim/tests/test_carved_prefetch.cpp` on the PKT fixture release with carved + class: 36 gate keys with class tiles, snapshot fill = live fill, class-only replacement invalidates, class-less entry declines, World state hash with prefetch at 1 / 4 workers = synchronous, prefetch installs > 0, fill miss 0 | reading the node one metre west: > half the cells differ; dropping the class identity check from `prefetch_inputs_current`: the bridge test fails |
+| Slice 11 render class window as implemented (D62) | `tests/world/test_chunk_terrain_classes.cpp` (`[terrain_class_window]`): chunk to tile (four chunks per tile, floor for negative chunks); every vertex of chunks at L0 / L1 / L3 / L6 and negative / edge chunk indices equals the node at floor of its half-metre position (integer reference); the east chunk reads node 256; the default `RenderRoadLod` keeps rank-0 nodes always, every road at L0-L1, tertiary and above at L2, primary and above at L3, no road at L4+, a disabled level hides roads; absent / wrong-key / unsized tile = all-Unknown; one lookup per chunk, none with a null fn; `build_view_chunks` uses `terrain_classes` over `class_lookup` (the road lookup is never called), mesh `land_class` = the window, 1 = 4 threads. `test_terrain_service.cpp`: `terrain_class` ticket Failed without the opt-in, Ready with it, equal to a decode of the raw container, peek after; the 16 chunks of the road tile built from the served tile at 1 and 4 threads (same content hashes, `land_class` = window, 505 PavedRoad vertices) | reading the north-east node instead of the south-west one: 208 vertices of the served tile differ (in-test control); the same shift in the code fails 3 of the 7 test cases (81 assertions) |
 | Goldens | `g3xs` re-recorded (encoding 7 bodies); new `g3j` (junction + furniture sections of both fixtures), `g3d` (carved L0 over 4 fixture L0 tiles on the synthetic DEM); `g3c` (class planes of the same 4 tiles and L1 910/10842, synthetic land cover; a separate set so g3d keeps its lines); Windows = Linux (g3c: Linux only so far) | — |
 
 ---
@@ -1375,7 +1376,7 @@ Sizes: **S** ≤ 1 day, **M** 1-2 days, **L** 3+ days of agent work [estimate].
 | 8 | roads.geom encoding 7 (sections 5-7), validation 9.2, ownership filter, fuzz target extension, config hash; T7, T8; `docs/formats/road_geom.md` | M | Sonnet | release, linux-release, linux-asan-ubsan | **`g3xs` re-recorded** (body SHA `17d9b7c7…ee2f9` changes), **new `g3j`** |
 | 9 | `CarveModel` + `g2m.terrain.carved` deriver: inputs (5.3), smoothing port, buckets, ownership, blends, decks, quantise, pyramid; T12-T15, T17, T19 | L | **Opus** | release, linux-release, linux-asan-ubsan, linux-tsan | **new `g3d`** (carved part) |
 | 10 | `g2m.terrain.class` deriver + TerrainClass encoding 9.4, format doc, fuzz target; T16 | M | Sonnet | release, linux-release, linux-asan-ubsan | new `g3c` (the class part, separate from `g3d`) **- done (terrain migration phase 6, D49, D50)** |
-| 11 | Wiring: bake opt-in (both layers + roads), builtin release, `fill_physics_surfaces` class mode, a render `ClassWindow` from terrain.class, `g2m_ps_bridge` layer option; tests in `tests/phys` and `bridges/physics_sim` | S | Sonnet | full `tools\ci.ps1` + `-Only bridge-release` | none new **- partly done (phase 6: bake/builtin opt-in, `fill_physics_classes`, `ClassSurfaceConfig`, carved+class prefetch test; the render `ClassWindow` from terrain.class is open)** |
+| 11 | Wiring: bake opt-in (both layers + roads), builtin release, `fill_physics_surfaces` class mode, a render `ClassWindow` from terrain.class, `g2m_ps_bridge` layer option; tests in `tests/phys` and `bridges/physics_sim` | S | Sonnet | full `tools\ci.ps1` + `-Only bridge-release` | none new **- done (phase 6: bake/builtin opt-in, `fill_physics_classes`, `ClassSurfaceConfig`, carved+class prefetch test; D62: the render `ClassWindow` from terrain.class, `chunk_terrain_classes.h`)** |
 | 12 | Measurement: `g2m_road_probe --junctions --carve`, home-region run, numbers into this document, the pipeline docs and CLAUDE.md | S | Sonnet | none (docs + probe) | none **- partly done (phase 6: G-6 `road_underpass_census` + probe `--underpasses`, fixture numbers in D51; the home-region run is open)** |
 
 **Order:** 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12.
@@ -2328,8 +2329,8 @@ carved, not the reverse (terrain migration phase 6).**
   crossings, max dip 0.000 m flat / 0.099 m tilted; frankfurt_hoechst none. A synthetic 6 m deep, 16 m wide cutting under
   a secondary road gives a 2.0 m dip on the served profile, so the B8 case is reproduced in kind. The home-store run
   (B8 at s ~ 2852 / 4453 / 5261) and the DEM-masking decision wait for the store.
-- Not done here: the render `ClassWindow` from terrain.class (slice 11), the junction / carve census of section 12 on the
-  home tiles.
+- Not done here: the render `ClassWindow` from terrain.class (slice 11, done since D62), the junction / carve census of section
+  12 on the home tiles.
 
 **D52. Long tunnels follow one straight grade between their portals (owner ruling 2026-10-15).**
 - Ruling (racing_game PR #5, asked "should long tunnels follow the straight line between their portals, and above what
@@ -2499,6 +2500,33 @@ no mask), and the owner's five fixture crossings each over a synthetic 6 m DEM c
 controls that strip `service`/`level`/`tunnel` from both ways (A 66: a deck; the parking cases: the crossing is
 examined again). On the golden DEM (`carve_tilted_dem`) the one deck the fixtures served before D61, way 24504840
 over 52405506 (37.0 m, 1.7 m deep), is now covered; g3c and g3d change in that one hoechst_a66 tile (1820/21684) only.
+
+**D62. The render class window reads the south-west node; the road LOD filters on the rank plane (slice 11, after
+phase 6).**
+- Mapping (design 10.1, now code): a render vertex (i, j) of chunk (L, cx, cy) at (64 cx + i) 2^L + 0.5 m takes class
+  node 64 cx + i (same for y) of level L: the node at floor of its position. With 4 chunks per 257-node tile every
+  vertex of a chunk lies in ONE tile, (L, floor(cx / 4), floor(cy / 4)), at local index 64 (cx mod 4) + i in 0..256, so
+  the east / north edge vertices read the tile's own edge nodes (equal to the neighbour's first column / row, D49) and a
+  chunk needs one fetch. Rejected: averaging or voting over the 2 x 2 nodes around the vertex (ties at every road edge,
+  and a class value is not an average); the north-east node (as good a choice, but the design named the south-west one
+  and the physics side reads its own cell centre either way).
+- Level policy: the client keeps choosing which roads it draws per level (the owner rule of G4 slice 5: LOD detail is a
+  game setting). `RenderRoadLod` is reused as is: a node with rank > 0 is written Unknown when the chunk level has no
+  policy (`raster_params_for_render_level`: disabled or past the policy's levels, so L4-L6 by default, as with the OSM
+  raster) or its rank is below `min_rank`; rank-0 nodes keep their land class at every level. `min_half_width_mm` is
+  not used, the server's rank-max pyramid already keeps roads continuous. Ranks are the way's own (`RoadStyle`), clamped
+  to 1..255, so a track (rank 0) counts as 1 and `min_rank` 0 and 1 select the same nodes. A filtered road node becomes
+  Unknown, not its base class, because the tile does not store the land cover under a road; build_chunk and the game's
+  colour ramp already treat Unknown as "no class data".
+- API (`g2m_world`): `terrain_class_tile_for_chunk`, `terrain_class_window` (allocation-free), `fill_chunk_terrain_classes`
+  over a `TerrainClassLookup{fn, ctx, lod}` (the shape of `ClassLookup`), `ViewSource::terrain_classes` (takes precedence
+  over `class_lookup`; null fn = unchanged behaviour, every view pin unchanged), and the typed
+  `TerrainService::terrain_class(key, priority)` / `peek_terrain_class(key)` ticket (job kind 10, Failed at once when the
+  release has no class layer). Library only: no layer, encoding, config text or release id changes, no golden moves.
+- Not done: the racing_game switch (its `RgTerrainView` keeps the OSM raster until the carved / class switch of
+  section 10.2); `ViewStreamer::set_source` still rebuilds only on a road LOD key change, which is also what a class
+  window needs, but swapping `class_lookup` for `terrain_classes` at runtime is not detected as a change (a consumer
+  switches sources at load, not while streaming).
 
 ---
 

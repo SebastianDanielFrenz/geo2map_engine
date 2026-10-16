@@ -49,7 +49,7 @@ flowchart TD
 
 - No road carving in `terrain.height`: it serves raw DGM1 heights. The carved heights are the separate opt-in layer `g2m.terrain.carved` (street fidelity P2 slice 9; section 2.4 of the [overview](README.md), [format](../formats/terrain_carved.md)), which no consumer reads yet.
 - No blending with other elevation sources, no halo. (PLAN.md 6.1 describes both; the code does not.)
-- `terrain.class` tiles exist (opt-in, [format](../formats/terrain_class.md)) but no consumer reads them yet: land colour and grip in the game still come from `g2m.src.landcover` and `g2m.src.osm` directly, see [client_side.md](client_side.md). The physics bridge can already fill from them (class mode).
+- `terrain.class` tiles exist (opt-in, [format](../formats/terrain_class.md)) but no consumer reads them yet: land colour and grip in the game still come from `g2m.src.landcover` and `g2m.src.osm` directly, see [client_side.md](client_side.md). The physics bridge can already fill from them (class mode), and `g2m_world` builds the render `ClassWindow` from them (`chunk_terrain_classes.h`, `ViewSource::terrain_classes`, `TerrainService::terrain_class`; D62).
 
 ## Consumers
 

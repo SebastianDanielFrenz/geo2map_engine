@@ -16,6 +16,7 @@ set(G2M_WORLD_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/tile_fetch.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/height_sampler.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chunk_road_classes.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chunk_terrain_classes.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/job_scheduler.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/terrain_service.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_structures.cpp
