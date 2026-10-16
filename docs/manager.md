@@ -31,7 +31,7 @@ Last updated: 2026-10-16.
 | G4 routing follow-ups | Lane hints in guidance and timing on the real store ([routing_design.md](routing_design.md)). |
 | Long tunnels split into several OSM ways | D52 judges each stretch by its own length. A long tunnel made of several short ways keeps DEM heights at its inner joins. The owner kept the per-stretch default (#11); revisit once above-ground roads look right. |
 | Koenigstein `roads.geom` tile rejected by the deriver | Tile `utm32n/2/452/5428`. racing_game falls back to smoothed terrain there (`RG_ROAD_SURFACE unavailable reason=deriver_rejected`). Find out why the deriver rejects it and fix it. |
-| Consumer switches in racing_game | Render class window from `g2m.terrain.class` (library side done in #15); served carved heights (phase 7). |
+| Consumer switches in racing_game | Render class window from `g2m.terrain.class` (library side done in #15; game opt-in switch in racing_game #27, draft); served carved heights (phase 7). |
 | G3-E / G3-F | Ribbons, markings and bridge bodies; route acceptance on a 20-junction route. |
 | P2 slices 10-12, P3 markings | [street_fidelity/p2_junction_design.md](street_fidelity/p2_junction_design.md), [street_fidelity/plan.md](street_fidelity/plan.md). |
 | G5 land cover, buildings, water, vegetation | racing_game brief lane E2. |
