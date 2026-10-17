@@ -26,12 +26,15 @@ class CarveFixture {
 public:
     CarveFixture(const g2m::RoadGraph& world, std::function<double(double, double)> height_m = {})
         : world_(&world), height_m_(std::move(height_m)) {}
+    // The served tiles carry underpass decks (D53); false builds them as before D53 (set before the first geom()).
+    bool underpass = true;
 
     // The served roads.geom tile of a level-2 key (an empty tile where the world has no ways).
     const g2m::RoadGeomTile& geom(const g2m::TileKey& key) {
         auto it = geom_.find(key);
         if (it != geom_.end()) return *it->second;
-        auto tile = served_geometry_in_tile(*world_, key, height_m_);
+        GeomOptions o; o.height_m = height_m_; o.completion = g2m::served_road_completion_options(); o.underpass = underpass;
+        auto tile = geometry_in_tile_with(*world_, key, o);
         if (!tile) throw std::runtime_error("carve fixture: geometry " + tile.error().message);
         return *geom_.emplace(key, std::make_unique<g2m::RoadGeomTile>(std::move(*tile))).first->second;
     }

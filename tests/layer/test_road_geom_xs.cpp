@@ -51,7 +51,7 @@ void rejects(const char* name, const std::function<void(RoadGeomTile&)>& mutate)
 std::string hex_of(const TileBody& body) { return to_hex(content_hash(*encode_body(body))); }
 }
 
-TEST_CASE("roads.geom encodings 6, 7 and 8 round trip cross-sections, declines and features", "[layer][road_geom_xs]") {
+TEST_CASE("roads.geom encodings 6 to 9 round trip cross-sections, declines and features", "[layer][road_geom_xs]") {
     auto tile = base_tile();
     CHECK(tile.encoding == 8); tile.encoding = kRoadGeomEncodingPrevious;
     // A non-trivial section: ramps, an offset with ramps, a join record, turn bits, a feature at each end.
@@ -85,11 +85,19 @@ TEST_CASE("roads.geom encodings 6, 7 and 8 round trip cross-sections, declines a
     CHECK(back7->encoding == 7); CHECK(back7->features == tile.features); CHECK(back7->origins == seven.origins);
     CHECK(*encode_body(*encoded(*back7)) == *encode_body(*body7));
     // Encoding 8 (D47): the byte layout of 7; only the encoding number differs for a tile without tunnel floors.
-    auto eight = tile; eight.encoding = kRoadGeomEncoding;
+    auto eight = tile; eight.encoding = kRoadGeomEncodingTunnels;
     const auto body8 = encoded(eight); REQUIRE(body8);
     CHECK(body8->encoding == 8); REQUIRE(body8->sections.size() == 7);
     for (std::size_t i = 0; i < 7; ++i) CHECK(body8->sections[i].data == body7->sections[i].data);
     const auto back8 = decode_road_geom(*body8); REQUIRE(back8); CHECK(back8->encoding == 8); CHECK(back8->origins == eight.origins);
+    // Encoding 9 (D56): sections 1-7 of encoding 8 byte for byte, then section 8 (no decks here: a zero count).
+    auto nine = tile; nine.encoding = kRoadGeomEncoding;
+    const auto body9 = encoded(nine); REQUIRE(body9);
+    CHECK(body9->encoding == 9); REQUIRE(body9->sections.size() == 8);
+    for (std::size_t i = 0; i < 7; ++i) CHECK(body9->sections[i].data == body8->sections[i].data);
+    CHECK(body9->sections[7].type == 8);
+    const auto back9 = decode_road_geom(*body9); REQUIRE(back9); CHECK(back9->encoding == 9); CHECK(back9->underpasses.empty());
+    CHECK(*encode_body(*encoded(*back9)) == *encode_body(*body9));
     // A whole-section decline is a record of its own.
     tile.features.clear(); tile.entries[0].cross_section.reset();
     tile.entries[0].cross_section_decline = CrossSectionDecline{CrossSectionDeclineCode::TotalWidthLimit, -7};
@@ -103,7 +111,7 @@ TEST_CASE("roads.geom encoding 6 keeps sections 1 to 2 as before and decodes enc
     auto tile = base_tile(); tile.encoding = kRoadGeomEncodingPrevious; const auto body = encoded(tile); REQUIRE(body);
     REQUIRE(body->sections.size() == 4);
     // The embedded graph is the encoding-5 payload, byte for byte.
-    CHECK(body->sections[0].data == encode_road_graph(tile.source, kRoadGraphEncoding)->sections[0].data);
+    CHECK(body->sections[0].data == encode_road_graph(tile.source, kRoadGraphEncodingTags)->sections[0].data);
     // Section 2 is unchanged: with the legacy graph it reproduces the encoding-5 golden body of the synthetic fixture.
     const auto legacy_graph = encode_road_graph(tile.source, kRoadGraphEncodingLegacy); REQUIRE(legacy_graph);
     const TileBody legacy{kRoadGeomEncodingLegacy, 1, {legacy_graph->sections[0], body->sections[1]}};
@@ -138,7 +146,7 @@ TEST_CASE("roads.geom validation rejects every rule of design 7.2", "[layer][roa
     rejects("declined entry with a cross-section", [](auto& t) { t.entries[1].cross_section = t.entries[0].cross_section; });
     rejects("declined entry with a cross-section decline", [](auto& t) { t.entries[1].cross_section_decline = CrossSectionDecline{}; });
     rejects("cross-section length differs from the reference", [](auto& t) { t.entries[0].cross_section->length_m += 1; });
-    rejects("unknown tile encoding", [](auto& t) { t.encoding = 9; });
+    rejects("unknown tile encoding", [](auto& t) { t.encoding = 10; });
     rejects("legacy tile with a cross-section", [](auto& t) { t.encoding = 5; });
     rejects("legacy tile with features", [](auto& t) { t.encoding = 5; t.entries[0].cross_section.reset(); t.features = {feature(1, 0)}; });
     // Enums, flags and counts.
@@ -322,14 +330,21 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
         " tunnel-floor=5/0.29999999999999999/20/chord:0 bridge-anchor-reuse=1 bridge-walk-margin=205";
     CHECK(deriver.config_hash() != Sha256::of(phase5));
     // Owner ruling 2026-10-15: tunnels of 200 m and more follow the straight portal grade (de.json tunnel block).
-    const std::string after = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
+    const std::string d52 = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
         "sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=8 rules=de:" +
         rules_hex + " join-bisector=1 context=nodes junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/200 "
         "completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05 corner-fillet=1 width-taper=5"
         " tunnel-floor=5/0.29999999999999999/20/chord:200 bridge-anchor-reuse=1 bridge-walk-margin=205";
+    CHECK(deriver.config_hash() != Sha256::of(d52));
+    // Owner decision 2026-10-15 (D53-D58): underpass decks, enc=9, and the crossing context.
+    const std::string after = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
+        "sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=9 rules=de:" +
+        rules_hex + " join-bisector=1 context=nodes junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/200 "
+        "completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05 corner-fillet=1 width-taper=5"
+        " tunnel-floor=5/0.29999999999999999/20/chord:200 bridge-anchor-reuse=1 bridge-walk-margin=205 underpass=1 crossing-context=1 underpass-tags=D61";
     CHECK(road_geom_config_text() == after);
     CHECK(deriver.config_hash() == Sha256::of(after));
-    CHECK(road_geom_desc().encoding == 8);
+    CHECK(road_geom_desc().encoding == 9);
     // The text is built from served_road_completion_options(): pin those values, so a changed default fails here and
     // in the literal text above together.
     {

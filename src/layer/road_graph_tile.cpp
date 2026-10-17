@@ -82,6 +82,32 @@ Result<void> validate_road_graph(const RoadGraph& g) {
         std::find(used.begin(), used.end(), false) != used.end()) return malformed("extra edges/nodes or repeat count");
     return {};
 }
+static Result<void> validate_restrictions(const RoadGraphTile& tile) {
+    const auto& list = tile.restrictions;
+    if (list.size() > kRoadGraphMaxRestrictions) return make_error(ErrorCode::LimitExceeded, "roads.graph: restriction count");
+    const auto way_known = [&](std::int64_t id) {
+        auto it = std::lower_bound(tile.graph.ways.begin(), tile.graph.ways.end(), id,
+            [](const auto& w, auto value) { return w.osm_id < value; });
+        return it != tile.graph.ways.end() && it->osm_id == id;
+    };
+    for (std::size_t i = 0; i < list.size(); ++i) {
+        const auto& r = list[i];
+        std::size_t code = 0;
+        if (!restriction_value_code(r.value, code) || restriction_value_kind(code) != r.kind) return malformed("restriction value/kind");
+        if (i && !restriction_key_less(list[i - 1], r)) return malformed("restriction order or duplicate");
+        if (r.from_way == 0 || r.to_way == 0 || r.relation_id == 0) return malformed("restriction ids");
+        if ((r.via_node == 0) == r.via_ways.empty()) return malformed("restriction needs exactly one of via node and via ways");
+        if (r.via_ways.size() > kRoadGraphMaxViaWays) return malformed("restriction via ways");
+        bool held = false;
+        if (r.via_node != 0) held = find_node(tile.graph, r.via_node) != nullptr;
+        for (const auto way : r.via_ways) {
+            if (way == 0) return malformed("restriction via way id");
+            held = held || way_known(way);
+        }
+        if (!held) return malformed("restriction not held by the tile");
+    }
+    return {};
+}
 Result<void> validate_road_graph_tile(const RoadGraphTile& tile) {
     if (!tile.key.valid() || tile.key.level != 2 || tile.halo_m != kRoadGraphHaloM)
         return malformed("invalid key or halo");
@@ -93,14 +119,14 @@ Result<void> validate_road_graph_tile(const RoadGraphTile& tile) {
             return malformed("noncanonical ownership");
     }
     if (owned_index != tile.owned_edges.size()) return malformed("extra ownership indices");
-    return {};
+    return validate_restrictions(tile);
 }
 
 Result<TileBody> encode_road_graph(const RoadGraphTile& tile, std::uint16_t encoding) {
-    if (encoding != kRoadGraphEncodingLegacy && encoding != kRoadGraphEncoding)
+    if (encoding != kRoadGraphEncodingLegacy && encoding != kRoadGraphEncodingTags && encoding != kRoadGraphEncoding)
         return make_error(ErrorCode::InvalidArgument, "roads.graph: unsupported encoding to write");
     const auto valid = validate_road_graph_tile(tile); if (!valid) return valid.error();
-    const bool with_tags = encoding == kRoadGraphEncoding;
+    const bool with_tags = encoding != kRoadGraphEncodingLegacy;
     ByteWriter w;
     w.u64(tile.key.packed()); w.u32(tile.halo_m);
     const auto& g = tile.graph;
@@ -122,14 +148,24 @@ Result<TileBody> encode_road_graph(const RoadGraphTile& tile, std::uint16_t enco
     // Edges are reconstructed canonically from original references. Only
     // ownership indices are stored; this avoids redundant, forgeable topology.
     w.varint(tile.owned_edges.size()); for (auto index : tile.owned_edges) w.varint(index);
+    if (encoding == kRoadGraphEncoding) {
+        w.varint(tile.restrictions.size());
+        for (const auto& r : tile.restrictions) {
+            std::size_t code = 0; restriction_value_code(r.value, code); // validated above
+            w.svarint(r.relation_id); w.u8(static_cast<std::uint8_t>(code)); w.svarint(r.from_way); w.svarint(r.to_way);
+            w.svarint(r.via_node); w.varint(r.via_ways.size());
+            for (const auto way : r.via_ways) w.svarint(way);
+        }
+    }
     if (w.size() > kMaxSectionRawSize) return make_error(ErrorCode::LimitExceeded, "roads.graph: section size");
     return TileBody{encoding, 1, {{1, SectionCodec::Zstd, w.take()}}};
 }
 
 Result<RoadGraphTile> decode_road_graph(const TileBody& body) {
-    if ((body.encoding != kRoadGraphEncodingLegacy && body.encoding != kRoadGraphEncoding) || body.encoding_version != 1)
+    if ((body.encoding != kRoadGraphEncodingLegacy && body.encoding != kRoadGraphEncodingTags && body.encoding != kRoadGraphEncoding) ||
+        body.encoding_version != 1)
         return make_error(ErrorCode::Unsupported, "roads.graph: encoding/version");
-    const bool with_tags = body.encoding == kRoadGraphEncoding;
+    const bool with_tags = body.encoding != kRoadGraphEncodingLegacy;
     if (body.sections.size() != 1 || body.sections[0].type != 1 || body.sections[0].data.size() > kMaxSectionRawSize)
         return malformed("sections");
     ByteReader r(body.sections[0].data);
@@ -185,6 +221,25 @@ Result<RoadGraphTile> decode_road_graph(const TileBody& body) {
     for (std::uint64_t i = 0; i < owners; ++i) {
         const auto index = r.varint(); if (!r.ok() || index > std::numeric_limits<std::uint32_t>::max()) return malformed("ownership index");
         tile.owned_edges.push_back(static_cast<std::uint32_t>(index));
+    }
+    if (body.encoding == kRoadGraphEncoding) {
+        const auto count = r.varint();
+        // A record is at least 6 bytes.
+        if (!r.ok() || count > kRoadGraphMaxRestrictions || count > r.remaining() / 6) return malformed("restriction count");
+        tile.restrictions.reserve(static_cast<std::size_t>(count));
+        for (std::uint64_t i = 0; i < count; ++i) {
+            TurnRestriction t;
+            t.relation_id = r.svarint();
+            const auto code = r.u8();
+            if (!r.ok() || code >= kRestrictionValueCount) return malformed("restriction value code");
+            t.value = std::string(restriction_value_name(code)); t.kind = restriction_value_kind(code);
+            t.from_way = r.svarint(); t.to_way = r.svarint(); t.via_node = r.svarint();
+            const auto vias = r.varint();
+            if (!r.ok() || vias > kRoadGraphMaxViaWays || vias > r.remaining()) return malformed("restriction via way count");
+            for (std::uint64_t j = 0; j < vias; ++j) t.via_ways.push_back(r.svarint());
+            if (!r.ok()) return malformed("truncated restrictions");
+            tile.restrictions.push_back(std::move(t));
+        }
     }
     if (!r.at_end()) return malformed("truncated or trailing bytes");
     const auto valid = validate_road_graph_tile(tile); if (!valid) return valid.error();

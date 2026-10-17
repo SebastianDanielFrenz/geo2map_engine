@@ -1,11 +1,11 @@
-// src/route/turn_restriction.cpp - see g2m/route/turn_restriction.h.
-#include "g2m/route/turn_restriction.h"
+// src/layer/road_restriction.cpp - see g2m/layer/road_restriction.h.
+#include "g2m/layer/road_restriction.h"
 
 #include <algorithm>
 #include <array>
 #include <string_view>
 
-namespace g2m::route {
+namespace g2m {
 namespace {
 
 struct ValueInfo {
@@ -35,6 +35,19 @@ bool lists_car(std::string_view list) {
 }
 
 } // namespace
+
+std::string_view restriction_value_name(std::size_t code) { return code < kValues.size() ? kValues[code].value : std::string_view{}; }
+bool restriction_value_code(std::string_view value, std::size_t& code) {
+    for (std::size_t i = 0; i < kValues.size(); ++i)
+        if (kValues[i].value == value) { code = i; return true; }
+    return false;
+}
+RestrictionKind restriction_value_kind(std::size_t code) { return kValues[code < kValues.size() ? code : 0].kind; }
+bool restriction_key_less(const TurnRestriction& a, const TurnRestriction& b) {
+    if (a.relation_id != b.relation_id) return a.relation_id < b.relation_id;
+    if (a.from_way != b.from_way) return a.from_way < b.from_way;
+    return a.to_way < b.to_way;
+}
 
 Result<RestrictionSet> extract_turn_restrictions(const osm::OsmData& data, std::size_t max_restrictions) {
     RestrictionSet out;
@@ -118,4 +131,4 @@ Result<RestrictionSet> extract_turn_restrictions(const osm::OsmData& data, std::
     return out;
 }
 
-} // namespace g2m::route
+} // namespace g2m

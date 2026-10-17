@@ -54,7 +54,9 @@ struct RoadSeparation {
 std::optional<double> road_deck_height(const RoadDeck& deck, double station, double lateral);
 
 // Every deck of the tile, in a fixed order: first one per entry whose profile is a bridge or a tunnel (whole stretch,
-// entry order), then the inferred roofs (lower tunnel way in graph order, upper entry in entry order, crossing in
+// entry order), then one per served underpass deck (encoding 9, D56: RoadGeomTile::underpasses order, inferred, over
+// [start_m, end_m] of the ground stretch's own profile), then the inferred roofs (none where the crossing lies on a
+// served underpass deck) (lower tunnel way in graph order, upper entry in entry order, crossing in
 // reference-segment order). A roof spans max(20, (w_lower / 2 + 4) / sin(angle)) metres either side of the crossing,
 // over an upper road of rank >= 5 on a higher OSM layer, with the upper profile's own heights and grades at its ends;
 // then (separation.enabled) the approach decks: per paved ground entry (entry order) whose stretch starts or ends on an

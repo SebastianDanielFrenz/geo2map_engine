@@ -1,4 +1,5 @@
 #include "g2m/layer/road_completion.h"
+#include "g2m/layer/road_underpass.h"
 #include "g2m/core/det_math.h"
 #include <algorithm>
 #include <array>
@@ -394,6 +395,7 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
             }
             if (!complete) return std::nullopt;
             samples.push_back({line.length_m, b->height / 256.0});
+            if (limits.underpass) limits.underpass->mask_samples(entry.way_id, entry.stretch, line, samples);   // D54
             auto vertical = fit_vertical_profile(samples, fit);
             // D43: end planes that contradict the stretch's own measured rise (a node at the edge of a deck, where the bare
             // earth is interpolated and catches up within metres; a short way split between two such reads) leave no cubic

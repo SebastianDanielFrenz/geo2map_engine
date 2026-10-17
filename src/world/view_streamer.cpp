@@ -32,7 +32,11 @@ void build_one_chunk(const mesh::ChunkKey& key, const ViewSource& source, ViewCh
     mesh::gather_window(key, source.lookup, source.ctx, window);
     // After the gather: every tile of the window has been produced now, so its state is final for THIS build.
     out_chunk.carve = chunk_window_carve(key, source.ctx, source.carve_state);
-    if (source.class_lookup.fn == nullptr) {
+    if (source.terrain_classes.fn != nullptr) {
+        mesh::ClassWindow classes;
+        fill_chunk_terrain_classes(key, source.terrain_classes, classes);
+        mesh::build_chunk(key, window, &classes, out_chunk.mesh);
+    } else if (source.class_lookup.fn == nullptr) {
         mesh::build_chunk(key, window, /*classes=*/nullptr, out_chunk.mesh);
     } else {
         mesh::ClassWindow classes;

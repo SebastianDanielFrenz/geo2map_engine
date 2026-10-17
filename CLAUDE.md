@@ -189,6 +189,11 @@ geo2map_engine/
     chunk_road_classes.h             ClassLookup/RoadSegmentsFn, road_class_lattice,
                                       src_osm_tiles_for_chunk, rasterize_chunk_road_classes (owner rule;
                                       ClassLookup::lod = the caller's RenderRoadLod, null = default)
+    chunk_terrain_classes.h          (P2 slice 11, D62) the served alternative: TerrainClassLookup/
+                                      TerrainClassTileFn, terrain_class_tile_for_chunk, terrain_class_window
+                                      (vertex = the class node at floor of its position, road nodes filtered
+                                      by the RenderRoadLod on the rank plane), fill_chunk_terrain_classes;
+                                      ViewSource::terrain_classes takes precedence over class_lookup
     surface_id_table.h               g2m::classes::SurfaceIdTable (SurfaceKind + LandClass -> consumer
                                       id; road cell with a known kind -> kind id, else land class id;
                                       to_road_value_lut)
@@ -217,7 +222,7 @@ geo2map_engine/
                                       thread, accept(), frame() -> shown/downgraded/evicted changes
     terrain_service.h                TerrainService (terrain migration phase 2): open (stores, layer opt-ins,
                                       release, in-process server, ONE worker pool), async height/road_geom/
-                                      road_segments/source_osm/raw_tile/structures/road_ribbons/buildings ->
+                                      road_segments/source_osm/raw_tile/terrain_class (D62)/structures/road_ribbons/buildings ->
                                       Ticket<T>, peek_* (never start work), surface_height_exact/bilinear on
                                       resident tiles, warm() -> WarmJob, physics_fetch() -> PhysicsFetch
                                       (IHeightTileFetch; blocks on the caller, which is a loader thread),
@@ -1127,7 +1132,15 @@ layer, class_layer)`, `LoaderConfig::require_classes`, `ResidentHeightSet` entri
 `g2m_road_probe --underpasses`. Tests: `tests/layer/test_terrain_class.cpp` ([terrain_class]), G-1 case in test_terrain_carve.cpp,
 `tests/layer/test_road_underpass.cpp` ([underpass]), `tests/phys/test_class_mode.cpp` ([classes]),
 `bridges/physics_sim/tests/test_carved_prefetch.cpp` ([classes], bridge leg); golden `g3c` (`tests/golden/golden_g3c.cpp`,
-`testdata/golden/g3c_golden.txt`). Open: render `ClassWindow` from terrain.class, the home-region G-6 run.
+`testdata/golden/g3c_golden.txt`). Open: the home-region G-6 run.
+
+Slice 11 render class window (design D62, 2026-10-16): `include/g2m/world/chunk_terrain_classes.h` /
+`src/world/chunk_terrain_classes.cpp` build a chunk's `ClassWindow` from the `g2m.terrain.class` tile of its level (one tile per
+chunk: (L, floor(cx/4), floor(cy/4)); the vertex at (64 cx + i) 2^L + 0.5 m takes node 64 cx + i, its south-west node; road
+nodes with rank below the `RenderRoadLod` level's min_rank, or at a level without a policy, become Unknown). `ViewSource::
+terrain_classes` (precedence over `class_lookup`), `TerrainService::terrain_class` / `peek_terrain_class` (job kind 10). Library
+only: no layer, config text, release id or golden change. Tests `tests/world/test_chunk_terrain_classes.cpp`
+(`[terrain_class_window]`) and the served case in `test_terrain_service.cpp`.
 
 Junction gradient (design D42, after slice 9): the junction surface blends v_i = b_i + phi_i (p_i - b_i) + psi_i (z_i - p_i)
 instead of z_i (b base, p paved band only, z full approach surface; `junction_approach_heights` returns all three), with
@@ -1162,6 +1175,27 @@ constant grade between its portal samples (DEM floor below, or when steeper than
 with the game's mesh code). Tests `[tunnel]` in test_road_completion.cpp (tile edge invariance + controls, fixture measurement)
 and test_road_rules.cpp.
 
+Underpass decks (design D53-D58, owner decision 2026-10-15, racing_game PR #5): `data/road_rules/de.json` block `underpass`
+(`UnderpassRules`: enabled, min_depth 1 m, window 50 m, sag radius 300 m, max span 80 m, abutment 2 m, depth tol 0.1 m,
+lower margin 1 m, end clearance 1 m; de.json SHA `2fe0826f...dfa0`). `include/g2m/layer/road_underpass.h`
+`RoadUnderpassFinder` (spans per ground stretch: crossing of a lower-layer/tunnel way without a shared node, rims from the
+upper hull of the window minus a 300 m sag, deck = lower footprint + depression + abutments clipped to the rims; mask =
+rim chord over the span, applied via `RoadProfileLimits::underpass` in strict/Retry and GroundCompleted) and
+`road_crossing_dependencies` (D57: roads.graph tiles of every tile-way segment; separate crossings graph,
+`RoadUnderpassOptions{enabled, crossings, stats}` of `build_road_geom_tile`, library default off). roads.geom encoding 9
+(`kRoadGeomEncoding`, 8 = `kRoadGeomEncodingTunnels` still written when asked, no decks): section 8 `RoadGeomTile::underpasses`
+(`RoadUnderpass{entry_index, start_m, end_m, depth_mm, flags, lower_ways}`). Consumers: terrain.carved skips deck spans
+on the ground line and adds a bridge line per deck (`CarveOptions::underpass_decks` sabotage), the road envelope marks
+deck capsules bridge, `g2m::world::build_road_decks` adds an inferred deck per span (no tunnel roof under it). D59 (owner: steep walls): ground
+blends fade out within 1 m past the deck end planes (`Station::deck_lo/deck_hi`, `kUnderpassWallFadeM`, sabotage `CarveOptions::underpass_steep_walls`), so the cutting
+keeps its own walls under the deck. D60: parameters kept as served (owner 2026-10-15). D61 (owner's tag answers): parking-structure storeys
+(`service=parking_aisle`, `level=*`) are neither upper nor lower roads (`RoadUnderpassStats::in_structure`); a span over tunnel lower ways only is
+`covered` (`RoadUnderpassSpanFit::covered`: masked, no deck). Config
+texts: roads.geom `enc=9 ... underpass=1 crossing-context=1 underpass-tags=D61`, carved/class `enc=9 ... underpass-deck=1 underpass-walls=steep/1`. Tests
+`tests/layer/test_road_underpass.cpp` (`[underpass][deck]`: bounds + ground outside, non-deck controls, near end,
+tile invariance + negative control, encoding 9 round trip/validation, carve no-slot + sabotage, `[walls]` steep walls + sabotage, `[d61]` tag rules on the scene and on the owner's five fixture crossings with tag-stripped controls; hidden `[.][diag][tags]` OSM tags at those crossings, hidden `[.][diag][d61]` decks/covered spans of both fixtures on the golden DEM, `[.][diag]` WGS84 crossing list and `[.][diag]` example-4
+CSV), `tests/world/test_road_meshes.cpp` (D56 deck; D61: a tunnel lower road gets no served deck), scene `tests/support/underpass_scene.h`.
+
 ## G4 routing, slice 1 (2026-10-14)
 
 Design, owner questions and the slice plan: `docs/routing_design.md`. `g2m_route` (`include/g2m/route/`, `src/route/`)
@@ -1174,8 +1208,8 @@ oneway, access and integer ms costs; via-way rules are counted, not applied. Tes
 Slice 2 (2026-10-14): ALT landmarks (`RouteLandmarks`, 16 by default; 30 km on the stand-in grid: 1.2 ms mean,
 1,695 settled vs 78,464 plain), heading-aware snapping and point-to-point routes, region graph assembly from
 roads.graph tiles (`region_graph.h`). Defaults settled: tracks routable at 15 km/h, time restrictions ignored.
-Slice 4 (2026-10-14): guidance manoeuvre list (`route_guidance.h`, `g2m_route_tests "[guidance]"`). Slice 5
+Slice 4 (2026-10-14): guidance manoeuvre list (`route_guidance.h`, `g2m_route_tests "[guidance]"`); lane hints (`Maneuver::lanes`, `LaneHint`, `parse_turn_lanes`; from the approach way's `turn:lanes`[`:forward/backward`], empty without a usable tag; `"[lanes]"`). Slice 5
 (2026-10-14): client map tiles at three LODs from level-2 roads.graph tiles (`route_map.h`, `"[map]"`; fixture
 tiles <= 22 KiB, < 5 ms). Owner rules from PR #2: turn costs final at the defaults; every map and render-road LOD
 parameter is a runtime setting the game passes in, with per-LOD/per-level cache keys (docs/routing_design.md 6.1,
-tests `"[lod_settings]"`). Next: slice 3 (restrictions in roads.graph, via-way rules), batched with a release-id bump.
+tests `"[lod_settings]"`). Slice 3 (2026-10-16): `roads.graph` encoding 6 carries the turn restrictions a tile holds (`include/g2m/layer/road_restriction.h`, `RoadGraphTile::restrictions`, deriver extracts them from the 9 src.osm inputs; roads.geom still embeds encoding 5); `RoutingGraph` applies via-way rules with ghost search states (`state_count()`, `arcs()` = real arcs), `assemble_region` returns graph + merged restrictions. Release ids of roads.graph and roads.geom changed (terrain unchanged); tests `test_via_way.cpp`, `test_route_restrictions.cpp`, `tests/route/via_reference.h`. Next: real home-store runs.

@@ -4,6 +4,6 @@ g3d.frankfurt_hoechst.tile.1852.21718.heights 65536 1db56df8f61a6c60
 g3d.frankfurt_hoechst.tile.1852.21718.owners 20782 bfaa523fb9f38262
 g3d.hoechst_a66.tile.1822.21685.heights 65536 520fd283bd1fa184
 g3d.hoechst_a66.tile.1822.21685.owners 11165 163935d3836ada4e
-g3d.hoechst_a66.tile.1820.21684.heights 65536 9b99f034b2df0c86
+g3d.hoechst_a66.tile.1820.21684.heights 65536 8a42bf56df60d791
 g3d.hoechst_a66.tile.1820.21684.owners 30933 89721c38d1fb1fcb
-all 351146 576484664045f52c
+all 351146 b38bd62a80b71d85

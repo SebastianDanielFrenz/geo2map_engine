@@ -50,8 +50,26 @@ Result<RoadGraph> merge_region_graphs(std::span<const RoadGraph* const> graphs, 
     return out;
 }
 
-Result<RoadGraph> assemble_region_graph(std::span<const TileKey> keys, const RoadGraphTileFetch& fetch,
-                                        RegionGraphStats* stats) {
+Result<std::vector<TurnRestriction>> merge_tile_restrictions(std::span<const RoadGraphTile* const> tiles,
+                                                             RegionGraphStats* stats) {
+    std::vector<const TurnRestriction*> all;
+    for (const RoadGraphTile* t : tiles)
+        for (const TurnRestriction& r : t->restrictions) all.push_back(&r);
+    std::stable_sort(all.begin(), all.end(), [](const auto* a, const auto* b) { return restriction_key_less(*a, *b); });
+    std::vector<TurnRestriction> out;
+    for (const TurnRestriction* r : all) {
+        if (!out.empty() && !restriction_key_less(out.back(), *r)) {
+            if (!(out.back() == *r)) return make_error(ErrorCode::Malformed, "region graph: conflicting restriction copies");
+            continue;
+        }
+        out.push_back(*r);
+    }
+    if (stats) { stats->restriction_copies = all.size(); stats->restrictions = out.size(); }
+    return out;
+}
+
+Result<RegionData> assemble_region(std::span<const TileKey> keys, const RoadGraphTileFetch& fetch,
+                                   RegionGraphStats* stats) {
     std::vector<TileKey> sorted(keys.begin(), keys.end());
     std::sort(sorted.begin(), sorted.end());
     sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
@@ -67,10 +85,24 @@ Result<RoadGraph> assemble_region_graph(std::span<const TileKey> keys, const Roa
         ++local.tiles_present;
     }
     std::vector<const RoadGraph*> graphs;
-    for (const auto& t : tiles) graphs.push_back(&t.graph);
+    std::vector<const RoadGraphTile*> tile_ptrs;
+    for (const auto& t : tiles) { graphs.push_back(&t.graph); tile_ptrs.push_back(&t); }
+    RegionData out;
     auto merged = merge_region_graphs(graphs, &local);
+    if (!merged) return merged.error();
+    out.graph = std::move(*merged);
+    auto restrictions = merge_tile_restrictions(tile_ptrs, &local);
+    if (!restrictions) return restrictions.error();
+    out.restrictions = std::move(*restrictions);
     if (stats) *stats = local;
-    return merged;
+    return out;
+}
+
+Result<RoadGraph> assemble_region_graph(std::span<const TileKey> keys, const RoadGraphTileFetch& fetch,
+                                        RegionGraphStats* stats) {
+    auto region = assemble_region(keys, fetch, stats);
+    if (!region) return region.error();
+    return std::move(region->graph);
 }
 
 std::vector<TurnRestriction> merge_turn_restrictions(std::span<const RestrictionSet> sets) {

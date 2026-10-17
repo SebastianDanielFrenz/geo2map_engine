@@ -315,11 +315,15 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         auto with_origin = body(must(g2m::encode_road_geom(completed), "road geom provenance encode"));
         // Junctions (a signalised one, a raised table, one on a crossing node) and furniture of every kind.
         auto junctions = body(must(g2m::encode_road_geom(must(g2m_test::junction_scene_tile(), "junction scene")), "road geom junction encode"));
+        // Encoding 9 (D56): one underpass deck record on the profiled entry.
+        auto decked = featured; decked.encoding = g2m::kRoadGeomEncoding;
+        decked.underpasses.push_back({0, 10.0, 30.0, 1500, 0, {77, 4242}});
+        auto nine = body(must(g2m::encode_road_geom(decked), "road geom underpass encode"));
         tile.entries[0].cross_section.reset(); tile.entries[0].cross_section_decline = g2m::CrossSectionDecline{g2m::CrossSectionDeclineCode::NoCountedLane, 0};
         auto cross_decline = body(must(g2m::encode_road_geom(tile), "road geom cross-section decline encode"));
         tile.entries[0].cross_section_decline.reset(); tile.entries[0].profile.reset(); tile.entries[0].decline = g2m::make_error(g2m::ErrorCode::Unsupported, "fixture decline");
         return {std::move(first), body(legacy), std::move(with_features), std::move(cross_decline), body(must(g2m::encode_road_geom(tile), "road geom decline encode")),
-                std::move(six), std::move(with_origin), std::move(junctions)};
+                std::move(six), std::move(with_origin), std::move(junctions), std::move(nine)};
     }
     case Target::Roadgraph: {
         g2m::RoadGraphTile tile;
@@ -336,7 +340,16 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         auto legacy = body(must(g2m::encode_road_graph(tile, g2m::kRoadGraphEncodingLegacy), "encode_road_graph legacy"));
         tile.graph.nodes[0].tags = {{"highway", "crossing"}, {"traffic_calming", "table"}, {"traffic_calming:length", "6"}};
         tile.graph.nodes[1].tags = {{"barrier", "bollard"}};
-        return {std::move(first), std::move(loop), std::move(legacy), body(must(g2m::encode_road_graph(tile), "encode_road_graph tags"))};
+        auto tags5 = body(must(g2m::encode_road_graph(tile, g2m::kRoadGraphEncodingTags), "encode_road_graph tags 5"));
+        // Encoding 6 with turn restrictions: a via-node No rule and a via-way Only rule.
+        g2m::TurnRestriction no_rule;
+        no_rule.relation_id = 100; no_rule.value = "no_left_turn"; no_rule.kind = g2m::RestrictionKind::No;
+        no_rule.from_way = 10; no_rule.to_way = 11; no_rule.via_node = 1;
+        g2m::TurnRestriction only_rule;
+        only_rule.relation_id = 101; only_rule.value = "only_straight_on"; only_rule.kind = g2m::RestrictionKind::Only;
+        only_rule.from_way = 11; only_rule.to_way = 12; only_rule.via_ways = {10};
+        tile.restrictions = {no_rule, only_rule};
+        return {std::move(first), std::move(loop), std::move(legacy), std::move(tags5), body(must(g2m::encode_road_graph(tile), "encode_road_graph restrictions"))};
     }
     case Target::Pack: return {pack()};
     case Target::Manifest: return manifests();

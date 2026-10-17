@@ -4,6 +4,7 @@
 // road_mesh_test_data.h's cases). Plus the junction-surface tests ported from racing_game's
 // tests/unit/test_road_visual_junctions.cpp ([road_visual][junction] there).
 #include "road_mesh_test_data.h"
+#include "underpass_scene.h"
 
 #include "g2m/core/det_math.h"
 #include "g2m/world/products.h"
@@ -270,5 +271,60 @@ TEST_CASE("Ribbon flags: sett and cobblestone carry 2048|16384, paving stones 20
         const auto h = flags_with_surface(paving);
         CHECK(h.count(2048) == 1);
         for (const auto& [flags, count] : h) CHECK((flags & 16384) == 0);
+    }
+}
+
+TEST_CASE("Underpass decks (D56): the served span becomes an inferred deck, nothing past it; no roof on top", "[world][road_structures][underpass]") {
+    using namespace g2m;
+    const auto dem = [](double e, double) { return g2m_test::underpass_cutting(e) + 0.02 * (e - g2m_test::kUnderpassE0); };
+    for (const bool tunnel : {false, true}) {
+        CAPTURE(tunnel);
+        g2m_test::UnderpassSceneOptions scene;
+        if (tunnel) scene.lower_tags = {{"layer", "-1"}, {"tunnel", "yes"}};
+        g2m_test::GeomOptions o; o.height_m = dem; o.completion = served_road_completion_options(); o.underpass = true;
+        const auto tile = g2m_test::geometry_in_tile_with(g2m_test::underpass_scene(scene), g2m_test::kUnderpassTile, o);
+        REQUIRE(tile);
+        if (tunnel) {
+            // D61: a lower road tagged tunnel is covered - no served deck; the upper road stays on the ground (masked
+            // profile at the rim chord), and any deck over the tunnel is the pre-D53 inferred roof on that profile.
+            CHECK(tile->underpasses.empty());
+            for (const auto& d : world::build_road_decks(*tile)) {
+                if (d->way_id != 100) continue;
+                CHECK(d->inferred);
+                const double mid = 0.5 * (d->start_station + d->end_station);
+                const auto h = world::road_deck_height(*d, mid, 0.0); REQUIRE(h);
+                CHECK(*h > 99.5);
+            }
+            continue;
+        }
+        REQUIRE(tile->underpasses.size() == 1);
+        const auto& u = tile->underpasses.front();
+        const auto& entry = tile->entries[u.entry_index];
+        const auto decks = world::build_road_decks(*tile);
+        std::size_t upper = 0;
+        for (const auto& d : decks) {
+            if (d->way_id != 100) continue;
+            ++upper;
+            CHECK(d->inferred);
+            CHECK_FALSE(d->tunnel_floor);
+            CHECK(d->start_ref == entry.stretch.start_ref);
+            CHECK(d->start_station == u.start_m);
+            CHECK(d->end_station == u.end_m);
+            // The deck carries the served (masked) profile: the rim chord over the cutting (the DEM tilts 2 %, so the
+            // chord is a straight slope between the rims, never down into the 6 m cutting), nothing beyond its ends.
+            const auto h0 = world::road_deck_height(*d, u.start_m, 0.0);
+            const auto h1 = world::road_deck_height(*d, u.end_m, 0.0);
+            REQUIRE(h0); REQUIRE(h1);
+            for (double s = u.start_m; s <= u.end_m; s += 0.5) {
+                const auto h = world::road_deck_height(*d, s, 0.0); REQUIRE(h);
+                CHECK(*h == Catch::Approx(entry.profile->at(s)->height_m).margin(1e-9));
+                const double t = (s - u.start_m) / (u.end_m - u.start_m);
+                CHECK(std::abs(*h - (*h0 + t * (*h1 - *h0))) < 0.05);
+                CHECK(*h > 99.5);
+            }
+            CHECK_FALSE(world::road_deck_height(*d, u.start_m - 0.5, 0.0));
+            CHECK_FALSE(world::road_deck_height(*d, u.end_m + 0.5, 0.0));
+        }
+        CHECK(upper == 1);
     }
 }

@@ -49,7 +49,7 @@ void fixture(std::vector<Entry>& out, const std::string& name, const std::string
         if (!tile) fail(name + ": geometry: " + tile.error().message);
         const auto body = g2m::encode_road_geom(*tile);
         if (!body) fail(name + ": encode: " + body.error().message);
-        if (body->sections.size() != 7) fail(name + ": not an encoding-7 body");
+        if (body->sections.size() < 7) fail(name + ": not an encoding-7 (or later) body");   // 9 adds section 8 (D56)
         const std::string prefix = "g3j." + name + ".tile." + std::to_string(key.x) + "." + std::to_string(key.y);
         const std::uint64_t counts[3] = {tile->junctions.size(), tile->furniture.size(), tile->origins.size()};
         const char* kinds[3] = {".junctions", ".furniture", ".provenance"};

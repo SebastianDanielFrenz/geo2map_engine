@@ -4,6 +4,7 @@
 #include "g2m/layer/road_attributes.h"
 #include "g2m/layer/vertical_profile.h"
 namespace g2m {
+class RoadUnderpassFinder;   // road_underpass.h
 struct RoadProfile {
     RoadStretch stretch;
     RoadAttributes attributes;
@@ -18,6 +19,9 @@ struct RoadProfileLimits {
     double sample_spacing_m = 5;
     std::size_t max_samples = 2048;
     int max_iterations = 4096;
+    // Underpass mask (D53): with a finder, the DEM samples of a ground stretch over a served underpass span are replaced
+    // by the rim chord (RoadUnderpassFinder::mask). Null: the DEM as before. Not owned.
+    const RoadUnderpassFinder* underpass = nullptr;
 };
 // Complete topological stretch, never a tile-clipped fragment. Ground endpoints
 // use shared-node robust DEM planes; bridge endpoints use those same

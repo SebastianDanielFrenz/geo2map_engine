@@ -11,6 +11,7 @@
 #include "g2m/layer/layer_id.h"
 #include "g2m/layer/src_osm.h"
 #include "g2m/layer/terrain_carve.h"
+#include "g2m/layer/terrain_class.h"
 #include "g2m/layer/terrain_layers.h"
 #include "g2m/layer/tile_container.h"
 #include "g2m/server/builtin_release.h"
@@ -49,6 +50,7 @@ constexpr ProductKind kKindStructures = 6;
 constexpr ProductKind kKindRibbons = 7;
 constexpr ProductKind kKindBuildings = 8;
 constexpr ProductKind kKindWarm = 9;
+constexpr ProductKind kKindTerrainClass = 10;
 constexpr ProductKind kFirstUserKind = 100;
 
 // Type identity used by the scheduler and the cache. hash_code() is equal for equal types in one
@@ -205,6 +207,21 @@ struct TerrainService::Impl {
                        if (d.status != Status::Ok || !d.tile)
                            return failed(height_layer + " " + to_string(key) + ": decode failed");
                        return detail::erase<HeightTile>(Outcome<HeightTile>::ready(std::move(d.tile), sizeof(HeightTile)));
+                   }};
+    }
+
+    Job job_terrain_class(const TileKey& key) {
+        return Job{{kKindTerrainClass, key.packed(), 0}, &typeid(TerrainClassTile), [this, key]() -> ErasedOutcome {
+                       const std::string_view layer = kTerrainClassLayer;
+                       const Fetched f = fetch_container(layer, key);
+                       if (f.status != Status::Ok) return status_outcome(f, layer, key);
+                       const Result<TileBody> body = open_body(f, layer, key);
+                       if (!body.ok()) return failed(std::string(layer) + " " + to_string(key) + ": " + body.error().message);
+                       auto tile = std::make_shared<TerrainClassTile>();
+                       const Result<void> decoded = decode_terrain_class(body.value(), key, *tile);
+                       if (!decoded.ok()) return failed(std::string(layer) + " " + to_string(key) + ": " + decoded.error().message);
+                       const std::size_t bytes = 4 * kTerrainClassNodes + 256;
+                       return detail::erase<TerrainClassTile>(Outcome<TerrainClassTile>::ready(std::move(tile), bytes));
                    }};
     }
 
@@ -627,6 +644,12 @@ ServiceStats TerrainService::stats() const {
 Ticket<HeightTile> TerrainService::height(const TileKey& key, Priority priority) {
     return impl_->ticket<HeightTile>(impl_->job_height(key), priority);
 }
+Ticket<TerrainClassTile> TerrainService::terrain_class(const TileKey& key, Priority priority) {
+    if (!has_layer(kTerrainClassLayer))
+        return impl_->finished_ticket<TerrainClassTile>({kKindTerrainClass, key.packed(), 0},
+                                                        failed("g2m.terrain.class is not in the release (LayerOptIn::classes)"));
+    return impl_->ticket<TerrainClassTile>(impl_->job_terrain_class(key), priority);
+}
 Ticket<RoadGeomTile> TerrainService::road_geom(const TileKey& l2, Priority priority) {
     return impl_->ticket<RoadGeomTile>(impl_->job_road_geom(to_level2(l2)), priority);
 }
@@ -688,6 +711,10 @@ void TerrainService::set_buildings_producer(Producer<BuildingSet> producer) {
 std::shared_ptr<const HeightTile> TerrainService::peek_height(const TileKey& key) const noexcept {
     return std::static_pointer_cast<const HeightTile>(
         impl_->cache.peek({kKindHeight, key.packed(), 0}, type_id(typeid(HeightTile))));
+}
+std::shared_ptr<const TerrainClassTile> TerrainService::peek_terrain_class(const TileKey& key) const noexcept {
+    return std::static_pointer_cast<const TerrainClassTile>(
+        impl_->cache.peek({kKindTerrainClass, key.packed(), 0}, type_id(typeid(TerrainClassTile))));
 }
 std::shared_ptr<const RoadGeomTile> TerrainService::peek_road_geom(const TileKey& l2) const noexcept {
     return std::static_pointer_cast<const RoadGeomTile>(

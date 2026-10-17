@@ -30,7 +30,7 @@ of the expected key, another scheme, a plane of the wrong size and a value above
 | Levels | 0 to 6 |
 | Header datum | None, height offset 0 |
 | Coverage | `g2m.elev.base` |
-| Config hash | SHA-256 of `g2m.terrain.class/1 nodes=257 L0 carve-ownership roads.geom enc=8 radius=192 junction=D42 carve=<sha256 of carve_default.json> classifier=<sha256 of the ESA classifier table> scheme=g2m.landclass.v1 landcover=floor sidewalk=paving_stones; L1-L6 rank-max 3x3 centre-then-row-major window=4x4` (`terrain_class_config_text()`) |
+| Config hash | SHA-256 of `g2m.terrain.class/1 nodes=257 L0 carve-ownership roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 carve=<sha256 of carve_default.json> classifier=<sha256 of the ESA classifier table> scheme=g2m.landclass.v1 landcover=floor sidewalk=paving_stones; L1-L6 rank-max 3x3 centre-then-row-major window=4x4` (`terrain_class_config_text()`) |
 
 ## Inputs
 
@@ -73,3 +73,12 @@ coarse levels (rank-max keeps 10465 road nodes on the hoechst_a66 test tile wher
 Every value is a function of the world position only, so neighbouring tiles agree on their shared edge nodes (tested on
 level-0 and level-2 seams and at level 1). The model is the carve's (double arithmetic in a fixed order, no libm, no FMA);
 golden `testdata/golden/g3c_golden.txt` (four level-0 tiles and one level-1 tile).
+
+## Consumers
+
+- Physics (class mode): the node at each physics cell centre, `fill_physics_classes` (`include/g2m/phys/`).
+- Render (D62, `include/g2m/world/chunk_terrain_classes.h`): a render vertex (i, j) of chunk (L, cx, cy) sits at
+  (64 cx + i) 2^L + 0.5 m and takes the node at floor of its position, its south-west node 64 cx + i (same for y), in
+  tile (L, floor(cx / 4), floor(cy / 4)). One tile per chunk. Render and physics differ by at most half a cell at a
+  class border (design 10.1). Road nodes (rank > 0) the caller's `RenderRoadLod` excludes at the chunk level (no policy,
+  or rank below `min_rank`) are written Unknown.

@@ -87,6 +87,22 @@ struct TunnelRules {
     std::int32_t straight_grade_min_length_m = 0;
     friend bool operator==(const TunnelRules&, const TunnelRules&) = default;
 };
+// Underpass decks (owner decision 2026-10-15, racing_game PR #5; design D53-D58): where a ground stretch crosses a
+// lower road (a lower OSM layer or a tunnel, not a bridge) over a DEM cutting, the profile ignores the cutting and the
+// span over it is served as a deck (roads.geom encoding 9, section 8). All lengths integer mm or m; road_underpass.h
+// uses them. enabled = false: no span is searched, the profile follows the DEM as before.
+struct UnderpassRules {
+    bool enabled = false;
+    std::int32_t min_depth_mm = 0;       // depth of the DEM under the rim chord at the crossing, below it: no deck
+    std::int32_t window_m = 0;           // half-width of the DEM window along the upper road (<= 60: the 65 m DEM margin)
+    std::int32_t sag_radius_m = 0;       // the rim search tolerates a vertical sag of this radius (0 = plain hull)
+    std::int32_t max_span_m = 0;         // longest deck; a longer one is declined (never a whole stretch)
+    std::int32_t abutment_mm = 0;        // deck length added beyond the depression on each side
+    std::int32_t depth_tol_mm = 0;       // the depression ends where the DEM is within this of the rim chord
+    std::int32_t lower_margin_mm = 0;    // added to the lower road's half width for the deck core
+    std::int32_t end_clearance_mm = 0;   // a deck must end at least this far from both stretch ends
+    friend bool operator==(const UnderpassRules&, const UnderpassRules&) = default;
+};
 // Constants the junction block is validated against (design 5.2, 5.3): the widest carve blend and the radius
 // of roads.geom tiles a carved L0 tile reads.
 inline constexpr std::int32_t kCarveBlendMaxM = 15;
@@ -124,6 +140,7 @@ struct RoadRules {
     JunctionRules junction;
     FurnitureRules furniture;
     TunnelRules tunnel;
+    UnderpassRules underpass;
     std::vector<RoadClassRules> classes;      // ascending highway value
     ContentHash content_sha256{};             // SHA-256 of the JSON bytes the rules were loaded from
 
