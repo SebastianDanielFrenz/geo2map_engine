@@ -624,8 +624,15 @@ TEST_CASE("underpass deck: example 4 side profile (diag CSV)", "[.][diag][underp
         const auto at = [&](int i, int j) { return it->second.h[static_cast<std::size_t>(j * 256 + i)] / 256.0; };
         return (1 - ty) * ((1 - tx) * at(ix, iy) + tx * at(ix + 1, iy)) + ty * ((1 - tx) * at(ix, iy + 1) + tx * at(ix + 1, iy + 1));
     };
-    const char* path = std::getenv("G2M_UNDERPASS_CSV");
-    std::FILE* f = std::fopen(path ? path : "underpass_example4.csv", "w");
+    // getenv/fopen are deprecated under the MSVC CRT (warnings are errors); same pattern as test_junction_dump.cpp.
+    std::string path = "underpass_example4.csv";
+#ifdef _MSC_VER
+    { char* p = nullptr; std::size_t n = 0; if (_dupenv_s(&p, &n, "G2M_UNDERPASS_CSV") == 0 && p) { path = p; std::free(p); } }
+    std::FILE* f = nullptr; if (fopen_s(&f, path.c_str(), "w") != 0) f = nullptr;
+#else
+    if (const char* p = std::getenv("G2M_UNDERPASS_CSV")) path = p;
+    std::FILE* f = std::fopen(path.c_str(), "w");
+#endif
     REQUIRE(f);
     std::fprintf(f, "s_rel,dem_cut,profile_today,carve_today,profile_served,carve_served,deck\n");
     for (double d = -60; d <= 60.001; d += 0.25) {
