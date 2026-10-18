@@ -26,6 +26,22 @@ A future farming simulator is a fourth repo that pins the same two libraries.
 > **Split note.** This file holds the library and server parts (sections 2-8, plus the dependency list from 13) of the joint plan written on 2026-09-25. The cross-repo schedule (milestones G0-G8 and R0-R10), the risks, the owner decisions and the game-side sections (1, 9-15) live in `S:\claude_code
 acing_game\PLAN.md`. Section numbers are kept identical in both files, so a reference such as "(11.7)" or "D12" points there.
 
+**Status 2026-10-18 (PRs #1-#16 merged).**
+- G6 (wire protocol + sidecar) done (#8). Routing G4: A* (#2), turn restrictions (#14), lane hints (#16); docs/routing_design.md.
+- Terrain migration (`g2m_world`), phases 0-8 (docs/terrain_migration_plan.md):
+
+  | Phases | Status |
+  |---|---|
+  | 0-6 | done (#3-#7) |
+  | 7 (server carve switch) | gated on GAP1=0 on the real-store roadcmp probe |
+  | 8 | after 7 |
+
+- Street fidelity (docs/street_fidelity/plan.md): P1 done; P2 slices 9-11 done (terrain.carved, terrain.class deriver, class window #15); slice 12 census waits on the owner; P3 markings (C8) not started.
+- Open defect: A66 boundary defect. Fix target `src/layer/road_underpass`, `road_profile`, `road_completion`. It blocks the phase 7 acceptance (racing_game 12.x).
+- Site items: Koenigstein tile utm32n/2/452/5428 `deriver_rejected` (re-audit); bridge pin b90a531 mismatches the physics pin.
+- Tracking: docs/manager.md. Pipeline README section 9 documentation debt: items 6, 7, 9, 11, 12, 14.
+- Open: whether the split note above stays, or geo2map keeps its own G-milestone status.
+
 ## 0. Key decisions (details in the sections named)
 
 1. **geo2map_engine is a standalone engine-neutral C++20 library plus a map server built from the same code (sections 2 and 3).**
@@ -53,7 +69,7 @@ acing_game\PLAN.md`. Section numbers are kept identical in both files, so a refe
    - Only bridges (later also tunnels and buildings) are streamed static mesh bodies.
    - The glue is `g2m_ps_bridge`, an opt-in target in the geo2map_engine repo. It is built only when the consumer already provides `ps_core`.
 7. **physics_sim needs a few additive changes (section 9).**
-   - R1 (the ±200 m height clamp) and R3 (the tile-seam contact spike) are done in physics_sim 5c648a5, which racing_game pins. One boundary is still open: a heightfield-vs-static-mesh boundary spike (162 m/s² at test_ground x = −500). Our bridges and structures create the same kind of boundary; see G3.
+   - R1 (the ±200 m height clamp) and R3 (the tile-seam contact spike) are done in physics_sim 5c648a5, which racing_game pins. The earlier 162 m/s² heightfield-vs-static-mesh spike (test_ground x = −500) has no current evidence: re-audit, not resolved.
 8. **The game builds one GDExtension DLL (`rg_godot`, section 10).**
    - It contains `ps_core`, `g2m`, the bridge, and the game's own engine-neutral `rg_core`.
    - Both libraries are pinned as git submodules at explicit commits. Pinning a sibling path is not an option: it would build against another session's uncommitted work.
@@ -115,17 +131,19 @@ geo2map_engine/
 
 ### 2.3 Targets
 
+Actual target set (2026-10-18): libraries g2m_core, g2m_decode, g2m_import, g2m_layers, g2m_mesh, g2m_phys, g2m_route, g2m_server, g2m_client, g2m_http, g2m_world, g2m_ps_bridge; the former `g2m_c`, `g2m_godot` and `g2m_cli` do not exist.
+
 | Target | Contents | Third-party (all static) |
 |---|---|---|
 | `g2m_core` | deterministic math, geodesy, tile keys, rasters, geometry, hashing | none |
 | `g2m_layers` | layer registry, raw-source decoders, all built-in derivers | zstd, libdeflate, Clipper2, earcut.hpp |
 | `g2m_server` (lib) | `g2m::Server`: request router, resolver, source store, derived store, upstreams | SQLite |
 | `g2m_client` | `g2m::Client`: streamer, client cache, mesh builders, routing, in-process transport | SQLite |
-| `g2m_c` | C API over client + in-process server | — |
+| `g2m_decode`, `g2m_import`, `g2m_mesh`, `g2m_phys`, `g2m_route`, `g2m_world` | raw-source decoders, importers, mesh builders, physics-facing geometry, routing, terrain migration world (see CMakeLists.txt) | see CMakeLists.txt |
 | `g2m_http` | HTTP transport: server side (cpp-httplib) and a libcurl `IFetcher` for tools/server upstreams | cpp-httplib, libcurl |
 | `g2m_ps_bridge` | `ITerrainSource` + static-body feeder | consumer's `ps_core` |
-| `g2m_godot` | Godot helpers | consumer's godot-cpp |
-| apps | `g2m_server`, `g2m_tiler` (+ libosmium, protozero), `g2m_cli` | |
+| apps | `g2m_server`, `g2m_tiler` (+ libosmium, protozero) | |
+| tools | `junction_view`, `road_probe`, `osm_tag_probe`, `refgen` | |
 
 - `g2m_warnings` and `g2m_options` mirror physics_sim's `ps_warnings`/`ps_options`: warnings as errors in own code, `/arch:AVX2`, `/fp:precise`, no FMA contraction.
 - Same static CRT as physics_sim, so one game DLL can link both.
@@ -186,7 +204,7 @@ Rejected alternatives:
 
 PLAN.md P11 plans a `ps_geo` target inside physics_sim, fed by an offline importer that bakes a bounding box. The owner's 2026-09-25 rules supersede it: an on-demand world, reusable across engines and projects, served by a map server.
 
-**Recommended reconciliation:** P11 becomes "physics_sim consumes geo2map_engine through `g2m_ps_bridge`".
+**Adopted reconciliation (owner decision D1):** P11 becomes "physics_sim consumes geo2map_engine through `g2m_ps_bridge`".
 - **physics_sim keeps only physics:**
   - `ITerrainSource` (exists);
   - the per-tile height datum (R1) and prebuilt static shapes (R2);
@@ -933,7 +951,7 @@ Every layer is a pure function (2.4). Terms:
 
 ### 6.1 `g2m.elev.base`
 
-1. Assemble the tile plus a 16 m halo from the best available source. Priority: DGM1 > other national 1 m DGMs > GLO-30.
+1. Current: DGM1 only, no halo (docs/pipeline/README.md section 9, item 6). Planned: multi-source blending and a 16 m halo, priority DGM1 > other national 1 m DGMs > GLO-30.
    - DGM1 in UTM32 needs no resampling.
    - GLO-30 is resampled bicubically in fixed evaluation order.
 2. **Coverage seams:** remove the median vertical offset over the seam band, then blend over 200 m with smoothstep.
@@ -968,6 +986,7 @@ Built from `g2m.src.osm`.
   - `NodeId` = OSM node id; `EdgeId` = hash(way id, segment index). Stable within a release.
   - Saved routes store coordinates and are re-matched across releases.
 - **Representation** mirrors OpenDRIVE concepts: reference line, elevation polynomial in arc length s, superelevation. An OpenDRIVE export for external tools stays possible later.
+- **Status:** turn restrictions, via-way included, are in `roads.graph` (encoding 6, #14); lane hints are #16. Design: docs/routing_design.md.
 
 ### 6.3 `g2m.roads.geom` and carving into `g2m.terrain.height`
 
@@ -977,13 +996,14 @@ Order matters for determinism and continuity. Each step is a pure function of a 
    - Resample the OSM polyline at 0.5 m.
    - Smooth it, with the curvature limited per class. Keep the original vertices within 0.5 m for major roads.
    - Fit a G1 chain of lines, arcs and clothoids (Bertolazzi–Frego approach; implemented in-house on the deterministic math, since the `Clothoids` library's licence is [unverified]).
-2. **Junction heights (per junction).** A robust median of `elev.base` over the junction footprint, depending only on the junction's own position and the DEM.
+2. **Junction heights (per junction).** A robust median of `elev.base` over the junction footprint, depending only on the junction's own position and the DEM. Superseded by the street fidelity P2 junction design (docs/street_fidelity/p2_junction_design.md).
 3. **Vertical profile (per edge).**
    - Sample `elev.base` along the reference line: median across a cross-section window, to reject vehicles and vegetation returns.
    - Fit cubic segments in s by constrained least squares:
      - endpoints fixed to the two junction heights;
      - max grade per class (motorway 6 %, others 12–20 %; tagged `incline` respected);
      - minimum vertical-curve radius.
+   - Endpoint heights win over the class grade; a grade exception is allowed and never clamped (owner 2026-10-05).
    - Bridge spans (`bridge=yes`) are excluded from the DEM fit and interpolated between abutments.
 4. **Cross-section.**
    - Width = lanes × lane width, or `width`.
@@ -1003,8 +1023,10 @@ Order matters for determinism and continuity. Each step is a pure function of a 
    - The deck follows the fitted profile between the abutments. The terrain beneath is not carved (DGM1 is bare earth).
    - Deck plus parapets become a render mesh and a static collision mesh.
    - Deck ends overlap the carved approach by 1 m and sit 2 cm below it, so a wheel rolls on without a step.
-8. **Tunnels:** v1 renders the road through, with the terrain above kept and the tunnel not drivable. Later: heightfield holes at the portals plus a tunnel mesh. How many tunnels the region has on through routes is [unverified]; the tiler reports statistics in G3.
+8. **Tunnels:** floors and roofs (terrain migration phase 4), long tunnels (D52) and underpass decks (D53-D61) are done; see docs/terrain_migration_plan.md. Heightfield portal holes plus a tunnel mesh follow that design.
 9. **Markings (client-side render only):** lane, edge and stop lines from lanes/oneway/turn:lanes; patterns by class from German marking rules as data.
+
+Carving moves from the client to the server in terrain migration phase 7 (pending, see the status block under the split note).
 
 On lidar data this mostly removes noise. On GLO-30 it is what makes a road drivable at all.
 
@@ -1017,6 +1039,8 @@ On lidar data this mostly removes noise. On GLO-30 it is what makes a road driva
   - Footprints with `height`; else `building:levels × 3 m` + roof; else a per-type default with deterministic variation.
   - `roof:shape` for simple footprints; base height = minimum terrain under the footprint.
 - **Water:** polygons with a surface height = minimum shoreline height.
+
+- **Status:** the `terrain.class` deriver (street fidelity P2 slice 10) and the class window (#15) are done; see docs/street_fidelity/plan.md.
 
 **G2.5a note (2026-09-27, roads_plan.md approach (a')):** the client-side
 OSM road raster (g2m::extract_road_segments + g2m::rasterize_road_segments,
@@ -1076,7 +1100,7 @@ happens in this step (open question, roads_plan.md).
 - **physics_sim:** its pool defaults to physical cores − 2 = 10 workers, plus the sim thread.
 - **Godot:** main thread plus render thread.
 - **g2m:** its own pool of 3 low-priority workers for network I/O completion, decoding, local derivation and mesh building.
-  - physics_sim's job system has no priorities or background jobs (PLAN.md D9), and multi-millisecond derivation jobs would delay 240 Hz ticks.
+  - physics_sim's job system now has a fixed background lane with opt-in background priority (`JobSystemOptions::background_priority`; PLAN.md D9), used for terrain prefetch and map generation; multi-millisecond derivation jobs still stay on g2m's own pool so they never delay 240 Hz ticks.
 - **Main thread:**
   - GPU uploads through `RenderingServer` (Godot's thread-safety rules; multithreaded mesh calls have known deadlocks, research);
   - capped at ~1 ms per frame, measured as a telemetry channel next to the adapter's own frame time;
