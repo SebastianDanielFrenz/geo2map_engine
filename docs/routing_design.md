@@ -158,16 +158,29 @@ in. The original wording stays below for the record.
   - **U-turns:** a U-turn back along the same edge is offered only when no
     other transition is allowed (a dead end), and a No rule can still forbid
     it.
-- **Via-way rules (slice 3):** parsed and counted (`restrictions_via_way`),
-  not applied yet. The plan is the standard state expansion:
-  - the search state becomes (arc, progress), where progress is the number of
-    matched elements of one via-way rule;
-  - entering the from way and then the first via way advances progress; any
-    other arc resets it;
-  - the forbidden (or forced) final transition is checked at the last via
-    node;
-  - via-way rules are rare (0 in both fixtures), so the extra states cost
-    nothing measurable.
+- **Via-way rules (slice 3, built):** a rule F -> V1..Vk -> T is resolved to
+  node chains n0..nk, where n_j is a routing node shared by ways[j] and
+  ways[j+1]; consecutive nodes differ, F must arrive at n0, each V must leave
+  the node before it and T must leave nk. At most 8 chains per rule and 16
+  via ways. A rule with no chain (a way is not routable, or the ways do not
+  meet like that) is counted in `restrictions_unmatched` and ignored.
+  - **Search state:** still an arc. An arc that is part of a partly driven
+    sequence gets a "ghost" copy (appended after the real arcs, one per set of
+    open rule positions), found by a breadth-first walk from the arcs that
+    arrive on F at n0. Ghosts have their own successor lists; all other arcs
+    use the context-free lists. `arcs()` stays the real arcs, `state_count()`
+    includes ghosts, routes contain real arcs only, ALT stays admissible.
+  - **No rule:** forbids the step onto T after the whole sequence was driven.
+  - **Only rule:** each step must follow the sequence: at n_j take ways[j+1],
+    and along V_j keep to V_j until n_j.
+  - **Several Only rules at one point:** the allowed next ways are the union,
+    as for via-node rules.
+  - **Cost:** `RouteBuildStats::via_way_instances`, `via_way_states`. The OSM
+    fixtures have no via-way relation (0 in both), so their tests add
+    synthetic rules chained at way ends; the cost is the ghost arcs of those
+    rules only.
+  - **Not seen by `successors()`:** it stays the context-free via-node list;
+    guidance and snapping use real arcs only.
 
 ## 4. Hierarchy and speed-up
 
@@ -258,7 +271,8 @@ looked up by way id).
 - heading change (deg, rounded, positive = left);
 - the road it enters: `name`, `ref`, `destination`, `destination_ref` (OSM
   `destination`, `destination:ref`);
-- the exit number for roundabouts.
+- the exit number for roundabouts;
+- `lanes`: the lane hints (below), empty when there are none.
 
 **Kinds:**
 - depart and arrive;
@@ -285,8 +299,37 @@ holds:
 Staying on a main road past a slip road is silent: a `*_link` exit does not
 make a fork unless the route changes name or ref there. Allowed exits come
 from `RoutingGraph::successors`, so a restricted or one-way exit never makes
-a fork. Lane hints (`turn:lanes`) come later. Instruction text and
-localisation stay in the game.
+a fork. Instruction text and localisation stay in the game.
+
+**Lane hints** (`Maneuver::lanes`, a `LaneHint{directions, valid}` per lane,
+left to right in the driving direction). Source: the approach way's tags
+(roads.graph keeps all way tags), never a guess:
+- the value is `turn:lanes:forward` / `turn:lanes:backward` for the travelled
+  direction, else plain `turn:lanes` only when the way is one-way in the
+  travelled direction (`oneway` yes/1/true along the ref order, -1/reverse
+  against it, implied for motorway and motorway_link). Plain `turn:lanes` on a
+  two-way road is ambiguous and gives no hint;
+- if `lanes` (or `lanes:forward/backward`) is tagged and disagrees with the
+  number of lanes in the value, or a token is unknown, there is no hint;
+- `directions` is a bit mask (`lane_dir::`) of left, slight_left, sharp_left,
+  through, slight_right, right, sharp_right, merge_to_left, merge_to_right,
+  reverse; "none" and an empty lane are the empty mask;
+- `valid`: the first of these tiers that any lane satisfies decides, and
+  every lane satisfying it is valid. Continue: through. Slight: the slight
+  direction, then turn or through on the outer lane of the turn side. Turn:
+  the turn direction, then slight or sharp of that side. Sharp: sharp, then
+  turn or slight. Keep left/right: slight or turn of that side, then
+  through. Ramp off: any slight/turn/sharp lane of the exit side (the angle
+  of a ramp can be near straight), then the angle class as above. Ramp on and
+  merge: the angle class. U-turn: reverse, then left. An untagged ("none")
+  lane counts as through only when it is the leftmost or rightmost lane;
+- if no lane satisfies any tier the hint is dropped (empty) rather than shown
+  with nothing valid; Depart, Arrive and roundabout manoeuvres carry none.
+  Lane lists are only built for manoeuvres that are emitted: a silent straight
+  crossing gets no hint.
+Open: lane hints on the approach to a roundabout, `lanes:both_ways` and
+conditional or per-vehicle lanes (ignored), lane changes needed before the
+junction (the tags of the last way only).
 
 **Tests** (`tests/route/test_route_guidance.cpp`, `[guidance]`): synthetic
 scenes for every kind (distances, names, refs, destination, exit numbers 1-3,
@@ -294,7 +337,11 @@ silence on a same-name straight and past a slip road, U-turn on a point
 route). On the hoechst_a66 fixture, 200 random node pairs (148 reachable,
 1,478 manoeuvres) check the invariants: Depart first at 0, Arrive last at the
 route length, monotone distances, distances to the next summing to the route
-length. The longest of them (3.4 km, 21 manoeuvres, through Unterliederbach
+length. On the same routes, every manoeuvre has either no lane hint or at
+least one valid lane (293 of the 1,478 manoeuvres carry one). Synthetic scenes
+cover a 3-lane `left|through|through;right` approach with right, left and
+through, the untagged-lane and fallback rules, a forward/backward split,
+oneway -1, ambiguous and inconsistent tags and the untagged case. The longest of them (3.4 km, 21 manoeuvres, through Unterliederbach
 onto the B 8, off at the Main-Taunus-Zentrum ramp) has its kind sequence
 pinned. Guidance of all 148 routes takes well under 1 ms each.
 
@@ -509,11 +556,17 @@ or disappear per level with the policy.
        tile, equals the whole-world graph. The restrictions merged from the
        per-tile `clip_osm` src.osm tiles equal the whole-file restrictions.
    - Open: timing on the real home store, on the owner machine.
-3. **Restrictions in roads.graph and via-way rules.** The restriction section
-   in roads.graph (encoding 6, release id change) and via-way rules through
-   state expansion.
+3. **Done: restrictions in roads.graph and via-way rules.** roads.graph
+   encoding 6 carries the restrictions each tile holds (release ids of
+   roads.graph and roads.geom change; terrain unchanged); the region assembles
+   them (`assemble_region`) and via-way rules are applied by ghost states
+   (section 3). Tests: a history-based reference Dijkstra (run based, not
+   sharing code with the library) against A* and A*+ALT on random restricted
+   grids with via-way rules; both OSM fixtures through the real deriver and
+   codec, region equals whole-world including restrictions, negative controls
+   (no rules, no via-way rules). Open: real home-store routes.
 4. **Done: guidance.** The manoeuvre list (section 5), synthetic tests per
-   kind and the pinned 21-manoeuvre hoechst_a66 route. Open: lane hints.
+   kind and the pinned 21-manoeuvre hoechst_a66 route. Lane hints from `turn:lanes` follow in a separate step (section 5).
 5. **Done: map geometry.** Map tiles at three LODs and the route polyline
    (section 6). Tests: Douglas-Peucker bounds on random walks, a synthetic
    scene pinning ownership across a level-2 border, LOD filters, flags,

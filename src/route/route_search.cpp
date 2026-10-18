@@ -120,8 +120,8 @@ std::uint64_t RouteLandmarks::bound(std::uint32_t v, std::uint32_t t) const {
 }
 
 RouteSearcher::RouteSearcher(const RoutingGraph& graph, const RouteLandmarks* landmarks)
-    : graph_(&graph), landmarks_(landmarks), g_(graph.arcs().size(), 0), parent_(graph.arcs().size(), kNoArc),
-      stamp_(graph.arcs().size(), 0) {}
+    : graph_(&graph), landmarks_(landmarks), g_(graph.state_count(), 0), parent_(graph.state_count(), kNoArc),
+      stamp_(graph.state_count(), 0) {}
 
 std::uint64_t RouteSearcher::heuristic(std::uint32_t node) const {
     const geom::PointMm p = graph_->nodes()[node].position;
@@ -162,14 +162,16 @@ void RouteSearcher::offer_goal(std::uint64_t cost, std::uint32_t arc, std::uint3
     best_same_arc_ = same_arc;
 }
 
+// `arc` is a search state: a real arc or a via-way ghost of one (RoutingGraph::state_count()).
 void RouteSearcher::relax(std::uint32_t arc, std::uint64_t pre, std::uint32_t parent) {
-    const RouteArc& a = graph_->arcs()[arc];
+    const RouteArc& a = graph_->state_arc(arc);
     // Goal first: reaching the goal on this arc does not depend on the arc's own g.
     if (node_mode_) {
         if (a.to == target_node_) offer_goal(pre + a.cost_ms, arc, parent, a.length_mm, false);
     } else {
+        const std::uint32_t real = graph_->state_origin(arc);
         for (std::uint32_t i = 0; i < goal_count_; ++i)
-            if (goals_[i].arc == arc) offer_goal(pre + graph_->partial_cost_ms(arc, 0, goals_[i].offset_mm), arc, parent, goals_[i].offset_mm, false);
+            if (goals_[i].arc == real) offer_goal(pre + graph_->partial_cost_ms(real, 0, goals_[i].offset_mm), arc, parent, goals_[i].offset_mm, false);
     }
     const std::uint64_t g = pre + a.cost_ms;
     if (stamp_[arc] == generation_) {
@@ -194,16 +196,17 @@ Result<Route> RouteSearcher::run() {
         heap_.pop_back();
         if (top.g != g_[top.arc]) continue; // stale entry
         if (++stats_.settled > limit) return make_error(ErrorCode::LimitExceeded, "route: max_settled exceeded");
-        graph_->successors(top.arc, succ_);
+        graph_->state_successors(top.arc, succ_);
         for (const Transition& tr : succ_) relax(tr.arc, top.g + tr.turn_ms, top.arc);
     }
     Route route;
     if (best_arc_ == kNoArc) return route;
     route.reachable = true;
     route.cost_ms = best_goal_;
-    route.arcs.push_back(best_arc_);
+    // States map back to the real arcs they stand for.
+    route.arcs.push_back(best_same_arc_ ? best_arc_ : graph_->state_origin(best_arc_));
     if (!best_same_arc_)
-        for (std::uint32_t a = best_parent_; a != kNoArc; a = parent_[a]) route.arcs.push_back(a);
+        for (std::uint32_t a = best_parent_; a != kNoArc; a = parent_[a]) route.arcs.push_back(graph_->state_origin(a));
     std::reverse(route.arcs.begin(), route.arcs.end());
     if (best_same_arc_) {
         route.start_offset_mm = same_start_offset_;

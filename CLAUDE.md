@@ -1208,8 +1208,8 @@ oneway, access and integer ms costs; via-way rules are counted, not applied. Tes
 Slice 2 (2026-10-14): ALT landmarks (`RouteLandmarks`, 16 by default; 30 km on the stand-in grid: 1.2 ms mean,
 1,695 settled vs 78,464 plain), heading-aware snapping and point-to-point routes, region graph assembly from
 roads.graph tiles (`region_graph.h`). Defaults settled: tracks routable at 15 km/h, time restrictions ignored.
-Slice 4 (2026-10-14): guidance manoeuvre list (`route_guidance.h`, `g2m_route_tests "[guidance]"`). Slice 5
+Slice 4 (2026-10-14): guidance manoeuvre list (`route_guidance.h`, `g2m_route_tests "[guidance]"`); lane hints (`Maneuver::lanes`, `LaneHint`, `parse_turn_lanes`; from the approach way's `turn:lanes`[`:forward/backward`], empty without a usable tag; `"[lanes]"`). Slice 5
 (2026-10-14): client map tiles at three LODs from level-2 roads.graph tiles (`route_map.h`, `"[map]"`; fixture
 tiles <= 22 KiB, < 5 ms). Owner rules from PR #2: turn costs final at the defaults; every map and render-road LOD
 parameter is a runtime setting the game passes in, with per-LOD/per-level cache keys (docs/routing_design.md 6.1,
-tests `"[lod_settings]"`). Next: slice 3 (restrictions in roads.graph, via-way rules), batched with a release-id bump.
+tests `"[lod_settings]"`). Slice 3 (2026-10-16): `roads.graph` encoding 6 carries the turn restrictions a tile holds (`include/g2m/layer/road_restriction.h`, `RoadGraphTile::restrictions`, deriver extracts them from the 9 src.osm inputs; roads.geom still embeds encoding 5); `RoutingGraph` applies via-way rules with ghost search states (`state_count()`, `arcs()` = real arcs), `assemble_region` returns graph + merged restrictions. Release ids of roads.graph and roads.geom changed (terrain unchanged); tests `test_via_way.cpp`, `test_route_restrictions.cpp`, `tests/route/via_reference.h`. Next: real home-store runs.

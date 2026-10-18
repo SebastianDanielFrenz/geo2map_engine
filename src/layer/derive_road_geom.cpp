@@ -20,6 +20,7 @@ Result<RoadGraphTile> decode_graph_input(const InputTile& graph) {
     const auto body = decode_body(graph.body); if (!body) return body.error();
     auto tile = decode_road_graph(*body); if (!tile) return tile.error();
     if (tile->key != graph.ref.key) return make_error(ErrorCode::Malformed, "roads.geom: graph key mismatch");
+    tile->restrictions.clear(); // roads.geom embeds the encoding-5 graph: no turn restrictions
     return tile;
 }
 Result<RoadGraphTile> graph_input(const DeriveRequest& request) {

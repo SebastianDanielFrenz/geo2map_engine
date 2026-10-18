@@ -107,7 +107,10 @@ struct RouteRule {
 struct RouteBuildStats {
     std::size_t ways_used = 0, ways_not_routable = 0, ways_access_blocked = 0, ways_no_direction = 0;
     std::size_t restrictions_applied = 0;
-    std::size_t restrictions_via_way = 0;  // not supported yet (design doc, slice 3)
+    std::size_t restrictions_via_way = 0;  // via-way rules in the input (applied or not)
+    std::size_t restrictions_via_way_applied = 0; // of those, rules with at least one usable node chain
+    std::size_t via_way_instances = 0;     // node chains the applied via-way rules resolved to
+    std::size_t via_way_states = 0;        // extra search states ("ghost" arcs) they need
     std::size_t restrictions_unmatched = 0; // a member way or the via node is not in the routable graph
 };
 
@@ -144,7 +147,9 @@ struct Transition {
 class RoutingGraph {
 public:
     std::span<const RouteGraphNode> nodes() const { return {nodes_.data(), nodes_.size() - 1}; }
-    std::span<const RouteArc> arcs() const { return arcs_; }
+    // The real arcs. Route::arcs index this span. (Via-way rules add search-only "ghost" states
+    // after them, see state_count(); they are copies of real arcs, never part of a route.)
+    std::span<const RouteArc> arcs() const { return {arcs_.data(), real_arcs_}; }
     std::span<const RouteRule> rules() const { return rules_; }
     const RouteConfig& config() const { return config_; }
     const RouteBuildStats& stats() const { return stats_; }
@@ -155,8 +160,21 @@ public:
     }
     // The arcs a vehicle on `arc` may continue onto at its head node, with
     // the turn cost, in arc order. Applies via-node restrictions and the
-    // dead-end-only U-turn rule. `out` is cleared first.
+    // dead-end-only U-turn rule; via-way rules need the path before `arc` and
+    // are applied by state_successors() (the search). `out` is cleared first.
     void successors(std::uint32_t arc, std::vector<Transition>& out) const;
+    // The search side of the above. A search state is a real arc (no history that matters)
+    // or a ghost: a real arc reached by a path that matches the start of a via-way rule
+    // (F, V1..Vk, T). Ghosts have indices from arcs().size() to state_count() - 1.
+    std::size_t state_count() const { return arcs_.size(); }
+    const RouteArc& state_arc(std::uint32_t state) const { return arcs_[state]; }
+    // The real arc a state stands for.
+    std::uint32_t state_origin(std::uint32_t state) const {
+        return state < real_arcs_ ? state : ghost_origin_[state - real_arcs_];
+    }
+    // successors() with the via-way rules applied: the states reachable from `state`, with turn
+    // costs. For a state without history this is successors(). `out` is cleared first.
+    void state_successors(std::uint32_t state, std::vector<Transition>& out) const;
     // Turn cost of arriving on `in` and leaving on `out` (no restriction check).
     std::uint32_t turn_cost_ms(const RouteArc& in, const RouteArc& out) const;
     // The edge geometry of `arc` in way order (reverse it for a backward arc).
@@ -173,10 +191,17 @@ public:
     Result<RoutePoint> snap(geom::PointMm point, const SnapOptions& options = {}) const;
 
 private:
+    friend struct ViaBuilder; // routing_graph.cpp: via-way rule states
     friend Result<RoutingGraph> build_routing_graph(const RoadGraph&, std::span<const TurnRestriction>, const RouteConfig&);
     RouteConfig config_;
     std::vector<RouteGraphNode> nodes_; // + one sentinel
-    std::vector<RouteArc> arcs_;
+    std::vector<RouteArc> arcs_; // real arcs, then ghost copies
+    std::size_t real_arcs_ = 0;
+    std::vector<std::uint32_t> ghost_origin_; // per ghost state: its real arc
+    // States with an own successor list (a real arc that starts a via-way rule, every ghost):
+    // special_slot_[state] indexes special_first_ (CSR into special_succ_); kNoArc = ordinary.
+    std::vector<std::uint32_t> special_slot_, special_first_;
+    std::vector<Transition> special_succ_;
     std::vector<RouteRule> rules_;
     std::vector<geom::PointMm> shape_;
     struct SnapEntry {

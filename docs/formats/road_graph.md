@@ -1,4 +1,4 @@
-# g2m.roads.graph / encoding 5, version 1 (encoding 4 still readable)
+# g2m.roads.graph / encoding 6, version 1 (encodings 5 and 4 still readable)
 
 Level-2 tiles cover 1024 m squares with a fixed 128 m halo. Selection keeps
 each complete way that intersects the closed expanded square, including all
@@ -16,13 +16,31 @@ little-endian byte order; signed varints use the core byte codec's ZigZag form.
 | Ways | count varint; signed id, u8 rank, refs count and signed ref ids; tags count and strings |
 | Strings | unsigned byte-length varint followed by UTF-8/source bytes |
 | Owned edges | count varint followed by unsigned edge-index varints |
+| Turn restrictions | **encoding 6 only:** count varint, then per record: signed relation id, u8 value code, signed from way, signed to way, signed via node (0 = none), via-way count varint (0..16), signed via way ids |
 
 Nodes and ways sort strictly by OSM id; tag keys sort strictly.
 
-**Encoding 4 and 5.** Encoding 5 (street fidelity P1, slice 2) adds the node tags. Encoding 4 is the
-same payload without that field; the decoder reads both (a 4 tile has no node tags), the
-writer produces 5. The `roads.geom` encoding-5 section 1 still embeds the encoding-4 payload; a
-roads.geom encoding 6 will embed 5.
+**Encodings 4, 5 and 6.** Encoding 5 (street fidelity P1, slice 2) adds the node tags. Encoding 4 is the
+same payload without that field. Encoding 6 (G4 routing, slice 3) adds the turn-restriction block after
+the owned edges. The decoder reads all three (a 4 tile has no node tags, a 4 or 5 tile has no
+restrictions); the writer produces 6. `roads.geom` does not carry restrictions: its encoding-5 section 1
+still embeds the encoding-4 payload and its encodings 6 and 7 embed encoding 5, and a decoded
+roads.geom graph has no restrictions.
+
+**Turn restrictions (encoding 6).** One record per OSM `type=restriction` relation that applies to cars
+(`extract_turn_restrictions` rules: `restriction:motorcar` wins, `except` naming motorcar/motor_vehicle/
+vehicle drops it, rules for other vehicles only are skipped, `no_entry`/`no_exit` expand to one record
+per pair). The value is a u8 code into the ten OSM restriction values (`no_left_turn`, `no_right_turn`,
+`no_straight_on`, `no_u_turn`, `no_entry`, `no_exit`, `only_left_turn`, `only_right_turn`,
+`only_straight_on`, `only_u_turn`); the kind (No or Only) follows from the value and is not stored.
+A rule has exactly one of a via node or one to sixteen via ways. A tile holds a record when its via node
+is a node of the tile graph or any via way is a way of the tile graph; the from and to ways need not be
+present. So every tile that touches the junction (or the via way) carries the same record, and a region
+assembled from tiles dedups the copies by (relation id, from way, to way); copies that disagree are
+rejected. Records are strictly sorted by (relation id, from way, to way). Rejected on decode and encode: a
+code of 10 or more, a value whose kind does not match, an out-of-order or duplicate record, a zero id, a
+record with both or neither of via node and via ways, more than 16 via ways, a record the tile does not
+hold, more than 200,000 records, a count larger than the remaining bytes allows.
 
 **Node tags.** Only these keys are kept, because shared nodes also carry addresses, names and
 other tags no road consumer reads: `barrier`, `crossing`, `crossing:markings`, `direction`,

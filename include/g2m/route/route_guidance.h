@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace g2m::route {
@@ -35,6 +36,26 @@ enum class ManeuverKind : std::uint8_t {
 };
 const char* to_string(ManeuverKind kind);
 
+// Lane directions as a bit mask (OSM turn:lanes tokens; "none" and an empty
+// lane are the empty mask).
+namespace lane_dir {
+inline constexpr std::uint16_t kLeft = 1, kSlightLeft = 2, kThrough = 4, kSlightRight = 8, kRight = 16, kSharpLeft = 32,
+                               kSharpRight = 64, kMergeToLeft = 128, kMergeToRight = 256, kReverse = 512;
+} // namespace lane_dir
+
+// "left;through" for a mask ("none" for the empty mask), tokens in lane_dir order.
+std::string lane_directions_to_string(std::uint16_t directions);
+
+// Parses a turn:lanes value ("left|through|through;right") into one mask per
+// lane, left to right in the driving direction. False on an empty value or an
+// unknown token (the value is then not used at all).
+bool parse_turn_lanes(std::string_view value, std::vector<std::uint16_t>& lanes);
+
+struct LaneHint {
+    std::uint16_t directions = 0; // lane_dir bits tagged on the lane
+    bool valid = false;           // the lane can take this manoeuvre
+};
+
 struct Maneuver {
     ManeuverKind kind = ManeuverKind::Depart;
     std::uint32_t step = 0;            // index into Route::arcs of the arc driven after the manoeuvre (Arrive: last arc)
@@ -46,6 +67,10 @@ struct Maneuver {
     std::uint8_t exit_number = 0;      // roundabouts
     std::string name, ref;             // of the road driven after the manoeuvre
     std::string destination, destination_ref; // its signposting (OSM destination, destination:ref), mostly on links
+    // Lanes of the approach way, left to right in the driving direction, from turn:lanes (turn:lanes:forward /
+    // :backward on a two-way road). Empty when the approach has no usable turn:lanes, for Depart / Arrive /
+    // roundabout manoeuvres, and when no tagged lane can take the manoeuvre. Never guessed from `lanes` alone.
+    std::vector<LaneHint> lanes;
 };
 
 struct GuidanceConfig {

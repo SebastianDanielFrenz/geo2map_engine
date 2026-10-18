@@ -30,6 +30,7 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/road_attributes.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_graph.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_graph_tile.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/road_restriction.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_rules.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/carve_params.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/landcover_classifier.cpp
