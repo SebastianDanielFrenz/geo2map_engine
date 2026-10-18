@@ -314,7 +314,7 @@ Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const Road
     if (underpass.enabled && rules.underpass.enabled) {
         const RoadGraph& crossings = underpass.crossings ? *underpass.crossings : context ? *context : graph.graph;
         if (underpass.crossings) { const auto ok = contains_tile_ways(crossings); if (!ok) return invalid("crossing graph lacks a tile way"); }
-        finder.emplace(crossings, dem, graph.key.zone, rules.underpass);
+        finder.emplace(crossings, dem, graph.key.zone, rules.underpass, context ? context : &graph.graph);   // D63: joins read the stretch context
         profile_limits.underpass = &*finder;
     }
     RoadGeomTile result; result.source = graph;

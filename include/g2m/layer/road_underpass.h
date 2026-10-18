@@ -19,6 +19,7 @@
 #include "g2m/layer/deriver.h"
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace g2m {
@@ -82,6 +83,8 @@ struct RoadUnderpassStats {
     std::size_t decks = 0;          // decks stored (after merging)
     std::size_t covered = 0;        // D61: spans whose lower ways are all tunnels: masked, no deck (ground covers them)
     std::size_t in_structure = 0;   // D61: upper stretches and lower crossings skipped as parking-structure storeys
+    std::size_t joined = 0;         // D63: crossings of the stretch handed to the way-boundary support of an end node
+    std::size_t join_spans = 0;     // D63: covered spans a stretch took from the way-boundary support of an end node
 };
 struct RoadUnderpassChord { double from_m = 0, to_m = 0, from_height_m = 0, to_height_m = 0; };
 struct RoadUnderpassSpanFit {
@@ -91,13 +94,55 @@ struct RoadUnderpassSpanFit {
     std::vector<RoadUnderpassChord> chords;  // one per crossing, the rim chord its mask uses
     bool covered = false;                    // D61: every lower way is a tunnel - mask only, no deck
 };
+// ---- Covered crossings at an OSM way boundary (D63, the A 66 westbound join, vault G2M-011) ----
+//
+// A covered span (D61) whose cutting lies around a degree-two join of two ground ways was lost: the stretch that holds
+// the crossing declined it (`reaches_end`: the span runs into its end), the next way never saw the crossing, and both
+// took their shared end plane from the DEM inside the cutting (junction_plane: the cutting wall's height and slope), so
+// one dipped and the other declined. The support is therefore a function of the join NODE, computed once and read by
+// both stretches:
+//   1. the node has exactly two incident edges in the context graph, of two different ground ways (neither bridge nor
+//      tunnel nor a structure storey, D61) on the same OSM layer; the path runs along both ways' node polylines away from
+//      the node, p < 0 along the way of the first edge in graph.edges order, p > 0 along the other (straight on past a
+//      way end), parameter p = metres along the polylines from the node;
+//   2. h(k), k = -W..W: the median of 7 lateral DEM samples at p = k (step 2 of D55 on this path); the lower crossings
+//      are the D55/D61 crossings of the path's segments with |p| < W; rims, depth and deck extent per crossing exactly as
+//      steps 3-5 of D55 (the hull of this window), overlapping spans merged (step 6);
+//   3. a merged span `reaches` the node when its extent widened by end_clearance_mm contains p = 0 and one of its rim
+//      chords spans p = 0 (inclusive - the node may itself be a rim). A covered span that reaches the node is the join's support: the node's anchor plane is its rim
+//      chord (height at p = 0, grade = the chord's slope along the path's bisector direction u, no cross slope; the
+//      highest chord where several cover the node); a non-covered (deck) span reaching the node leaves the node
+//      unsupported (decks never cross a stretch end; behaviour as before D63).
+// Both stretches ending at the node then take that plane as their end anchor (build_road_profile and the completion's
+// ground step, BEFORE any endpoint grade check) and mask the span's part on their side with the same chord; a stretch's
+// own crossing of a lower way the join support covers is handed to the join (`joined`). Rims come from the measured DEM
+// only; nothing is levelled. Without a covered span at the node: no change.
+// A pure function of the node: the context graph (both incident ways, complete), the lower ways crossing the path within
+// W of the node (in the crossing graph by road_crossing_dependencies' end-node squares) and the DEM within W + 3.5 m of
+// the node, inside the 65 m DEM margin of the tile way the node belongs to; so every tile holding either way computes it
+// alike.
+struct RoadUnderpassJoin {
+    std::int64_t node = 0;
+    std::int64_t negative_way = 0, positive_way = 0;   // the ways along p < 0 and p > 0
+    double ux = 0, uy = 0;                              // unit direction of +p at the node (bisector of the two segments)
+    std::vector<RoadUnderpassSpanFit> spans;            // the covered spans reaching the node; stations = p
+    RoadJunctionPlane plane;                            // the common end anchor of both stretches
+};
+// The square half-width around every end node of a tile way whose roads.graph tiles road_crossing_dependencies adds
+// (D63): the largest underpass window (60 m, UnderpassRules::window_m's bound) plus 1 m.
+inline constexpr std::int64_t kRoadUnderpassJoinMarginMm = 61000;
 class RoadUnderpassFinder {
 public:
     // `crossings` must hold every way crossing a segment of the ways asked about, and those ways themselves; the
-    // references are kept (not owned).
-    RoadUnderpassFinder(const RoadGraph& crossings, const RoadDemSampler& dem, geo::UtmZone zone, const UnderpassRules& rules);
+    // references are kept (not owned). `context` (D63, optional; default `crossings`) must hold every way incident to the
+    // end nodes of the ways asked about (the stretch context of build_road_geom_tile).
+    RoadUnderpassFinder(const RoadGraph& crossings, const RoadDemSampler& dem, geo::UtmZone zone, const UnderpassRules& rules,
+        const RoadGraph* context = nullptr);
     const UnderpassRules& rules() const noexcept { return rules_; }
-    // The deck spans of one ground stretch (empty for an unknown way, a bridge or tunnel way, or rules off), sorted.
+    // D63: the covered support at a way-boundary node, nullopt where there is none (see above).
+    std::optional<RoadUnderpassJoin> join(std::int64_t node) const;
+    // The deck spans of one ground stretch (empty for an unknown way, a bridge or tunnel way, or rules off), sorted;
+    // including (D63) the covered spans of the join support at its end nodes, mapped to its stations.
     std::vector<RoadUnderpassSpanFit> spans(std::int64_t way_id, RoadStretch stretch, const RoadReferenceLine& reference,
         RoadUnderpassStats* stats = nullptr) const;
     // The mask (D54): every sample strictly inside (0, length) whose station lies in a span takes the highest chord
@@ -107,15 +152,34 @@ public:
     void mask_samples(std::int64_t way_id, RoadStretch stretch, const RoadReferenceLine& reference, std::vector<VerticalSample>& samples) const;
 private:
     struct Seg { std::size_t way; std::size_t index; };
+    // One lower crossing of an upper polyline segment: station along the upper line, lower way, lower segment direction,
+    // lower width, lower way a tunnel, intersection point (zone metres).
+    struct Crossing { double station; std::int64_t way; double dx, dy; std::int32_t width_mm; bool covered; double px, py; };
+    // The lower crossings of the upper segment ab (a_id, b_id its node ids: never a crossing through a shared node) in
+    // the D55/D61 sense (ways `upper_a` and `upper_b` themselves skipped), appended to `out` with station 0;
+    // `candidates` is scratch.
+    void crossings_of(geom::PointMm a, geom::PointMm b, std::int64_t a_id, std::int64_t b_id, std::int64_t upper_a, std::int64_t upper_b,
+        int upper_layer, std::vector<Seg>& candidates, std::vector<Crossing>& out, RoadUnderpassStats& stats) const;
+    // Steps 3-5 of D55 for one crossing over a window h(k), k = -W..W, at stations centre + k (the crossing at offset
+    // t = x.station - centre; t = 0 for a stretch's own crossings, so the D55 arithmetic is unchanged); `upper_width_mm`
+    // and (ux, uy) the upper way's width and direction at the crossing. Nullopt when declined (the counter is bumped);
+    // the end-clearance check is the caller's.
+    std::optional<RoadUnderpassSpanFit> fit_crossing(const Crossing& x, double centre, const std::vector<std::int32_t>& h,
+        std::int32_t upper_width_mm, double ux, double uy, RoadUnderpassStats& stats) const;
+    static std::vector<RoadUnderpassSpanFit> merge(std::vector<RoadUnderpassSpanFit> fits, RoadUnderpassStats& stats);
     const RoadGraph& graph_;
+    const RoadGraph& context_;
     const RoadDemSampler& dem_;
     geo::UtmZone zone_;
     UnderpassRules rules_;
     std::vector<std::pair<std::uint64_t, Seg>> cells_;   // 64 m grid cell -> lower segment, sorted by cell then (way, index)
+    std::vector<std::pair<std::int64_t, std::uint32_t>> incident_;   // context: (node, edge index), sorted
 };
 // The roads.graph level-2 tiles a segment of a `tile_graph` way passes through (segment_touches_box on each tile's
 // square), `exclude` omitted; sorted, unique. A way crossing such a segment passes through the tile holding the
-// intersection point, so that tile's roads.graph holds it complete (D57).
+// intersection point, so that tile's roads.graph holds it complete (D57). D63: also the tiles touching the square of
+// half-width `join_margin_mm` around the first and last node of every tile way (0 = the D57 set alone), so the lower
+// ways crossing either way of a join within the underpass window of its node are complete too.
 Result<std::vector<InputTileRef>> road_crossing_dependencies(const RoadGraph& tile_graph, geo::UtmZone zone,
-    const TileKey* exclude = nullptr, std::size_t max_tiles = 1024);
+    const TileKey* exclude = nullptr, std::size_t max_tiles = 1024, std::int64_t join_margin_mm = kRoadUnderpassJoinMarginMm);
 } // namespace g2m

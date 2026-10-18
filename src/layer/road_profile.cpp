@@ -178,6 +178,9 @@ Result<RoadProfile> build_road_profile(const RoadReferenceBuilder& builder,
             [](const auto& node, auto search) { return node.osm_id < search; });
         if (ni == graph.nodes.end() || ni->osm_id != wi->node_ids[index])
             return make_error(ErrorCode::Malformed, "road profile: endpoint absent");
+        // D63: a covered crossing at a way boundary gives both stretches the node's common rim-chord plane, before any
+        // endpoint grade check (the DEM's junction plane there is the cutting's own wall).
+        if (limits.underpass) if (auto join = limits.underpass->join(ni->osm_id)) return Anchor{join->plane, false, false};
         return surface_anchor(builder, dem, zone, ni->osm_id, limits.reference);
     };
     const auto first = endpoint(stretch.start_ref); if (!first) return first.error();
