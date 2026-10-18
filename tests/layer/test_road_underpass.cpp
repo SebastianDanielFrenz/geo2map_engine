@@ -929,3 +929,200 @@ TEST_CASE("underpass deck (D61): decks and covered spans of both fixtures on the
         }
     }
 }
+
+// ---- D63: covered crossings at an OSM way boundary (the A 66 westbound join, brief terrain-a66-boundary) ----
+
+namespace {
+// Way 100 (secondary) from x = -400 east to the join node J at `xj`, way 101 (secondary) on from J to `upper_to`, the
+// lower way 200 north-south at `lower_x` (tags `lower_tags`). J is a degree-two node of two different ground ways: the
+// boundary the A 66 is split at.
+RoadGraph join_scene(double xj, const g2m_test::UnderpassTags& lower_tags, double lower_x = 0.5, double upper_to = 400) {
+    UnderpassSceneOptions o; o.lower_tags = lower_tags; o.lower_x = lower_x; o.upper_extra = {xj}; o.upper_to = upper_to;
+    RoadGraph g = underpass_scene(o);
+    auto& w = g.ways.front();
+    const std::int64_t jx = std::llround((kUnderpassE0 + xj) * 1000.0);
+    std::size_t k = 0;
+    for (; k < w.node_ids.size(); ++k) {
+        const auto it = std::find_if(g.nodes.begin(), g.nodes.end(), [&](const RoadGraphNode& n) { return n.osm_id == w.node_ids[k]; });
+        if (it->position.x == jx) break;
+    }
+    RoadGraphWay tail{101, w.rank, std::vector<std::int64_t>(w.node_ids.begin() + static_cast<std::ptrdiff_t>(k), w.node_ids.end()), w.tags};
+    w.node_ids.resize(k + 1);
+    g.ways.push_back(std::move(tail));
+    std::sort(g.ways.begin(), g.ways.end(), [](const RoadGraphWay& a, const RoadGraphWay& b) { return a.osm_id < b.osm_id; });
+    g.edges.clear();
+    for (const auto& way : g.ways)
+        for (std::size_t i = 1; i < way.node_ids.size(); ++i)
+            g.edges.push_back({way.osm_id, static_cast<std::uint32_t>(i - 1), way.node_ids[i - 1], way.node_ids[i]});
+    return g;
+}
+const RoadProfile* profile_of(const RoadGeomTile& t, std::int64_t way) {
+    for (const auto& e : t.entries) if (e.way_id == way && e.profile) return &*e.profile;
+    return nullptr;
+}
+std::string decline_of(const RoadGeomTile& t, std::int64_t way) {
+    for (const auto& e : t.entries) if (e.way_id == way) return e.profile ? std::string("profile") : e.decline->message;
+    return "absent";
+}
+// max |profile - (100 + 0.02 x)| over every whole-metre station and the end: the ground and rim plane of the tilted
+// cutting.
+double off_rim_plane(const RoadProfile& p) {
+    double worst = 0;
+    for (double s = 0;; s += 1) {
+        const double st = std::min(s, p.reference.length_m);
+        const auto xy = p.reference.at(st); const auto z = p.at(st); REQUIRE(xy); REQUIRE(z);
+        worst = std::max(worst, std::fabs(z->height_m - (100.0 + 0.02 * (xy->x - kUnderpassE0))));
+        if (st >= p.reference.length_m) break;
+    }
+    return worst;
+}
+} // namespace
+
+TEST_CASE("underpass deck (D63): a covered cutting split at a way boundary gives both ways one common end plane",
+          "[layer][underpass][deck][d63]") {
+    // J on the cutting's east shoulder (9 m east of the lower road, 3 m short of the rim), the tunnel crossing 9 m before
+    // J on way 100. Before D63 way 100's span reached its end (declined), way 101 never saw the crossing, and both took
+    // the shoulder's DEM plane at J: a dip toward the cutting floor and an end slope over the class bound.
+    const double xj = 9.5;
+    const Dem dem = tilted_cutting();
+    const RoadGraph world = join_scene(xj, {{"layer", "-1"}, {"tunnel", "yes"}});
+    RoadUnderpassStats stats;
+    const auto tile = build(world, kUnderpassTile, dem, true, &stats);
+    REQUIRE(tile);
+    const RoadProfile* a = profile_of(*tile, 100);
+    const RoadProfile* b = profile_of(*tile, 101);
+    INFO("way 100: " << decline_of(*tile, 100) << ", way 101: " << decline_of(*tile, 101));
+    REQUIRE(a); REQUIRE(b);
+    const auto za = a->at(a->reference.length_m), zb = b->at(0); REQUIRE(za); REQUIRE(zb);
+    const double rim_j = 100.0 + 0.02 * xj;
+    std::printf("D63 synthetic: J %.3f m (way 100) / %.3f m (way 101), rim plane %.3f m; grades %.5f / %.5f; off the rim plane "
+                "%.3f / %.3f m; joined %zu, join spans %zu\n", za->height_m, zb->height_m, rim_j, za->grade, zb->grade,
+                off_rim_plane(*a), off_rim_plane(*b), stats.joined, stats.join_spans);
+    // One common end plane: the same height and grade from both sides, the rim chord's.
+    CHECK(za->height_m == zb->height_m);
+    CHECK(std::fabs(za->grade - zb->grade) < 1e-9);
+    CHECK(std::fabs(za->height_m - rim_j) < 0.01);
+    CHECK(std::fabs(za->grade - 0.02) < 0.002);
+    // Neither way dips into the cutting nor ramps: both stay on the ground / rim plane throughout.
+    CHECK(off_rim_plane(*a) < 0.05);
+    CHECK(off_rim_plane(*b) < 0.05);
+    // Covered: masked, never a deck; the stretch's own crossing is handed to the join support.
+    CHECK(tile->underpasses.empty());
+    CHECK(stats.joined == 1);
+    CHECK(stats.join_spans == 2);
+    CHECK(stats.reaches_end == 0);
+}
+
+TEST_CASE("underpass deck (D63): the boundary node may itself be the cutting's rim", "[layer][underpass][deck][d63]") {
+    // The A 66 case: node 3306247908 IS the west rim of the cutting (its hull chord ends exactly at the node). J at the
+    // east rim (12 m east of the lower road): the support must still reach the node (inclusive chord test).
+    const double xj = 12.5;
+    const Dem dem = tilted_cutting();
+    RoadUnderpassStats stats;
+    const auto tile = build(join_scene(xj, {{"layer", "-1"}, {"tunnel", "yes"}}), kUnderpassTile, dem, true, &stats);
+    REQUIRE(tile);
+    const RoadProfile* a = profile_of(*tile, 100);
+    const RoadProfile* b = profile_of(*tile, 101);
+    INFO("way 100: " << decline_of(*tile, 100) << ", way 101: " << decline_of(*tile, 101));
+    REQUIRE(a); REQUIRE(b);
+    const auto za = a->at(a->reference.length_m), zb = b->at(0); REQUIRE(za); REQUIRE(zb);
+    std::printf("D63 rim node: J %.3f / %.3f m, grades %.5f / %.5f, off the rim plane %.3f / %.3f m, joined %zu\n", za->height_m,
+                zb->height_m, za->grade, zb->grade, off_rim_plane(*a), off_rim_plane(*b), stats.joined);
+    CHECK(za->height_m == zb->height_m);
+    CHECK(std::fabs(za->grade - zb->grade) < 1e-9);
+    CHECK(off_rim_plane(*a) < 0.05);
+    CHECK(off_rim_plane(*b) < 0.05);
+    CHECK(tile->underpasses.empty());
+    CHECK(stats.joined == 1);
+    CHECK(stats.reaches_end == 0);
+}
+TEST_CASE("underpass deck (D63): what a way-boundary support is not", "[layer][underpass][deck][d63]") {
+    const double xj = 9.5;
+    const Dem dem = tilted_cutting();
+    // An open lower road (a deck) reaching the join: no support; the D55 behaviour (the deck reaches the stretch end and
+    // is declined) is unchanged.
+    {
+        RoadUnderpassStats stats;
+        const auto tile = build(join_scene(xj, {{"layer", "-1"}}), kUnderpassTile, dem, true, &stats);
+        REQUIRE(tile);
+        INFO("way 100: " << decline_of(*tile, 100) << ", way 101: " << decline_of(*tile, 101));
+        CHECK(stats.join_spans == 0); CHECK(stats.joined == 0);
+        CHECK(tile->underpasses.empty());
+    }
+    // A tunnel that is a parking-structure storey (D61): not a lower road, no support.
+    {
+        RoadUnderpassStats stats;
+        const auto tile = build(join_scene(xj, {{"layer", "-1"}, {"tunnel", "yes"}, {"level", "-1"}}), kUnderpassTile, dem, true, &stats);
+        REQUIRE(tile);
+        CHECK(stats.join_spans == 0); CHECK(stats.joined == 0);
+    }
+    // A genuine valley near the join (the cutting 30 m before J, but the lower road 300 m away): no support; the profile
+    // follows the measured ground into it.
+    {
+        RoadUnderpassStats stats;
+        const auto tile = build(join_scene(30.5, {{"layer", "-1"}, {"tunnel", "yes"}}, 300.5), kUnderpassTile, dem, true, &stats);
+        REQUIRE(tile);
+        CHECK(stats.join_spans == 0);
+        const RoadProfile* a = profile_of(*tile, 100);
+        INFO("way 100: " << decline_of(*tile, 100));
+        REQUIRE(a);
+        const auto z = a->at(a->reference.length_m - 30.0); REQUIRE(z);
+        CHECK(z->height_m < 100.0 + 0.02 * 0.5 - 0.3);   // in the valley, not bridged over it
+    }
+    // A measured slope at the join (tilted ground, no cutting, a tunnel crossing): no depression, no support; both
+    // profiles follow the ground.
+    {
+        RoadUnderpassStats stats;
+        const Dem slope = [](double e, double) { return 100.0 + 0.02 * (e - kUnderpassE0); };
+        const auto tile = build(join_scene(xj, {{"layer", "-1"}, {"tunnel", "yes"}}), kUnderpassTile, slope, true, &stats);
+        REQUIRE(tile);
+        CHECK(stats.join_spans == 0);
+        const RoadProfile* a = profile_of(*tile, 100);
+        const RoadProfile* b = profile_of(*tile, 101);
+        REQUIRE(a); REQUIRE(b);
+        CHECK(off_rim_plane(*a) < 0.02); CHECK(off_rim_plane(*b) < 0.02);
+    }
+}
+
+TEST_CASE("underpass deck (D63): tile invariance of the way-boundary support", "[layer][underpass][deck][d63][invariance]") {
+    // The join 1209.5 m east of the centre: way 101 lies only in the east tile; the centre tile holds way 100 and reads
+    // way 101 from its stretch context. Both tiles serve way 100 with the same profile.
+    const RoadGraph world = join_scene(1209.5, {{"layer", "-1"}, {"tunnel", "yes"}}, 1200.5, 1600);
+    const Dem dem = tilted_cutting(1200.5);
+    const TileKey east{kUnderpassTile.zone, 2, kUnderpassTile.x + 1, kUnderpassTile.y};
+    RoadUnderpassStats sa, sb;
+    const auto a = build(world, kUnderpassTile, dem, true, &sa);
+    const auto b = build(world, east, dem, true, &sb);
+    REQUIRE(a); REQUIRE(b);
+    const RoadProfile* pa = profile_of(*a, 100);
+    const RoadProfile* pb = profile_of(*b, 100);
+    const RoadProfile* qb = profile_of(*b, 101);
+    REQUIRE(pa); REQUIRE(pb); REQUIRE(qb);
+    CHECK(same_vertical(pa->vertical, pb->vertical));
+    CHECK(sa.join_spans == 1); CHECK(sb.join_spans == 2);
+    const auto za = pa->at(pa->reference.length_m), zb = qb->at(0); REQUIRE(za); REQUIRE(zb);
+    CHECK(za->height_m == zb->height_m);
+    CHECK(std::fabs(za->height_m - (100.0 + 0.02 * 1209.5)) < 0.01);
+}
+
+TEST_CASE("underpass deck (D63): the crossing tiles include the squares around every tile way's end nodes",
+          "[layer][underpass][deck][d63][invariance]") {
+    // A way ending 10 m west of the centre tile's east edge: its segments never touch the east tile, the 61 m square
+    // around its end node does.
+    RoadGraph g;
+    const std::int64_t n0 = std::llround(g2m_test::kUnderpassN0 * 1000.0);
+    g.nodes.push_back({1, {std::llround((kUnderpassE0 - 100) * 1000.0), n0}, {}});
+    g.nodes.push_back({2, {std::llround((kUnderpassE0 + 502) * 1000.0), n0}, {}});
+    g.ways.push_back({1, 6, {1, 2}, {{"highway", "secondary"}}});
+    g.edges.push_back({1, 0, 1, 2});
+    const TileKey east{kUnderpassTile.zone, 2, kUnderpassTile.x + 1, kUnderpassTile.y};
+    const auto has = [&](const std::vector<InputTileRef>& refs) {
+        return std::any_of(refs.begin(), refs.end(), [&](const InputTileRef& r) { return r.key == east; });
+    };
+    const auto without = road_crossing_dependencies(g, kUnderpassTile.zone, &kUnderpassTile, 1024, 0);
+    const auto with = road_crossing_dependencies(g, kUnderpassTile.zone, &kUnderpassTile);
+    REQUIRE(without); REQUIRE(with);
+    CHECK_FALSE(has(*without));
+    CHECK(has(*with));
+    CHECK(with->size() == 1);
+}

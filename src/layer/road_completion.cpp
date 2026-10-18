@@ -370,6 +370,7 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
             const bool bridge_first = anchor_first.plane.has_value(), bridge_last = anchor_last.plane.has_value();
             const auto plane_at = [&](const RoadBridgeAnchor& anchor, std::int64_t id) -> std::optional<RoadJunctionPlane> {
                 if (anchor.plane) return anchor.plane;
+                if (limits.underpass) if (auto join = limits.underpass->join(id)) return join->plane;   // D63
                 auto p = dem.junction_plane(zone, walk.position(id)); if (!p) return std::nullopt; return *p;
             };
             const auto a = plane_at(anchor_first, first_id), b = plane_at(anchor_last, last_id);

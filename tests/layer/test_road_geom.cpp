@@ -75,11 +75,20 @@ TEST_CASE("roads.geom discovers complete DEM dependencies and applies offsets on
     const auto graph = source(); RoadGeomDeriver deriver;
     std::vector<InputTile> inputs{input(std::string(kRoadGraphLayer), graph.key, *encode_road_graph(graph))};
     const auto deps = deriver.additional_inputs_for({graph.key, 0, inputs}); REQUIRE(deps); REQUIRE_FALSE(deps->empty());
+    std::size_t graph_deps = 0;
     for (const auto& dep : *deps) {
+        if (dep.layer == kRoadGraphLayer) {
+            // D63: the roads.graph tiles of the 61 m squares around the ways' end nodes (here the three neighbours of the
+            // tile corner the nodes sit 10 m from); empty, as no other way is there.
+            ++graph_deps;
+            inputs.push_back(input(dep.layer, dep.key, *encode_road_graph(*select_road_graph_tile(RoadGraph{}, dep.key))));
+            continue;
+        }
         HeightTile t; t.key = dep.key; t.h.fill(25600);
         auto entry = input(dep.layer, dep.key, *encode_height_tile(t), VerticalDatum::DHHN2016);
         entry.header->height_offset = 256; inputs.push_back(std::move(entry));
     }
+    CHECK(graph_deps == 3);
     std::sort(inputs.begin(), inputs.end(), [](const auto& a, const auto& b) { return a.ref < b.ref; });
     const auto result = deriver.derive({graph.key, 0, inputs}); REQUIRE(result);
     CHECK(result->height_offset == 0); CHECK(result->datum == VerticalDatum::DHHN2016);

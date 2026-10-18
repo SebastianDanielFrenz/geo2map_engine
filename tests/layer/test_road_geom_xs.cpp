@@ -336,12 +336,15 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
         "completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05 corner-fillet=1 width-taper=5"
         " tunnel-floor=5/0.29999999999999999/20/chord:200 bridge-anchor-reuse=1 bridge-walk-margin=205";
     CHECK(deriver.config_hash() != Sha256::of(d52));
-    // Owner decision 2026-10-15 (D53-D58): underpass decks, enc=9, and the crossing context.
-    const std::string after = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
+    // Owner decision 2026-10-15 (D53-D58): underpass decks, enc=9, and the crossing context; D61 tag rules.
+    const std::string d61 = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
         "sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=9 rules=de:" +
         rules_hex + " join-bisector=1 context=nodes junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/200 "
         "completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05 corner-fillet=1 width-taper=5"
         " tunnel-floor=5/0.29999999999999999/20/chord:200 bridge-anchor-reuse=1 bridge-walk-margin=205 underpass=1 crossing-context=1 underpass-tags=D61";
+    CHECK(deriver.config_hash() != Sha256::of(d61));
+    // D63: the way-boundary support of a covered crossing and the 61 m end-node squares of the crossing tiles.
+    const std::string after = d61 + " underpass-join=D63/61000";
     CHECK(road_geom_config_text() == after);
     CHECK(deriver.config_hash() == Sha256::of(after));
     CHECK(road_geom_desc().encoding == 9);
