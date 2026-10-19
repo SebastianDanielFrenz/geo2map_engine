@@ -368,12 +368,13 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         const auto try_fit = [&](const RoadBridgeAnchor& anchor_first, const RoadBridgeAnchor& anchor_last) -> std::optional<GroundFit> {
             const RoadReferenceLine& line = *ref;
             const bool bridge_first = anchor_first.plane.has_value(), bridge_last = anchor_last.plane.has_value();
-            const auto plane_at = [&](const RoadBridgeAnchor& anchor, std::int64_t id) -> std::optional<RoadJunctionPlane> {
+            const auto plane_at = [&](const RoadBridgeAnchor& anchor, std::int64_t id, bool at_start) -> std::optional<RoadJunctionPlane> {
                 if (anchor.plane) return anchor.plane;
                 if (limits.underpass) if (auto join = limits.underpass->join(id)) return join->plane;   // D63
+                if (limits.underpass) if (auto over = limits.underpass->overpass_end_plane(entry.way_id, entry.stretch, line, at_start)) return over;   // D64
                 auto p = dem.junction_plane(zone, walk.position(id)); if (!p) return std::nullopt; return *p;
             };
-            const auto a = plane_at(anchor_first, first_id), b = plane_at(anchor_last, last_id);
+            const auto a = plane_at(anchor_first, first_id, true), b = plane_at(anchor_last, last_id, false);
             if (!a || !b) return std::nullopt;
             const auto start = line.at(0), end = line.at(line.length_m); if (!start || !end) return std::nullopt;
             VerticalFitLimits fit; fit.max_grade = std::max(0.12, attrs->max_grade_per_mille / 1000.0);

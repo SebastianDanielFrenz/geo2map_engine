@@ -125,7 +125,9 @@ std::string road_geom_config_text() {
         // hash above); crossing-context=1: the roads.graph tiles of every way crossing a tile way's segment (D57);
         // underpass-join: covered crossings at a degree-two way boundary give both ways the node's rim-chord plane, the
         // crossing tiles adding the squares of this half-width (mm) around every tile way's end nodes (D63).
-        " underpass=" + std::string(builtin_road_rules_de().underpass.enabled ? "1" : "off") + " crossing-context=1 underpass-tags=D61 underpass-join=D63/" + std::to_string(kRoadUnderpassJoinMarginMm);
+        " underpass=" + std::string(builtin_road_rules_de().underpass.enabled ? "1" : "off") + " crossing-context=1 underpass-tags=D61 underpass-join=D63/" + std::to_string(kRoadUnderpassJoinMarginMm) +
+        // D64: a ground stretch under an upper bridge (a higher layer, bridge=*) masks the hump the bare-earth DEM holds there with the lower rim chord and takes its end planes from it.
+        " overpass-mask=D64";
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {

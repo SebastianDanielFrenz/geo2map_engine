@@ -237,7 +237,7 @@ RoadUnderpassFinder::RoadUnderpassFinder(const RoadGraph& crossings, const RoadD
 }
 
 void RoadUnderpassFinder::crossings_of(geom::PointMm a, geom::PointMm b, std::int64_t a_id, std::int64_t b_id, std::int64_t upper_a,
-    std::int64_t upper_b, int upper_layer, std::vector<Seg>& candidates, std::vector<Crossing>& out, RoadUnderpassStats& stats) const {
+    std::int64_t upper_b, int upper_layer, std::vector<Seg>& candidates, std::vector<Crossing>& out, RoadUnderpassStats& stats, bool over) const {
     candidates.clear();
     const auto x0 = floor_div(std::min(a.x, b.x), kCellMm), x1 = floor_div(std::max(a.x, b.x), kCellMm);
     const auto y0 = floor_div(std::min(a.y, b.y), kCellMm), y1 = floor_div(std::max(a.y, b.y), kCellMm);
@@ -257,10 +257,16 @@ void RoadUnderpassFinder::crossings_of(geom::PointMm a, geom::PointMm b, std::in
         const RoadGraphNode* c = node_of(graph_, c_id);
         const RoadGraphNode* d = node_of(graph_, d_id);
         if (!c || !d || !geom::segments_intersect(a, b, c->position, d->position)) continue;
-        if (tag_is_yes(lower, "bridge")) continue;
-        const bool tunnel = tag_is_yes(lower, "tunnel");
-        if (!tunnel && layer_of(lower) >= upper_layer) continue;
-        if (in_structure(lower)) { ++stats.in_structure; continue; }   // D61
+        // D64 (over): the crossing way is an upper bridge (on a higher layer, never a tunnel) - the stretch is the lower road.
+        if (over) {
+            if (!tag_is_yes(lower, "bridge") || tag_is_yes(lower, "tunnel") || layer_of(lower) <= upper_layer) continue;
+            if (in_structure(lower)) { ++stats.in_structure; continue; }
+        } else {
+            if (tag_is_yes(lower, "bridge")) continue;
+        }
+        const bool tunnel = !over && tag_is_yes(lower, "tunnel");
+        if (!over && !tunnel && layer_of(lower) >= upper_layer) continue;
+        if (!over && in_structure(lower)) { ++stats.in_structure; continue; }   // D61
         Crossing x{}; x.way = lower.osm_id; x.covered = tunnel;
         intersection_m(a, b, c->position, d->position, x.px, x.py);
         x.dx = static_cast<double>(d->position.x - c->position.x) / 1000; x.dy = static_cast<double>(d->position.y - c->position.y) / 1000;
@@ -561,11 +567,93 @@ std::vector<RoadUnderpassSpanFit> RoadUnderpassFinder::spans(std::int64_t way_id
             out.push_back(std::move(m));
         }
     }
-    if (!ends.empty())
+    // D64: the hump spans under upper bridges (covered: mask only).
+    auto over = overpass_spans(way_id, stretch, ref, *stats);
+    const bool sort_out = !ends.empty() || !over.empty();
+    for (auto& m : over) out.push_back(std::move(m));
+    if (sort_out)
         std::sort(out.begin(), out.end(), [](const RoadUnderpassSpanFit& l, const RoadUnderpassSpanFit& r) {
             return std::tie(l.start_m, l.end_m, l.covered, l.lower_ways) < std::tie(r.start_m, r.end_m, r.covered, r.lower_ways);
         });
     return out;
+}
+
+std::vector<RoadUnderpassSpanFit> RoadUnderpassFinder::overpass_spans(std::int64_t way_id, RoadStretch stretch, const RoadReferenceLine& ref,
+    RoadUnderpassStats& stats) const {
+    std::vector<RoadUnderpassSpanFit> out;
+    if (!rules_.enabled || !rules_.overpass) return out;
+    const RoadGraphWay* lower = way_of(graph_, way_id);
+    if (!lower || stretch.end_ref >= lower->node_ids.size() || stretch.start_ref >= stretch.end_ref) return out;
+    const auto attrs = resolve_road_attributes(*lower);
+    if (!attrs || attrs->bridge || attrs->tunnel || in_structure(*lower)) return out;
+    const int layer = layer_of(*lower);
+    const double L = ref.length_m;
+    const int W = rules_.window_m;
+    std::vector<Crossing> found;
+    std::vector<Seg> candidates;
+    for (std::uint32_t i = stretch.start_ref; i < stretch.end_ref; ++i) {
+        const RoadGraphNode* a = node_of(graph_, lower->node_ids[i]);
+        const RoadGraphNode* b = node_of(graph_, lower->node_ids[i + 1]);
+        if (!a || !b) continue;
+        const std::size_t before = found.size();
+        crossings_of(a->position, b->position, a->osm_id, b->osm_id, lower->osm_id, lower->osm_id, layer, candidates, found, stats, true);
+        for (std::size_t k = before; k < found.size(); ++k) found[k].station = nearest_station(ref, found[k].px, found[k].py);
+    }
+    if (found.empty()) return out;
+    std::sort(found.begin(), found.end(), [](const Crossing& l, const Crossing& r) { return std::tie(l.station, l.way, l.dx, l.dy) < std::tie(r.station, r.way, r.dx, r.dy); });
+    std::vector<std::int32_t> h(static_cast<std::size_t>(2 * W + 1));
+    const auto frame_at = [&](double s) -> std::optional<Frame> {
+        const auto pose = pose_at(ref, s); if (!pose) return std::nullopt;
+        return Frame{pose->x, pose->y, -det::sin(pose->heading), det::cos(pose->heading)};
+    };
+    std::vector<RoadUnderpassSpanFit> fits;
+    for (const Crossing& x : found) {
+        ++stats.over_crossings;
+        if (!sample_window(dem_, zone_, W, x.station, frame_at, h)) { ++stats.dem_missing; continue; }
+        const auto pose = ref.at(std::clamp(x.station, 0.0, L));
+        if (!pose) { ++stats.dem_missing; continue; }
+        // The hump is the depression of the negated window: its rims, depth and extent come from the D55 steps unchanged.
+        for (auto& v : h) v = -v;
+        auto fit = fit_crossing(x, x.station, h, attrs->width_mm, det::cos(pose->heading), det::sin(pose->heading), stats);
+        if (!fit) continue;
+        for (auto& c : fit->chords) { c.from_height_m = -c.from_height_m; c.to_height_m = -c.to_height_m; }
+        fit->covered = true;   // mask only: the bridge is not a deck of this road
+        // The span ends where the stretch does (the hump may well reach past its end node).
+        fit->start_m = std::max(0.0, fit->start_m);
+        fit->end_m = std::min(L, fit->end_m);
+        if (!(fit->end_m > fit->start_m)) continue;
+        ++stats.over_masked;
+        fits.push_back(std::move(*fit));
+    }
+    out = merge(std::move(fits), stats);
+    std::erase_if(out, [&](const RoadUnderpassSpanFit& m) {
+        if (m.end_m - m.start_m <= static_cast<double>(rules_.max_span_m)) return false;
+        ++stats.too_long; return true;
+    });
+    return out;
+}
+
+std::optional<RoadJunctionPlane> RoadUnderpassFinder::overpass_end_plane(std::int64_t way_id, RoadStretch stretch,
+    const RoadReferenceLine& ref, bool at_start, RoadUnderpassStats* stats) const {
+    RoadUnderpassStats local; if (!stats) stats = &local;
+    const double L = ref.length_m, s = at_start ? 0.0 : L;
+    const double clear = static_cast<double>(rules_.end_clearance_mm) / 1000.0;
+    const auto pose = ref.at(s); if (!pose) return std::nullopt;
+    bool any = false; double z = 0, slope = 0;
+    for (const auto& m : overpass_spans(way_id, stretch, ref, *stats)) {
+        if (at_start ? !(m.start_m <= clear) : !(m.end_m >= L - clear)) continue;
+        for (const auto& c : m.chords) {
+            if (!(c.from_m <= s && c.to_m >= s && c.to_m > c.from_m)) continue;
+            const double g = (c.to_height_m - c.from_height_m) / (c.to_m - c.from_m);
+            const double v = c.from_height_m + g * (s - c.from_m);
+            if (!any || v > z) { z = v; slope = g; any = true; }
+        }
+    }
+    if (!any) return std::nullopt;
+    RoadJunctionPlane plane;
+    plane.height = static_cast<std::int32_t>(std::llround(z * 256.0));
+    plane.grade_x = slope * det::cos(pose->heading); plane.grade_y = slope * det::sin(pose->heading);
+    return plane;
 }
 
 void RoadUnderpassFinder::mask(const std::vector<RoadUnderpassSpanFit>& spans, std::vector<VerticalSample>& samples) {

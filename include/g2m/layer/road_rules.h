@@ -101,6 +101,7 @@ struct UnderpassRules {
     std::int32_t depth_tol_mm = 0;       // the depression ends where the DEM is within this of the rim chord
     std::int32_t lower_margin_mm = 0;    // added to the lower road's half width for the deck core
     std::int32_t end_clearance_mm = 0;   // a deck must end at least this far from both stretch ends
+    bool overpass = true;                // D64: mask the hump under an upper bridge (not in de.json: the tests' sabotage switch)
     friend bool operator==(const UnderpassRules&, const UnderpassRules&) = default;
 };
 // Constants the junction block is validated against (design 5.2, 5.3): the widest carve blend and the radius
