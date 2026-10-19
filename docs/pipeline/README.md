@@ -342,7 +342,7 @@ flowchart TB
 | G3 B: graph and geom tile encoding, derivation, opt-in serving | Implemented | [../g3_road_pipeline.md](../g3_road_pipeline.md), [../formats/road_geom.md](../formats/road_geom.md) |
 | G3 C: reference lines and vertical profiles | Foundation implemented, acceptance open | [../g3_profile_foundation.md](../g3_profile_foundation.md), [../g3_reference_lines.md](../g3_reference_lines.md) |
 | G3 D: junction surfaces and server-side carving | In progress as street fidelity P2: junction surfaces served (slice 8), carved heights served (slice 9), terrain.class served and the physics class mode wired (slices 10-11, terrain migration phase 6; the render class window D62); the home census and the game switch open | [../g3_road_pipeline.md](../g3_road_pipeline.md) section D, [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md) |
-| G3 E: ribbons, markings, bridge bodies | Open | section E |
+| G3 E: ribbons, markings, bridge bodies | Open; turn-lane arrows fixed by an explicit token table (merge_to_*, slight_*, sharp_* get their own glyphs, vault G2M-024) | section E, [client_side.md](client_side.md) |
 | G3 F: route acceptance | Open | section F |
 | Street fidelity P0 (tag probe) | Done | [../osm_tag_coverage_home.md](../osm_tag_coverage_home.md) |
 | Street fidelity P1 (lane-aware cross-section) | Slices 1 to 7 implemented (context, node tags, base and join resolution, encoding 6, consumer API: carve footprint, lane queries, grip-raster envelope, carved profile features) | [../street_fidelity/p1_cross_section_design.md](../street_fidelity/p1_cross_section_design.md) |

@@ -210,7 +210,8 @@ geo2map_engine/
                                       caller's RoadSeparation), StructureSet + build_structure_set(RoadGeomTile)
     road_ribbons.h                   (phase 3a) RoadRibbonVertex/RoadRibbonTile, build_road_ribbons(geometry,
                                       key, ground fn, lift) incl. junction surfaces and markings,
-                                      add_junction_surfaces, road_priority_rank (StVO 18(3) rank)
+                                      add_junction_surfaces, road_priority_rank (StVO 18(3) rank), lane_arrow_glyphs
+                                      (turn:lanes token -> ArrowGlyph bits via parse_turn_token, G2M-024)
     buildings.h                      (phase 3b) Building/BuildingPoint/BuildingGround/BuildingParams,
                                       extract_buildings, BuildingSet + build_building_set(OsmTile, ground)
     view_streamer.h                  (phase 3b) render LOD around a focus: ViewChunk (mesh + class ids, carve
@@ -597,6 +598,10 @@ end of `CMakeLists.txt`):
   `refgen/refgen_meshes.cpp`, target `g2m_world_mesh_refgen` only with
   `-DG2M_WORLD_MESH_REFGEN_DIR=<dir>`), plus the game's two junction-surface
   tests. g2m_world_tests links `g2m_decode` and reads the OSM fixtures.
+  `test_road_arrows.cpp` (`[arrows]`, G2M-024): the turn:lanes token table, the ribbon of the real trunk_link
+  179708586 (through|slight_right|merge_to_left) and the converging merge_to_right|merge_to_left pair, lane
+  independence, junction guide lines; six recorded sabotages. `tools/road_census/main.cpp` (`g2m_road_census`,
+  built with g2m_tiler: `arrows STORE SCOPE X0 X1 Y0 Y1` / `way ... IDS`) is the region census.
   Phase 3b (`buildings`, `view_streamer`, `ring_streamer`): tests
   `test_buildings.cpp` (`[buildings]`; synthetic tag scene + every fixture tile
   with buildings == `building_pins.inc`), `test_view_streamer.cpp`

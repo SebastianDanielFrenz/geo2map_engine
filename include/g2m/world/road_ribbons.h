@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace g2m::world {
@@ -33,7 +34,20 @@ struct RoadRibbonTile {
     TileKey key;
     std::vector<RoadRibbonVertex> vertices;
     std::vector<std::int32_t> indices;
+    // Turn-arrow diagnostics (not part of the mesh): lanes that got an arrow, merge arrows among them (Verschwenkungspfeil),
+    // and turn:lanes values of the lanes painted that are no OSM value (they draw nothing).
+    std::size_t turn_arrow_lanes = 0, merge_arrows = 0, unknown_turn_tokens = 0;
 };
+// Glyphs of the turn arrows (bits). Left/right: the full bent arrow; slight_*: a shallower bend; sharp_*: a bend back
+// toward the side; merge_*: the diagonal straight arrow (Verschwenkungspfeil, StVO Zeichen 297.1) of the lane that ends.
+enum ArrowGlyph : std::uint16_t {
+    kArrowThrough = 1u << 0, kArrowLeft = 1u << 1, kArrowRight = 1u << 2, kArrowSlightLeft = 1u << 3, kArrowSlightRight = 1u << 4,
+    kArrowSharpLeft = 1u << 5, kArrowSharpRight = 1u << 6, kArrowMergeLeft = 1u << 7, kArrowMergeRight = 1u << 8 };
+// The glyphs painted for ONE lane of a turn:lanes value (the text between two '|', ';' joins values of the lane): through,
+// left and right as before, slight_* and sharp_* their own bends, merge_to_* only when no other direction shares the
+// lane (that lane ends). none and reverse paint nothing. A value that is not an OSM turn value (parse_turn_token) paints
+// nothing and adds one to *unknown_tokens. Every value is matched whole - never as a substring.
+std::uint16_t lane_arrow_glyphs(std::string_view lane_value, std::size_t* unknown_tokens = nullptr);
 // Ground height (absolute metres) at absolute UTM (easting, northing); nullopt = no ground there (NoData, not loaded).
 using RoadRibbonGround = std::function<std::optional<double>(double, double)>;
 

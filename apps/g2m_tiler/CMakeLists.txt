@@ -27,3 +27,7 @@ target_link_libraries(g2m_spot_dump PRIVATE g2m_server g2m_warnings g2m_options)
 
 add_executable(g2m_restriction_probe ../../tools/restriction_probe/main.cpp)
 target_link_libraries(g2m_restriction_probe PRIVATE g2m_server g2m_warnings g2m_options)
+
+# Read-only censuses over the road graphs of a block of tiles (tools/road_census: turn arrows, reference-line bow).
+add_executable(g2m_road_census ../../tools/road_census/main.cpp)
+target_link_libraries(g2m_road_census PRIVATE g2m_world g2m_server g2m_warnings g2m_options)

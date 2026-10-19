@@ -11,18 +11,23 @@
 // grade between their portals): regenerated with refgen from racing_game 945455a's mesh code over the new tiles.
 // // Full-footprint correction: slabs/collider/crown now follow the served cross-section, and approach inference uses its
 // signed outer footprint. Re-recorded from g2m::world over the same inputs; shape/count changes checked by the geometry tests.
+// Turn-lane arrows re-pinned for vault G2M-024 (explicit turn:lanes token table instead of the substring rule: merge_to_*
+// and slight_* no longer draw the full bent turn arrow, a merge draws one diagonal arrow, and a neighbouring lane no longer
+// gets a mirrored one): ribbon vertex / index counts and hashes of the hoechst_a66 and frankfurt_hoechst tiles that carry
+// such lanes (frankfurt_hoechst.463.5428, .464.5429; hoechst_a66.454/455/456.5421, .454/455.5422, each with .holed / .sep).
+// The deck hashes and every case without those tokens are unchanged; the racing_game pins of the other cases still match.
 {"structure_scene", 5, 0x7e5b86d1dfff2e22ull, 0xee85fafd354b0935ull, 53836, 128208, 0x2f4aa71a28a37b90ull},  // 1 2 2
 {"structure_scene.holed", 5, 0x7e5b86d1dfff2e22ull, 0xee85fafd354b0935ull, 48244, 114780, 0xca36c604c4d3fc96ull},  // 1 2 2
 {"junction_scene", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 37877, 93216, 0x4281c573a89ecc99ull},  // 0 0 0
 {"junction_scene.holed", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 33677, 83928, 0x310ecacdfcdfad54ull},  // 0 0 0
 {"frankfurt_hoechst.463.5427", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 1312, 3198, 0x80cd7abfadf07578ull},  // 0 0 0
 {"frankfurt_hoechst.462.5428", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 92236, 270468, 0x548e93e6ab1fa428ull},  // 0 0 0
-{"frankfurt_hoechst.463.5428", 3, 0x178a23b4803a7298ull, 0x5467b0da1d106495ull, 334680, 1003026, 0x2cde40e00833b5dfull},  // 3 0 0
+{"frankfurt_hoechst.463.5428", 3, 0x178a23b4803a7298ull, 0x5467b0da1d106495ull, 334674, 1003020, 0xf6a5671071f06739ull},  // 3 0 0
 {"frankfurt_hoechst.464.5428", 13, 0xe87b3f9590a2d7fbull, 0x5c569877000ae3b5ull, 345184, 1046304, 0x8cf758cf9ba40042ull},  // 10 3 0
 {"frankfurt_hoechst.465.5428", 2, 0xa4d463415a4502f8ull, 0xa8c7f832281a39c5ull, 7794, 16092, 0x70d085612037030aull},  // 1 1 0
 {"frankfurt_hoechst.462.5429", 1, 0xb10d7a12b7551439ull, 0x4d25767f9dce13f5ull, 116850, 335796, 0x0d0008a41208641bull},  // 1 0 0
 {"frankfurt_hoechst.463.5429", 13, 0xc02b7d2de606438eull, 0x5c569877000ae3b5ull, 471849, 1470612, 0xb4c9a25abe93f9b9ull},  // 2 11 0
-{"frankfurt_hoechst.464.5429", 15, 0x168aba52494ca3edull, 0xf87b38c6cf34ac55ull, 498515, 1511814, 0xc64b33719a5bb6ffull},  // 1 14 0
+{"frankfurt_hoechst.464.5429", 15, 0x168aba52494ca3edull, 0xf87b38c6cf34ac55ull, 498503, 1511802, 0xeb997f36d54e9ddcull},  // 1 14 0
 {"frankfurt_hoechst.465.5429", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 1122, 2400, 0x98bd457a6f96f0bbull},  // 0 0 0
 {"frankfurt_hoechst.463.5430", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 7524, 16416, 0x7339ed2ba2585ce6ull},  // 0 0 0
 {"hoechst_a66.452.5419", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 48680, 116520, 0x2ce204f2a5ab4825ull},  // 0 0 0
@@ -35,18 +40,18 @@
 {"hoechst_a66.455.5420.holed", 10, 0x7d789588aef0d30bull, 0x40d69e0cf0f65c45ull, 137261, 402498, 0x3a192c34eafa8ac1ull},  // 6 2 2
 {"hoechst_a66.456.5420", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 93215, 274944, 0x7be3073af15b8d4full},  // 0 1 0
 {"hoechst_a66.456.5420.holed", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 88983, 263943, 0x5b47c1fd7eea6217ull},  // 0 1 0
-{"hoechst_a66.454.5421", 20, 0xeb140818ace9ed91ull, 0xfdf0fb7cef54e96full, 86611, 281601, 0x9ccb39323852e265ull},  // 6 13 1
-{"hoechst_a66.454.5421.holed", 20, 0xeb140818ace9ed91ull, 0xfdf0fb7cef54e96full, 70013, 220980, 0xc5e8711e8616e31cull},  // 6 13 1
-{"hoechst_a66.455.5421", 30, 0x43e163d6d67da332ull, 0x2ad0baf66972b24full, 607313, 2006079, 0x9a69dbf4c2930f31ull},  // 11 17 2
-{"hoechst_a66.455.5421.holed", 30, 0x43e163d6d67da332ull, 0x2ad0baf66972b24full, 531585, 1706409, 0x1dc83000ad58fa07ull},  // 11 17 2
-{"hoechst_a66.456.5421", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 180451, 525396, 0x2bb8494e1f3a7b37ull},  // 0 1 0
-{"hoechst_a66.456.5421.holed", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 157653, 460149, 0x881f6491728596b4ull},  // 0 1 0
+{"hoechst_a66.454.5421", 20, 0xeb140818ace9ed91ull, 0xfdf0fb7cef54e96full, 86605, 281595, 0x1c1f5b4e16e46104ull},  // 6 13 1
+{"hoechst_a66.454.5421.holed", 20, 0xeb140818ace9ed91ull, 0xfdf0fb7cef54e96full, 70007, 220974, 0x42044a91120d5433ull},  // 6 13 1
+{"hoechst_a66.455.5421", 30, 0x43e163d6d67da332ull, 0x2ad0baf66972b24full, 607301, 2006067, 0xb1b12867a385ef2cull},  // 11 17 2
+{"hoechst_a66.455.5421.holed", 30, 0x43e163d6d67da332ull, 0x2ad0baf66972b24full, 531573, 1706397, 0x7b1fba82d15febeull},  // 11 17 2
+{"hoechst_a66.456.5421", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 180445, 525390, 0xbffbdf957fe5896aull},  // 0 1 0
+{"hoechst_a66.456.5421.holed", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 157647, 460143, 0x77a0650c09c8e21dull},  // 0 1 0
 {"hoechst_a66.453.5422", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 13916, 32802, 0x10e7064c69629478ull},  // 0 0 0
 {"hoechst_a66.453.5422.holed", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 11924, 28014, 0x5e496b6e451d900eull},  // 0 0 0
-{"hoechst_a66.454.5422", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 94239, 265107, 0x50d2fa89f287cb22ull},  // 4 10 0
-{"hoechst_a66.454.5422.holed", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 77129, 200040, 0xf5ad9a303630aa7bull},  // 4 10 0
-{"hoechst_a66.455.5422", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 135940, 369303, 0x0c33521d01cada05ull},  // 4 10 0
-{"hoechst_a66.455.5422.holed", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 132186, 359715, 0x8db7090d2a1a4427ull},  // 4 10 0
+{"hoechst_a66.454.5422", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 94227, 265095, 0x34e7c25e270ea9ebull},  // 4 10 0
+{"hoechst_a66.454.5422.holed", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 77123, 200034, 0x4c15d70bf3790cb3ull},  // 4 10 0
+{"hoechst_a66.455.5422", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 135940, 369303, 0x65e607ae574ea35ull},  // 4 10 0
+{"hoechst_a66.455.5422.holed", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 132186, 359715, 0xc648cc014c1f1476ull},  // 4 10 0
 {"hoechst_a66.456.5422", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 14823, 32526, 0xe676d7b7623451a8ull},  // 0 0 0
 {"hoechst_a66.456.5422.holed", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 13071, 29214, 0x52732ac453df80c2ull},  // 0 0 0
 {"overpass.h10.sep", 3, 0xa3d31cff2d5321e4ull, 0x5467b0da1d106495ull, 91840, 228486, 0xa4bd950e3f43b161ull},  // 1 0 2
@@ -59,10 +64,10 @@
 {"hoechst_a66.454.5420.sep", 4, 0xddb23d0e0da2f058ull, 0x88201fb960ff6465ull, 120962, 292311, 0xdc9756a1fd8621e7ull},  // 4 0 0
 {"hoechst_a66.455.5420.sep", 10, 0x7d789588aef0d30bull, 0x40d69e0cf0f65c45ull, 144097, 421080, 0x9b25230960aaa96cull},  // 6 2 2
 {"hoechst_a66.456.5420.sep", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 93215, 274944, 0x7be3073af15b8d4full},  // 0 1 0
-{"hoechst_a66.454.5421.sep", 20, 0xeb140818ace9ed91ull, 0xfdf0fb7cef54e96full, 86611, 281601, 0x9ccb39323852e265ull},  // 6 13 1
-{"hoechst_a66.455.5421.sep", 30, 0x43e163d6d67da332ull, 0x2ad0baf66972b24full, 607313, 2006079, 0x9a69dbf4c2930f31ull},  // 11 17 2
-{"hoechst_a66.456.5421.sep", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 180451, 525396, 0x2bb8494e1f3a7b37ull},  // 0 1 0
+{"hoechst_a66.454.5421.sep", 20, 0xeb140818ace9ed91ull, 0xfdf0fb7cef54e96full, 86605, 281595, 0x1c1f5b4e16e46104ull},  // 6 13 1
+{"hoechst_a66.455.5421.sep", 30, 0x43e163d6d67da332ull, 0x2ad0baf66972b24full, 607301, 2006067, 0xb1b12867a385ef2cull},  // 11 17 2
+{"hoechst_a66.456.5421.sep", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 180445, 525390, 0xbffbdf957fe5896aull},  // 0 1 0
 {"hoechst_a66.453.5422.sep", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 13916, 32802, 0x10e7064c69629478ull},  // 0 0 0
-{"hoechst_a66.454.5422.sep", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 94239, 265107, 0x50d2fa89f287cb22ull},  // 4 10 0
-{"hoechst_a66.455.5422.sep", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 135940, 369303, 0x0c33521d01cada05ull},  // 4 10 0
+{"hoechst_a66.454.5422.sep", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 94227, 265095, 0x34e7c25e270ea9ebull},  // 4 10 0
+{"hoechst_a66.455.5422.sep", 14, 0x37d545f911244effull, 0xdbef9daa3f6c85cfull, 135940, 369303, 0x65e607ae574ea35ull},  // 4 10 0
 {"hoechst_a66.456.5422.sep", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 14823, 32526, 0xe676d7b7623451a8ull},  // 0 0 0
