@@ -108,6 +108,17 @@ struct UnderpassRules {
     bool overpass = true;                // D64: mask the hump under an upper bridge (not in de.json: the tests' sabotage switch)
     friend bool operator==(const UnderpassRules&, const UnderpassRules&) = default;
 };
+// Reference-line fitting (vault G2M-024). The clothoid of a knot pair takes its end headings from the neighbouring ways (join
+// bisectors), so on a short or sparsely mapped way it can bow far away from the polyline the mapper drew (a 215 m track
+// bowing 15 m across the road beside it). A fitted segment may leave its chord by at most
+//   chord_half_width_percent / 100 * (half the way's resolved width) + chord_margin_mm
+// else the stretch takes the rounded straight/arc fallback (the unbounded fit when even that is infeasible). Both 0 = no
+// bound. Feeds ReferenceFitLimits::chord_half_width_factor / chord_margin_m in build_road_geom_tile.
+struct ReferenceRules {
+    std::int32_t chord_half_width_percent = 0;
+    std::int32_t chord_margin_mm = 0;
+    friend bool operator==(const ReferenceRules&, const ReferenceRules&) = default;
+};
 // Constants the junction block is validated against (design 5.2, 5.3): the widest carve blend and the radius
 // of roads.geom tiles a carved L0 tile reads.
 inline constexpr std::int32_t kCarveBlendMaxM = 15;
@@ -146,6 +157,7 @@ struct RoadRules {
     FurnitureRules furniture;
     TunnelRules tunnel;
     UnderpassRules underpass;
+    ReferenceRules reference;
     std::vector<RoadClassRules> classes;      // ascending highway value
     ContentHash content_sha256{};             // SHA-256 of the JSON bytes the rules were loaded from
 
@@ -160,7 +172,7 @@ struct RoadRules {
 // 0..20000 mm, tapers consistent with min_edge_radius_m, junction and furniture
 // blocks (P2) with every length in (0, 200] m and the cluster caps consistent
 // with reach_max_m and the carver radius, and the tunnel block (straight-grade
-// threshold 0..100000 m, 0 = never).
+// threshold 0..100000 m, 0 = never), and the reference block (chord_half_width_percent 0..1000, chord_margin_mm 0..100000).
 Result<RoadRules> load_road_rules(std::span<const std::byte> json);
 // The embedded data/road_rules/de.json, parsed once. A corrupt build aborts.
 const RoadRules& builtin_road_rules_de();

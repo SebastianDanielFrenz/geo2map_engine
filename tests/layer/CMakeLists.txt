@@ -40,6 +40,7 @@ add_executable(g2m_layer_tests
   test_road_features.cpp
   test_road_profile.cpp
   test_road_reference.cpp
+  test_road_chord_bound.cpp
   test_vertical_profile.cpp
   test_road_dem_sampler.cpp
   test_road_dem_dependencies.cpp

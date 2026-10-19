@@ -24,9 +24,16 @@ std::optional<double> bisector_heading(const Direction& in, const Direction& out
     const auto angle = det::atan2(in.x * out.y - in.y * out.x, in.x * out.x + in.y * out.y);
     return det::atan2(in.y, in.x) + angle * in.length / (in.length + out.length);
 }
+// Distance from (px, py) to the segment (ax, ay)-(bx, by), metres.
+double point_segment_distance(double px, double py, double ax, double ay, double bx, double by) {
+    const auto dx = bx - ax, dy = by - ay, norm = dx * dx + dy * dy;
+    const auto t = norm > 0 ? std::clamp(((px - ax) * dx + (py - ay) * dy) / norm, 0.0, 1.0) : 0.0;
+    const auto ex = px - (ax + t * dx), ey = py - (ay + t * dy);
+    return det::sqrt(ex * ex + ey * ey);
+}
 Result<RoadReferenceLine> fit_geometry(const std::vector<Knot>& knots, bool closed, std::int64_t id,
     double radius, double deviation, const ReferenceFitLimits& limits, std::size_t coincident_pairs,
-    const JoinHeadings& joins) {
+    const JoinHeadings& joins, double chord_bound) {
     RoadReferenceLine out; out.way_id = id; out.coincident_pairs = coincident_pairs;
     std::vector<double> headings(knots.size());
     const auto unit = [&](std::size_t a, std::size_t b) {
@@ -151,6 +158,9 @@ Result<RoadReferenceLine> fit_geometry(const std::vector<Knot>& knots, bool clos
                 const auto dy = pose->y - (a.y / 1000.0 + (b.y - a.y) / 1000.0 * t);
                 if (det::sqrt(dx * dx + dy * dy) + allowance > limits.max_bow_m)
                     return rounded();
+                // The curve itself must stay near the chord the mapper drew (perpendicular, not at the same parameter).
+                if (chord_bound > 0 && point_segment_distance(pose->x, pose->y, a.x / 1000.0, a.y / 1000.0, b.x / 1000.0, b.y / 1000.0) + allowance > chord_bound)
+                    return rounded();
             }
         }
         out.segments.push_back({knots[i].index, out.length_m, *curve}); out.length_m += curve->length;
@@ -163,8 +173,8 @@ Result<RoadReferenceLine> fit_geometry(const std::vector<Knot>& knots, bool clos
 namespace {
 Result<RoadReferenceLine> fit_shape(const std::vector<Knot>& knots, bool closed, std::int64_t id,
     double radius, double deviation, const ReferenceFitLimits& limits, std::size_t coincident_pairs,
-    const JoinHeadings& joins) {
-    auto original = fit_geometry(knots, closed, id, radius, deviation, limits, coincident_pairs, joins);
+    const JoinHeadings& joins, double chord_bound) {
+    auto original = fit_geometry(knots, closed, id, radius, deviation, limits, coincident_pairs, joins, chord_bound);
     if (original || original.error().code != ErrorCode::LimitExceeded) return original;
     // Smooth only shape vertices. Shared branch nodes and endpoints stay fixed.
     // Each moved vertex remains within half the original corridor; the fitted
@@ -208,7 +218,9 @@ Result<RoadReferenceLine> fit_shape(const std::vector<Knot>& knots, bool closed,
         smoothed = std::move(next); changed = true;
     }
     if (!changed) return original;
-    return fit_geometry(smoothed, closed, id, radius, deviation * 0.5, limits, coincident_pairs, joins);
+    // The smoothed vertices moved at most half the corridor from the original ones: the chord bound loses that much.
+    return fit_geometry(smoothed, closed, id, radius, deviation * 0.5, limits, coincident_pairs, joins,
+        chord_bound > 0 ? std::max(chord_bound - deviation * 0.5, 0.05) : 0.0);
 }
 }
 Result<geom::CurvePose> RoadReferenceLine::at(double station) const {
@@ -294,7 +306,9 @@ Result<RoadReferenceLine> RoadReferenceBuilder::fit_stretch(std::int64_t id, Roa
     if (!std::isfinite(radius) || radius < 1 || radius > 100000 || !std::isfinite(deviation) || deviation <= 0 ||
         deviation > 100 || !limits.max_segments || limits.max_segments > 100000 ||
         !std::isfinite(limits.max_bow_m) || limits.max_bow_m <= 0 || limits.max_bow_m > 100 ||
-        !std::isfinite(limits.max_length_m) || limits.max_length_m <= 0 || limits.max_length_m > 100000)
+        !std::isfinite(limits.max_length_m) || limits.max_length_m <= 0 || limits.max_length_m > 100000 ||
+        !std::isfinite(limits.chord_half_width_factor) || limits.chord_half_width_factor < 0 || limits.chord_half_width_factor > 10 ||
+        !std::isfinite(limits.chord_margin_m) || limits.chord_margin_m < 0 || limits.chord_margin_m > 100)
         return make_error(ErrorCode::InvalidArgument, "road reference: fitting limits");
     std::vector<Knot> knots; std::size_t coincident = 0;
     for (std::size_t i = stretch.start_ref; i <= stretch.end_ref; ++i) {
@@ -341,8 +355,8 @@ Result<RoadReferenceLine> RoadReferenceBuilder::fit_stretch(std::int64_t id, Roa
             bisector_heading(direction(*far, here), direction(here, knots[1].p));
         (at_end ? joins.end : joins.start) = heading;
     }
-    auto out = fit_shape(knots, closed, id, radius, deviation, limits, coincident, joins);
-    double fitted_radius = radius;
+    const bool chord_limited = limits.chord_half_width_factor > 0 || limits.chord_margin_m > 0;
+    const double chord_bound = chord_limited ? limits.chord_half_width_factor * (attrs->width_mm / 2000.0) + limits.chord_margin_m : 0.0;
     // Only geometric infeasibility permits a retry. Resource/invalid-data errors
     // must never be hidden by the exception policy. Each retry keeps the original
     // corridor, junctions, bow and construction budgets unchanged.
@@ -351,12 +365,27 @@ Result<RoadReferenceLine> RoadReferenceBuilder::fit_stretch(std::int64_t id, Roa
             (error.message == "road reference: rounded corner corridor" ||
              error.message == "road reference: overlapping rounded corners");
     };
-    for (unsigned retry = 0; limits.allow_curvature_exceptions && !out &&
-         retryable(out.error()) && fitted_radius > 1 && retry < 17; ++retry) {
-        fitted_radius = std::max(1.0, fitted_radius * 0.5);
-        out = fit_shape(knots, closed, id, fitted_radius, deviation, limits, coincident, joins);
+    double fitted_radius = radius;
+    const auto fit_with = [&](double bound) {
+        fitted_radius = radius;
+        auto result = fit_shape(knots, closed, id, radius, deviation, limits, coincident, joins, bound);
+        for (unsigned retry = 0; limits.allow_curvature_exceptions && !result &&
+             retryable(result.error()) && fitted_radius > 1 && retry < 17; ++retry) {
+            fitted_radius = std::max(1.0, fitted_radius * 0.5);
+            result = fit_shape(knots, closed, id, fitted_radius, deviation, limits, coincident, joins, bound);
+        }
+        return result;
+    };
+    auto out = fit_with(chord_bound);
+    bool relaxed = false;
+    // A stretch the chord bound makes unfittable (the rounded fallback cannot place its corners) keeps the fit it had
+    // before the bound: a bowed road is better than no road.
+    if (!out && chord_bound > 0 && out.error().code == ErrorCode::LimitExceeded) {
+        auto unbounded = fit_with(0.0);
+        if (unbounded) { out = std::move(unbounded); relaxed = true; }
     }
     if (!out) return out.error();
+    out->chord_bound_relaxed = relaxed;
     out->requested_min_radius_m = radius;
     out->fitted_min_radius_m = fitted_radius;
     out->curvature_exception = fitted_radius < radius;
@@ -394,6 +423,7 @@ Result<RoadReferenceLine> RoadReferenceBuilder::fit(std::int64_t id, const Refer
         }
         out.length_m += part->length_m; out.coincident_pairs += part->coincident_pairs;
         out.curvature_exception = out.curvature_exception || part->curvature_exception;
+        out.chord_bound_relaxed = out.chord_bound_relaxed || part->chord_bound_relaxed;
         out.requested_min_radius_m = part->requested_min_radius_m;
         out.fitted_min_radius_m = out.fitted_min_radius_m == 0 ? part->fitted_min_radius_m :
             std::min(out.fitted_min_radius_m, part->fitted_min_radius_m);

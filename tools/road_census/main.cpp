@@ -4,19 +4,26 @@
 //
 //   g2m_road_census arrows STORE SCOPE X0 X1 Y0 Y1
 //   g2m_road_census way    STORE SCOPE X0 X1 Y0 Y1 WAY_ID...        (tags of single ways)
+//   g2m_road_census bow    STORE SCOPE X0 X1 Y0 Y1 FACTOR MARGIN_M [WAY_ID...]
 //
 // X0..Y1 are inclusive level-2 tile indices on UTM zone 32 (tile edge 1024 m: E 455-490 km is x 444..478, N 5540-5585 km is
 // y 5410..5454).
+// `bow` (vault G2M-024): fits every stretch of every way lying wholly in the block twice, without and with the chord bound
+// (ReferenceFitLimits::chord_half_width_factor / chord_margin_m) and reports how far the fitted lines leave their OSM
+// polylines, how many stretches change their fit and by how much (motorway / trunk separately).
 // `arrows`: the turn:lanes census of street fidelity (vault G2M-023/G2M-024): per way and lane which glyphs the ribbons used
 // to paint (the old substring rule, reproduced here as `legacy_glyphs`) and which they paint now (lane_arrow_glyphs).
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/road_cross_section.h"
 #include "g2m/layer/road_graph_tile.h"
+#include "g2m/layer/road_reference.h"
 #include "g2m/layer/src_osm.h"
 #include "g2m/server/tile_store.h"
 #include "g2m/world/road_ribbons.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <atomic>
 #include <iostream>
 #include <map>
@@ -187,6 +194,164 @@ int arrows(const RoadGraph& world) {
     return 0;
 }
 
+// ---- bow ----
+struct Pt { double x, y; };
+double seg_distance(Pt p, Pt a, Pt b) {
+    const double dx = b.x - a.x, dy = b.y - a.y, n = dx * dx + dy * dy;
+    const double t = n > 0 ? std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / n, 0.0, 1.0) : 0.0;
+    const double ex = p.x - (a.x + t * dx), ey = p.y - (a.y + t * dy);
+    return std::sqrt(ex * ex + ey * ey);
+}
+double polyline_distance(Pt p, const std::vector<Pt>& line) {
+    double best = 1e18;
+    for (std::size_t i = 0; i + 1 < line.size(); ++i) best = std::min(best, seg_distance(p, line[i], line[i + 1]));
+    return best;
+}
+struct Fit {
+    std::int64_t way = 0; std::uint32_t start = 0, end = 0;
+    std::string highway; int rank = 0; bool ok = false; std::string error;
+    double length = 0, dev = 0; std::size_t segments = 0, nodes = 0; std::uint64_t hash = 0; bool exception = false, relaxed = false;
+    std::vector<Pt> samples;
+};
+std::vector<Fit> fit_block(const RoadGraph& world, const Block& b, const ReferenceFitLimits& limits) {
+    const auto builder = RoadReferenceBuilder::make(world);
+    if (!builder) { std::cerr << builder.error().message << '\n'; return {}; }
+    const double lo_x = b.x0 * 1024.0 * 1000.0, hi_x = (b.x1 + 1) * 1024.0 * 1000.0, lo_y = b.y0 * 1024.0 * 1000.0, hi_y = (b.y1 + 1) * 1024.0 * 1000.0;
+    std::map<std::int64_t, geom::PointMm> position;
+    for (const auto& n : world.nodes) position.emplace(n.osm_id, n.position);
+    std::vector<const RoadGraphWay*> mine;
+    // A way is fitted by the sub-block that holds its FIRST node; all its nodes must lie in the world (the block plus a one
+    // tile margin), so the degrees of its nodes are complete.
+    const double ext = 1024.0 * 1000.0;
+    for (const auto& w : world.ways) {
+        const auto first = position.find(w.node_ids.front());
+        if (first == position.end() || first->second.x < lo_x || first->second.x >= hi_x || first->second.y < lo_y || first->second.y >= hi_y) continue;
+        bool inside = true;
+        for (auto id : w.node_ids) {
+            const auto it = position.find(id);
+            if (it == position.end() || it->second.x < lo_x - ext || it->second.x > hi_x + ext || it->second.y < lo_y - ext || it->second.y > hi_y + ext) { inside = false; break; }
+        }
+        if (inside) mine.push_back(&w);
+    }
+    std::vector<std::vector<Fit>> parts(mine.size());
+    std::atomic<std::size_t> next{0};
+    const auto work = [&] {
+        for (std::size_t i = next++; i < mine.size(); i = next++) {
+            const auto& w = *mine[i];
+            const auto fits = builder->fit_stretches(w.osm_id, limits);
+            if (!fits) { Fit f; f.way = w.osm_id; f.highway = tag_of(w, "highway"); f.error = fits.error().message; parts[i].push_back(f); continue; }
+            for (const auto& sf : *fits) {
+                Fit f; f.way = w.osm_id; f.start = sf.stretch.start_ref; f.end = sf.stretch.end_ref; f.highway = tag_of(w, "highway");
+                f.rank = w.rank; f.nodes = f.end - f.start + 1;
+                if (!sf.reference) { f.error = sf.reference.error().message; parts[i].push_back(std::move(f)); continue; }
+                f.ok = true; f.length = sf.reference->length_m; f.segments = sf.reference->segments.size(); f.exception = sf.reference->curvature_exception; f.relaxed = sf.reference->chord_bound_relaxed;
+                std::vector<Pt> osm;
+                for (std::uint32_t k = f.start; k <= f.end; ++k) {
+                    const auto p = position.at(w.node_ids[k]);
+                    osm.push_back({static_cast<double>(p.x) / 1000.0, static_cast<double>(p.y) / 1000.0});
+                }
+                std::uint64_t h = 1469598103934665603ull;
+                for (double s = 0;; s += 1.0) {
+                    const double st = std::min(s, f.length);
+                    const auto pose = sf.reference->at(st);
+                    if (pose) {
+                        f.samples.push_back({pose->x, pose->y});
+                        f.dev = std::max(f.dev, polyline_distance(f.samples.back(), osm));
+                        h = (h ^ static_cast<std::uint64_t>(std::llround(pose->x * 1000))) * 1099511628211ull;
+                        h = (h ^ static_cast<std::uint64_t>(std::llround(pose->y * 1000))) * 1099511628211ull;
+                    }
+                    if (st >= f.length) break;
+                }
+                f.hash = h;
+                parts[i].push_back(std::move(f));
+            }
+        }
+    };
+    std::vector<std::thread> pool;
+    for (unsigned t = 0; t < 8; ++t) pool.emplace_back(work);
+    for (auto& t : pool) t.join();
+    std::vector<Fit> out;
+    for (auto& p : parts) for (auto& f : p) out.push_back(std::move(f));
+    return out;
+}
+void report(const char* label, const std::vector<Fit>& fits) {
+    std::size_t ok = 0, fail = 0, over3 = 0, over10 = 0, exceptions = 0, relaxed = 0; double max = 0; std::int64_t max_way = 0;
+    std::map<std::string, std::array<std::size_t, 3>> by_class; // stretches, >3 m, >10 m
+    std::vector<const Fit*> sorted;
+    for (const auto& f : fits) {
+        if (!f.ok) { ++fail; continue; }
+        ++ok; exceptions += f.exception; relaxed += f.relaxed;
+        auto& c = by_class[f.highway]; ++c[0];
+        if (f.dev > 3) { ++over3; ++c[1]; }
+        if (f.dev > 10) { ++over10; ++c[2]; }
+        if (f.dev > max) { max = f.dev; max_way = f.way; }
+        sorted.push_back(&f);
+    }
+    std::sort(sorted.begin(), sorted.end(), [](const Fit* a, const Fit* c) { return a->dev > c->dev; });
+    std::cout << "== " << label << ": stretches fitted " << ok << ", failed " << fail << ", curvature exceptions " << exceptions << ", kept their unbounded fit (rounded fallback impossible) " << relaxed
+              << "\n   lines more than 3 m from their OSM polyline: " << over3 << ", more than 10 m: " << over10 << ", max " << max
+              << " m (way " << max_way << ")\n";
+    std::vector<double> d;
+    for (auto* f : sorted) d.push_back(f->dev);
+    std::sort(d.begin(), d.end());
+    const auto q = [&](double p) { return d.empty() ? 0.0 : d[std::min(d.size() - 1, static_cast<std::size_t>(p * static_cast<double>(d.size())))]; };
+    std::cout << "   deviation quantiles: p50 " << q(.5) << "  p90 " << q(.9) << "  p99 " << q(.99) << "  p99.9 " << q(.999) << '\n';
+    std::cout << "   >3 m / >10 m by class:";
+    for (const auto& [h, c] : by_class) if (c[1]) std::cout << ' ' << h << '=' << c[1] << '/' << c[2] << " of " << c[0] << ';';
+    std::cout << "\n   worst 12:";
+    for (std::size_t i = 0; i < std::min<std::size_t>(12, sorted.size()); ++i)
+        std::cout << "\n     way " << sorted[i]->way << " [" << sorted[i]->start << ".." << sorted[i]->end << "] " << sorted[i]->highway
+                  << " nodes " << sorted[i]->nodes << " length " << sorted[i]->length << " dev " << sorted[i]->dev;
+    std::cout << '\n';
+}
+int bow_report(const std::vector<Fit>& before, const std::vector<Fit>& after, double factor, double margin, const std::vector<std::int64_t>& ids) {
+    std::cout << "ways with their first node in the block: stretches " << before.size() << '\n';
+    report("BEFORE (no chord bound)", before);
+    std::cout << "bound = " << factor << " x half width + " << margin << " m\n";
+    report("AFTER (chord bound)", after);
+    std::map<std::pair<std::int64_t, std::uint32_t>, const Fit*> old_by_key;
+    for (const auto& f : before) old_by_key[{f.way, f.start}] = &f;
+    std::size_t changed = 0, newly_failed = 0, newly_fitted = 0;
+    std::map<std::string, std::size_t> changed_by_class;
+    std::set<std::int64_t> changed_ways;
+    struct Shift { std::int64_t way; std::uint32_t start; std::string highway; double max_shift; double length; };
+    std::vector<Shift> major;
+    for (const auto& f : after) {
+        const auto it = old_by_key.find({f.way, f.start});
+        if (it == old_by_key.end()) continue;
+        const Fit& o = *it->second;
+        if (o.ok == f.ok && o.hash == f.hash) continue;
+        ++changed; ++changed_by_class[f.highway]; changed_ways.insert(f.way);
+        if (o.ok && !f.ok) {
+            ++newly_failed;
+            std::cout << "   newly failed: way " << f.way << " [" << f.start << ".." << f.end << "] " << f.highway << " nodes " << f.nodes << " length-before " << o.length << " dev-before " << o.dev << " : " << f.error << '\n';
+        }
+        if (!o.ok && f.ok) ++newly_fitted;
+        if (o.ok && f.ok) {
+            // how far the new line moved: each new sample against the old line, and each old sample against the new one.
+            double shift = 0;
+            for (const auto& p : f.samples) shift = std::max(shift, polyline_distance(p, o.samples));
+            for (const auto& p : o.samples) shift = std::max(shift, polyline_distance(p, f.samples));
+            if (f.highway.rfind("motorway", 0) == 0 || f.highway.rfind("trunk", 0) == 0) major.push_back({f.way, f.start, f.highway, shift, f.length});
+        }
+    }
+    std::cout << "== stretches whose fit changed: " << changed << " in " << changed_ways.size() << " ways (newly failed " << newly_failed << ", newly fitted " << newly_fitted << ") by class:";
+    for (const auto& [h, n] : changed_by_class) std::cout << ' ' << h << '=' << n;
+    std::sort(major.begin(), major.end(), [](const Shift& a, const Shift& c) { return a.max_shift > c.max_shift; });
+    std::cout << "\n   motorway / trunk (and links) stretches changed: " << major.size();
+    double mx = 0;
+    for (const auto& m : major) mx = std::max(mx, m.max_shift);
+    std::cout << ", max move of their reference line " << mx << " m\n";
+    for (std::size_t i = 0; i < std::min<std::size_t>(10, major.size()); ++i)
+        std::cout << "     way " << major[i].way << " [" << major[i].start << "] " << major[i].highway << " length " << major[i].length
+                  << " moved " << major[i].max_shift << '\n';
+    for (auto id : ids) for (const auto* set : {&before, &after})
+        for (const auto& f : *set) if (f.way == id)
+            std::cout << (set == &before ? "before" : "after ") << " way " << id << " [" << f.start << ".." << f.end << "] ok=" << f.ok
+                      << " dev " << f.dev << " length " << f.length << " segments " << f.segments << " " << f.error << '\n';
+    return 0;
+}
+
 int print_ways(const RoadGraph& world, const std::vector<std::int64_t>& ids) {
     for (auto id : ids) {
         auto it = std::lower_bound(world.ways.begin(), world.ways.end(), id, [](const auto& w, auto v) { return w.osm_id < v; });
@@ -200,9 +365,29 @@ int print_ways(const RoadGraph& world, const std::vector<std::int64_t>& ids) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 8) { std::cerr << "usage: g2m_road_census arrows|way STORE SCOPE X0 X1 Y0 Y1 [WAY_ID...]\n"; return 2; }
+    if (argc < 8) { std::cerr << "usage: g2m_road_census arrows|way|bow STORE SCOPE X0 X1 Y0 Y1 [WAY_ID...]\n"; return 2; }
     const std::string mode = argv[1];
     const Block b{std::atoi(argv[4]), std::atoi(argv[5]), std::atoi(argv[6]), std::atoi(argv[7])};
+    if (mode == "bow") {
+        // Sub-blocks of 8 x 8 tiles (the whole region's graph exceeds roads.graph's object limit): each is fitted on its own
+        // world (sub-block plus one tile margin); a way counts in the sub-block that holds its first node.
+        const double factor = argc > 8 ? std::atof(argv[8]) : 0.0, margin = argc > 9 ? std::atof(argv[9]) : 0.0;
+        std::vector<std::int64_t> ids;
+        for (int i = 10; i < argc; ++i) ids.push_back(std::atoll(argv[i]));
+        ReferenceFitLimits base; base.allow_curvature_exceptions = true;
+        auto bounded = base; bounded.chord_half_width_factor = factor; bounded.chord_margin_m = margin;
+        std::vector<Fit> before, after;
+        constexpr int kSub = 8;
+        for (int sy = b.y0; sy <= b.y1; sy += kSub) for (int sx = b.x0; sx <= b.x1; sx += kSub) {
+            const Block sub{sx, std::min(sx + kSub - 1, b.x1), sy, std::min(sy + kSub - 1, b.y1)};
+            RoadGraph world;
+            if (!load_world(argv[2], argv[3], sub, world)) return 1;
+            auto fb = fit_block(world, sub, base), fa = fit_block(world, sub, bounded);
+            for (auto& f : fb) before.push_back(std::move(f));
+            for (auto& f : fa) after.push_back(std::move(f));
+        }
+        return bow_report(before, after, factor, margin, ids);
+    }
     RoadGraph world;
     if (!load_world(argv[2], argv[3], b, world)) return 1;
     if (mode == "arrows") return arrows(world);
