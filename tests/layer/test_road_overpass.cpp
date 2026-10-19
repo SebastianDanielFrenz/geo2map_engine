@@ -2,6 +2,8 @@
 //  D64: a ground road under an upper bridge. DGM1 is bare earth, the bridge deck is removed and its gap interpolated,
 //       so the DEM shows a hump over the road; the strict profile used to follow it, the junction planes at the way's
 //       ends took the hump's wall and the way was declined (no ribbon, no carve: "the tunnel ends in a wall").
+//  D65: a short straight tunnel under an embankment (a railway on a bank, tagged tunnel in OSM) takes the portal chord
+//       as its floor and the terrain carve cuts the bank, instead of a DEM-following floor that climbs the ridge.
 // Synthetic scenes, a recorded sabotage for each rule (rule switch off: the old behaviour returns).
 #include "carve_fixture.h"
 #include "road_fixture.h"
@@ -80,6 +82,14 @@ double off_plane(const RoadProfile& p, const Dem& plane) {
         const auto xy = p.reference.at(st); const auto z = p.at(st); REQUIRE(xy); REQUIRE(z);
         worst = std::max(worst, std::fabs(z->height_m - plane(xy->x, xy->y)));
         if (st >= p.reference.length_m) break;
+    }
+    return worst;
+}
+double max_above(const RoadProfile& p, const Dem& plane) {
+    double worst = -1e9;
+    for (double s = 0; s <= p.reference.length_m; s += 1) {
+        const auto xy = p.reference.at(s); const auto z = p.at(s); REQUIRE(xy); REQUIRE(z);
+        worst = std::max(worst, z->height_m - plane(xy->x, xy->y));
     }
     return worst;
 }
@@ -251,4 +261,184 @@ TEST_CASE("overpass hump (D64): the carve cuts the hump away; ribbon and ground 
     std::printf("D64 carve along the road (6 to 15 m either side of the bridge axis): carved - ground max %.3f m; sabotage (rule off) %.3f m (hump 6 m)\n", worst, worst_sab);
     CHECK(worst < 0.15);
     CHECK(top_sab > 5.0);   // without the rule the hump stays in the terrain
+}
+
+// ---- D65: the short tunnel under a bank ------------------------------------------------------------------------
+namespace {
+constexpr double kBank = 4.5;
+double ground_d65(double /*e*/, double n) { return 99.5 - 0.01 * (n - kUnderpassN0); }
+// A bank across the road (ridge east-west), `half` m wide at the base, `height` m high, flat-topped (smooth shoulders).
+Dem dem_d65(double half, double height) {
+    return [=](double e, double n) {
+        const double y = std::fabs(n - kUnderpassN0);
+        return ground_d65(e, n) + height * smooth((half - y) / (half - 8.0));
+    };
+}
+RoadGraph scene_d65(double tunnel_half, bool crossing = false) {
+    const Tags res{{"highway", "residential"}}, tun{{"highway", "residential"}, {"layer", "-1"}, {"tunnel", "yes"}};
+    std::vector<WaySpec> extra;
+    // A ground road over the tunnel at the bank crest (no shared node): the A66 carriageways over a service tunnel.
+    if (crossing) extra.push_back({40, res, {{-300, 0}, {-150, 0}, {150, 0}, {300, 0}}});
+    std::vector<WaySpec> main = {
+        {10, res, {{0.5, -350}, {0.5, -250}, {0.5, -150}, {0.5, -tunnel_half}}},
+        {20, tun, {{0.5, -tunnel_half}, {0.5, tunnel_half}}},
+        {30, res, {{0.5, tunnel_half}, {0.5, 150}, {0.5, 250}, {0.5, 350}}},
+    };
+    main.insert(main.end(), extra.begin(), extra.end());
+    return world_of(main);
+}
+struct D65Run { const RoadProfile* p = nullptr; RoadGeomTile tile; RoadCompletionStats stats; };
+// roads.geom of the scene with the served completion options, `opt` applied on top.
+Result<RoadGeomTile> build_d65(const RoadGraph& world, const Dem& dem, RoadCompletionStats* stats, const std::function<void(RoadCompletionOptions&)>& opt = {}) {
+    g2m_test::GeomOptions o; o.height_m = dem; o.completion = served_road_completion_options(); o.underpass = true; o.stats = stats;
+    if (opt) opt(o.completion);
+    return g2m_test::geometry_in_tile_with(world, kUnderpassTile, o);
+}
+// Straight? max |h(s) - chord| over the whole metres.
+double off_chord(const RoadProfile& p) {
+    const auto a = p.at(0), b = p.at(p.reference.length_m); REQUIRE(a); REQUIRE(b);
+    double worst = 0;
+    for (double s = 0; s <= p.reference.length_m; s += 1) {
+        const auto z = p.at(s); REQUIRE(z);
+        worst = std::max(worst, std::fabs(z->height_m - (a->height_m + (b->height_m - a->height_m) * s / p.reference.length_m)));
+    }
+    return worst;
+}
+} // namespace
+
+TEST_CASE("tunnel cut (D65): a 46 m tunnel under a 4.5 m bank takes the portal chord as its floor", "[layer][carve][tunnel][d65]") {
+    const double half = 23.15;
+    const RoadGraph world = scene_d65(half);
+    const Dem dem = dem_d65(half, kBank);
+    RoadCompletionStats stats;
+    const auto tile = build_d65(world, dem, &stats);
+    REQUIRE(tile);
+    const RoadProfile* p = profile_of(*tile, 20);
+    INFO("tunnel: " << decline_of(*tile, 20));
+    REQUIRE(p);
+    const auto a = p->at(0), b = p->at(p->reference.length_m); REQUIRE(a); REQUIRE(b);
+    const double peak = max_above(*p, ground_d65);
+    std::printf("D65 synthetic: tunnel %.1f m, floor %.3f -> %.3f m, off the chord %.3f m, highest above ground %.3f m; cut %zu chord %zu\n",
+                p->reference.length_m, a->height_m, b->height_m, off_chord(*p), peak, stats.tunnel_cut, stats.tunnel_chord);
+    CHECK(stats.tunnel_cut == 1);
+    CHECK(off_chord(*p) < 0.01);
+    CHECK(peak < 0.1);   // the floor never leaves the portal level; the bank is above it
+
+    // Sabotage: the cut rule off (cut_max_length 0): the floor follows the DEM over the bank.
+    RoadCompletionStats off_stats;
+    const auto sab = build_d65(world, dem, &off_stats, [](RoadCompletionOptions& o) { o.tunnel_cut_max_length_m = 0; });
+    REQUIRE(sab);
+    const RoadProfile* sp = profile_of(*sab, 20);
+    REQUIRE(sp);
+    const double sab_peak = max_above(*sp, ground_d65);
+    std::printf("D65 sabotage (cut off): floor climbs %.3f m above the portals\n", sab_peak);
+    CHECK(off_stats.tunnel_cut == 0);
+    CHECK(sab_peak > 2.0);
+}
+
+TEST_CASE("tunnel cut (D65): controls - a long tunnel, a bank over the hump bound, a tunnel on flat ground", "[layer][carve][tunnel][d65]") {
+    // 90 m tunnel: over cut_max_length (80 m, de.json): DEM-following as before.
+    {
+        const double half = 45.0;
+        RoadCompletionStats stats;
+        const auto tile = build_d65(scene_d65(half), dem_d65(half + 0.0, 3.0), &stats);
+        REQUIRE(tile);
+        CHECK(stats.tunnel_cut == 0);
+    }
+    // Hump above the bound: not a bank to cut (a hill) - bound lowered to 3 m for a 4.5 m bank.
+    {
+        const double half = 23.15;
+        RoadCompletionStats stats;
+        const auto tile = build_d65(scene_d65(half), dem_d65(half, kBank), &stats, [](RoadCompletionOptions& o) { o.tunnel_cut_hump_max_m = 3.0; });
+        REQUIRE(tile);
+        CHECK(stats.tunnel_cut == 0);
+    }
+    // Hump below the lower bound: the DEM follows the chord anyway, nothing to cut.
+    {
+        const double half = 23.15;
+        RoadCompletionStats stats;
+        const auto tile = build_d65(scene_d65(half), dem_d65(half, 0.4), &stats);
+        REQUIRE(tile);
+        CHECK(stats.tunnel_cut == 0);
+    }
+}
+
+TEST_CASE("tunnel cut (D65): the terrain carve cuts the bank along the tunnel; a long tunnel is still never carved", "[layer][carve][tunnel][d65]") {
+    const auto key0 = tile_key_at(kUnderpassTile.zone, 0, kUnderpassE0 + 0.5, kUnderpassN0);
+    REQUIRE(key0);
+    const auto run = [&](double half, double bank, CarveOptions options) {
+        const RoadGraph world = scene_d65(half);
+        g2m_test::CarveFixture fx(world, dem_d65(half, bank));
+        auto m = fx.model(*key0, options);
+        const RoadGeomTile& geom = fx.geom(tile_key_at(kUnderpassTile.zone, 2, kUnderpassE0 + 0.5, kUnderpassN0).value());
+        const RoadProfile* p = profile_of(geom, 20);
+        REQUIRE(p);
+        double worst_dev = 0, centre_above = -1e9, centre_dem_above = -1e9;
+        for (double s = 2; s <= p->reference.length_m - 2; s += 1) {
+            const auto xy = p->reference.at(s); const auto z = p->at(s); REQUIRE(xy); REQUIRE(z);
+            const auto c = m.model->evaluate(xy->x, xy->y);
+            worst_dev = std::max(worst_dev, std::fabs(c.z - z->height_m));
+            centre_above = std::max(centre_above, c.z - ground_d65(xy->x, xy->y));
+            centre_dem_above = std::max(centre_dem_above, dem_d65(half, bank)(xy->x, xy->y) - ground_d65(xy->x, xy->y));
+        }
+        return std::tuple{worst_dev, centre_above, centre_dem_above, m.stats.tunnel_entries};
+    };
+    const auto [dev, above, dem_above, tunnels] = run(23.15, kBank, CarveOptions{});
+    std::printf("D65 carve: carved - tunnel floor at most %.3f m along the tunnel; carved centre above the portal level at most %.3f m (DEM bank %.2f m)\n",
+                dev, above, dem_above);
+    CHECK(dev < 0.05);
+    CHECK(above < 0.1);
+    CHECK(dem_above > 4.0);
+    CHECK(tunnels == 0);
+
+    // Sabotage (tunnel_cut off): never carved, the terrain along the tunnel stays the 4.5 m bank.
+    CarveOptions sabotage; sabotage.tunnel_cut = false;
+    const auto [dev_s, above_s, dem_above_s, tunnels_s] = run(23.15, kBank, sabotage);
+    std::printf("D65 carve sabotage: carved centre above the portal level up to %.3f m, tunnel entries skipped %zu\n", above_s, tunnels_s);
+    CHECK(above_s > 4.0);
+    CHECK(tunnels_s == 1);
+    (void)dev_s; (void)dem_above_s;
+
+    // Control: a long (90 m) tunnel is not cut: the bank stays.
+    const auto [dev_l, above_l, dem_above_l, tunnels_l] = run(45.0, 3.0, CarveOptions{});
+    std::printf("D65 control, 90 m tunnel: carved centre above the portal level up to %.3f m, skipped %zu\n", above_l, tunnels_l);
+    CHECK(above_l > 2.5);
+    CHECK(tunnels_l == 1);
+    (void)dev_l; (void)dem_above_l;
+}
+
+TEST_CASE("tunnel cut (D65): a ground road over the tunnel keeps its terrain - the cut is not carved under it", "[layer][carve][tunnel][d65]") {
+    const double half = 23.15;
+    const auto key0 = tile_key_at(kUnderpassTile.zone, 0, kUnderpassE0 + 0.5, kUnderpassN0);
+    REQUIRE(key0);
+    const auto run = [&](CarveOptions options) {
+        const RoadGraph world = scene_d65(half, true);
+        g2m_test::CarveFixture fx(world, dem_d65(half, kBank));
+        auto m = fx.model(*key0, options);
+        const RoadGeomTile& geom = fx.geom(tile_key_at(kUnderpassTile.zone, 2, kUnderpassE0 + 0.5, kUnderpassN0).value());
+        const RoadProfile* p = profile_of(geom, 40);
+        REQUIRE(p);
+        double worst = 0, over = -1e9;
+        for (double s = 0; s <= p->reference.length_m; s += 1) {
+            const auto xy = p->reference.at(s); const auto z = p->at(s); REQUIRE(xy); REQUIRE(z);
+            if (std::fabs(xy->x - (kUnderpassE0 + 0.5)) > 12.0 || std::fabs(xy->y - kUnderpassN0) > 6.0) continue;
+            const double c = m.model->evaluate(xy->x, xy->y).z;
+            worst = std::max(worst, std::fabs(c - z->height_m));
+            over = std::max(over, z->height_m - ground_d65(xy->x, xy->y));
+        }
+        return std::tuple{worst, over, m.stats.tunnel_entries};
+    };
+    const auto [dev, over, skipped] = run(CarveOptions{});
+    std::printf("D65 crossing: ground road %.3f m above the portal level at the crest; carved - profile at most %.3f m; tunnel entries skipped %zu\n", over, dev, skipped);
+    CHECK(over > 3.0);
+    CHECK(dev < 0.3);
+    CHECK(skipped == 1);
+
+    // Sabotage (crossing check off): the cut core slots the road above the tunnel.
+    CarveOptions sabotage; sabotage.tunnel_cut_crossing_check = false;
+    const auto [dev_s, over_s, skipped_s] = run(sabotage);
+    std::printf("D65 crossing sabotage: carved is %.3f m off the road profile (slot), skipped %zu\n", dev_s, skipped_s);
+    CHECK(dev_s > 2.0);
+    CHECK(skipped_s == 0);
+    (void)over_s;
 }

@@ -165,7 +165,9 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         !(options.tunnel_spacing_m >= 0.5 && options.tunnel_spacing_m <= 100) ||
         !(options.tunnel_max_grade > 0 && options.tunnel_max_grade <= kRoadCompletionMaxTunnelGrade) ||
         !(options.tunnel_min_radius_m >= kRoadCompletionMinTunnelRadiusM && options.tunnel_min_radius_m <= 1e6) ||
-        !(options.tunnel_chord_min_length_m >= 0 && options.tunnel_chord_min_length_m <= 1e6))
+        !(options.tunnel_chord_min_length_m >= 0 && options.tunnel_chord_min_length_m <= 1e6) ||
+        !(options.tunnel_cut_max_length_m >= 0 && options.tunnel_cut_max_length_m <= 1e6) ||
+        !(options.tunnel_cut_hump_min_m >= 0 && options.tunnel_cut_hump_min_m <= options.tunnel_cut_hump_max_m && options.tunnel_cut_hump_max_m <= 1e6))
         return make_error(ErrorCode::InvalidArgument, "road completion: options");
     const auto& graph = builder.graph();
     const auto way_of = [&](std::int64_t id) {
@@ -320,12 +322,21 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         const double g = options.tunnel_max_grade;
         VerticalFitLimits fit; fit.max_grade = g; fit.min_radius_m = options.tunnel_min_radius_m; fit.max_iterations = 16384;
         std::optional<VerticalProfile> vertical;
-        if (options.tunnel_chord_min_length_m > 0 && ref->length_m >= options.tunnel_chord_min_length_m) {
+        // D65: a short tunnel through a bank (the DEM rises over the straight portal chord by a bounded hump) is an open cut.
+        bool cut = false;
+        if (options.tunnel_cut_max_length_m > 0 && ref->length_m <= options.tunnel_cut_max_length_m &&
+            !(options.tunnel_chord_min_length_m > 0 && ref->length_m >= options.tunnel_chord_min_length_m)) {
+            double hump = 0;
+            for (const auto& s : samples)
+                hump = std::max(hump, s.height_m - (samples.front().height_m + (samples.back().height_m - samples.front().height_m) * s.station_m / ref->length_m));
+            cut = hump >= options.tunnel_cut_hump_min_m && hump <= options.tunnel_cut_hump_max_m;
+        }
+        if (cut || (options.tunnel_chord_min_length_m > 0 && ref->length_m >= options.tunnel_chord_min_length_m)) {
             const double chord = (samples.back().height_m - samples.front().height_m) / ref->length_m;
             if (std::fabs(chord) <= g) {
                 fit.start_grade = fit.end_grade = chord;
                 const std::array<VerticalSample, 2> portals{{samples.front(), samples.back()}};
-                auto v = fit_vertical_profile(portals, fit); if (v) { vertical = std::move(*v); ++stats->tunnel_chord; }
+                auto v = fit_vertical_profile(portals, fit); if (v) { vertical = std::move(*v); ++(cut ? stats->tunnel_cut : stats->tunnel_chord); }
             }
         }
         if (!vertical) {
