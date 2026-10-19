@@ -38,6 +38,7 @@ acing_game\PLAN.md`. Section numbers are kept identical in both files, so a refe
 
 - Street fidelity (docs/street_fidelity/plan.md): P1 done; P2 slices 9-11 done (terrain.carved, terrain.class deriver, class window #15); slice 12 census waits on the owner; P3 markings (C8) not started.
 - Open defect: A66 boundary defect. Fix target `src/layer/road_underpass`, `road_profile`, `road_completion`. It blocks the phase 7 acceptance (racing_game 12.x).
+- G3-D junction surfaces (6.3 step 5) are the long-term replacement for racing_game's interim junction tie-in (2026-10-19, vault RACE-023, game #46). They give one shared surface per junction for every incoming road, including three roads at one node, which the tie-in misses. The game then uses that surface as the physics height and deletes the tie-in.
 - Site items: Koenigstein tile utm32n/2/452/5428 `deriver_rejected` (re-audit); bridge pin b90a531 mismatches the physics pin.
 - Tracking: docs/manager.md. Pipeline README section 9 documentation debt: items 6, 7, 9, 11, 12, 14.
 - Open: whether the split note above stays, or geo2map keeps its own G-milestone status.
