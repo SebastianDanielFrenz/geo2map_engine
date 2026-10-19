@@ -39,6 +39,7 @@ acing_game\PLAN.md`. Section numbers are kept identical in both files, so a refe
 - Street fidelity (docs/street_fidelity/plan.md): P1 done; P2 slices 9-11 done (terrain.carved, terrain.class deriver, class window #15); slice 12 census waits on the owner; P3 markings (C8) not started.
 - Open defect: A66 boundary defect. Fix target `src/layer/road_underpass`, `road_profile`, `road_completion`. It blocks the phase 7 acceptance (racing_game 12.x).
 - G3-D junction surfaces (6.3 step 5) are the long-term replacement for racing_game's interim junction tie-in (2026-10-19, vault RACE-023, game #46). They give one shared surface per junction for every incoming road, including three roads at one node, which the tie-in misses. The game then uses that surface as the physics height and deletes the tie-in.
+- Railways (6.6, owner 2026-10-19): new roadmap section; R0 (rail bridge over road -> road underpass) in progress.
 - Site items: Koenigstein tile utm32n/2/452/5428 `deriver_rejected` (re-audit); bridge pin b90a531 mismatches the physics pin.
 - Tracking: docs/manager.md. Pipeline README section 9 documentation debt: items 6, 7, 9, 11, 12, 14.
 - Open: whether the split note above stays, or geo2map keeps its own G-milestone status.
@@ -1066,6 +1067,35 @@ happens in this step (open question, roads_plan.md).
 - **Physics tiles:** in the bridge (8.1).
 
 ---
+
+### 6.6 Railways (owner 2026-10-19: "Include railways in the geo2map_engine roadmap")
+
+Railways are part of the world the player drives through: they shape the terrain (embankments, cuttings),
+cross roads (bridges, underpasses, level crossings) and later carry trains. Today they exist only as the
+`rail` land class (2.5); the first visible defect is a road climbing over a railway embankment where it
+should pass under the railway bridge (50.103461 N, 8.546627 E).
+
+- **R0: rail over road, rail under road (first step, in progress).** A railway `bridge=yes` over a road is a
+  grade separation like a road bridge: the road keeps its own profile and the terrain is carved through the
+  embankment under the span. Same rules as road underpasses (D53-D61): `layer`, clearance, abutments. A road
+  bridge over a railway cutting keeps the cutting.
+- **R1: `g2m.rail.graph`.** Ways `railway=rail|light_rail|narrow_gauge|subway|tram|monorail|funicular`, with
+  `service`, `usage`, `gauge`, `electrified`, `maxspeed`, `bridge`/`tunnel`/`layer`/`embankment`/`cutting`;
+  nodes `railway=level_crossing|crossing|station|halt|tram_stop`. Tiled like `roads.graph`.
+- **R2: `g2m.rail.geom` and carving.** Per track a reference line and a vertical profile fitted to the DEM with
+  rail grade limits (main line about 1.25-4 %, tram steeper [values to be cited]); bed width from track count and
+  gauge, ballast shoulders, embankment and cutting slopes; bridges and tunnels as for roads. Carving joins the
+  road carving (6.3 step 6) with a fixed order where road and rail beds overlap; `SurfaceKind` ballast/sleepers.
+- **R3: level crossings and street tracks.** At `railway=level_crossing` road and rail share one surface height
+  (the junction-surface machinery of 6.3 step 5); the crossing gets its own surface kind. Tram tracks in streets
+  are embedded in the road surface (no own bed, rails as a marking/surface detail).
+- **R4: client data for racing_game.** Track ribbons (rails, sleepers), rail bridge bodies and tunnel portals,
+  catenary masts later; served like road ribbons and bridge decks.
+- **Later:** trains as moving traffic (racing_game traffic milestone), signals and level-crossing barriers.
+
+Acceptance (per step, measured on the home region): no road climbs over a rail embankment at a mapped rail
+bridge (count via a probe = 0); rail profile within its grade limit except tagged exceptions; level crossing
+height step road/rail < 1 cm; deterministic tiles Windows = Linux.
 
 ## 7. Client: streaming, cache, budgets
 
