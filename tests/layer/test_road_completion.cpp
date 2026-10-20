@@ -688,6 +688,10 @@ TEST_CASE("completion: fixtures, completed stretches by kind before and after, t
                 stats.retry_accepted, stats.retry_candidates, stats.bridge_candidates, stats.bridge_completed, stats.bridge_no_support, stats.bridge_fit_failed,
                 stats.ground_candidates, stats.ground_completed, stats.ground_bridge_anchored, stats.ground_grades_eased, stats.ground_failed,
                 stats.tunnel_candidates, stats.tunnel_completed, stats.tunnel_chord, stats.tunnel_failed, stats.strict_anchors, stats.bridge_anchor_reused, stats.walk_other_side);
+            std::printf("  7a-2 design floor: %zu components (%zu stretches, %zu stations, %zu portals of which %zu free), %zu unsolved, %zu not converged; adjacent pairs %zu, %zu beyond the reach (anchors moved, max %.3f m), %zu beyond the grade outright, %zu still beyond after the move, %zu anchor misses; entries %zu: %zu own grades, %zu straight fallback, %zu failed; fit deviation max %.3f m (%zu over 0.25 m)\n",
+                stats.floor_components, stats.floor_stretches, stats.floor_stations, stats.floor_portals, stats.floor_free_portals, stats.floor_unsolved, stats.floor_not_converged,
+                stats.floor_pairs, stats.floor_pairs_shifted, stats.floor_max_shift_m, stats.floor_pairs_beyond_grade, stats.floor_pairs_still_beyond_grade, stats.floor_anchor_misses,
+                stats.floor_entries, stats.floor_entry_own_grades, stats.floor_entry_straight, stats.floor_entry_failed, stats.floor_fit_max_deviation_m, stats.floor_fit_over_250mm);
             std::printf("  tile invariance: %zu repeated entries compared across tiles, %zu differ\n", compared, mismatches);
             CHECK(mismatches == 0);
             CHECK(compared > 0);
@@ -1301,7 +1305,7 @@ TEST_CASE("tunnel floors: the straight-grade ruling on the fixture tunnels (meas
 // between ground ends 2.6 m apart). Continuity is a hard requirement: the ground gives way. Each portal moves toward the other
 // by half of what the floor cannot climb (0.9 of tunnel_max_grade over the stub), the floor is fitted between the moved heights
 // and the ground stretches re-fit to the moved plane.
-TEST_CASE("portal reach (7a-1): a short tunnel between ground ends it cannot climb - the ground gives way, no step", "[layer][roads][completion][tunnel][portal]") {
+void portal_reach_case(const RoadCompletionOptions& base, double grade, bool design) {
     const auto smooth = [](double u) { u = std::clamp(u, 0.0, 1.0); return u * u * (3.0 - 2.0 * u); };
     // The terrain rises 3.6 m across a 16 m face around the 5 m stub: its slope at both mouths (0.3) is over every class bound,
     // so the ground stretches decline in the strict pass and the completion refits them.
@@ -1319,17 +1323,17 @@ TEST_CASE("portal reach (7a-1): a short tunnel between ground ends it cannot cli
                      end_height(tile, t, true) - end_height(tile, t, false), floor.reference.length_m};
     };
     RoadCompletionStats stats;
-    const auto served = probe(served_road_completion_options(), &stats);
+    const auto served = probe(base, &stats);
     std::printf("[portal reach] served: stub %.2f m; west floor %.3f ground %.3f, east floor %.3f ground %.3f; floor rise %.3f m (bound %.3f); %zu portals moved, %zu ground refits, tunnel unfit %zu\n",
-        served.floor_len, served.west_floor, served.west_ground, served.east_floor, served.east_ground, served.floor_rise, 0.30 * served.floor_len,
+        served.floor_len, served.west_floor, served.west_ground, served.east_floor, served.east_ground, served.floor_rise, grade * served.floor_len,
         stats.portal_clamped, stats.ground_tunnel_anchored, stats.portal_tunnel_unfit);
     CHECK(stats.portal_clamped == 2);
     CHECK(stats.portal_tunnel_unfit == 0);
     CHECK(std::fabs(served.west_floor - served.west_ground) <= 0.01);
     CHECK(std::fabs(served.east_floor - served.east_ground) <= 0.01);
-    CHECK(served.floor_rise > 0.5 * 0.30 * served.floor_len);   // the floor climbs as far as it may ...
-    CHECK(served.floor_rise <= 0.30 * served.floor_len);        // ... and no further
-    CHECK(served.east_ground - served.west_ground > 1.0);   // the ground roads still rise with the terrain (they gave way by half the excess, not by flattening)
+    CHECK(served.floor_rise > 0.5 * grade * served.floor_len);   // the floor climbs as far as it may ...
+    CHECK(served.floor_rise <= grade * served.floor_len);        // ... and no further
+    if (!design) CHECK(served.east_ground - served.west_ground > 1.0);   // the ground roads still rise with the terrain (they gave way by half the excess, not by flattening)
     // A stub whose far end nothing joins is free there: the joined end keeps the ground road's level (no portal moves, the ground
     // stretch is not re-fitted) and the free end moves to the nearest height the floor can reach (the census nodes 11293381358 and
     // 12985969819 of the first review build had 1.48 m and 0.87 m of step; and a ground stretch too short to climb 1.9 m must not
@@ -1337,15 +1341,22 @@ TEST_CASE("portal reach (7a-1): a short tunnel between ground ends it cannot cli
     {
         const auto dead = world_of({{1, -300, 0}, {2, -150, 0}, {100, -2.5, 0}, {101, 2.5, 0}}, {{10, {1, 2, 100}}, {30, {100, 101}, kTunnel}});
         const auto denv = make_env(dead, kTile, face);
-        RoadCompletionStats ds; const auto tile = build_with(*denv, served_road_completion_options(), &ds);
+        RoadCompletionStats ds; const auto tile = build_with(*denv, base, &ds);
         const auto t = index_of(tile, 30, 0); const auto w = last_of(tile, 10);
         REQUIRE(tile.entries[t].profile); REQUIRE(tile.entries[w].profile);
         const double floor_west = end_height(tile, t, false), floor_east = end_height(tile, t, true), ground_end = end_height(tile, w, true);
         std::printf("[portal reach] dead-end stub: floor %.3f -> %.3f, ground end %.3f, %zu portals moved, %zu free ends, tunnel unfit %zu\n", floor_west, floor_east, ground_end, ds.portal_clamped, ds.portal_free_end, ds.portal_tunnel_unfit);
         CHECK(ds.portal_clamped == 0);
-        CHECK(ds.portal_free_end == 1);
+        CHECK((design ? ds.floor_free_portals : ds.portal_free_end) == 1);
         CHECK(ds.portal_tunnel_unfit == 0);
         CHECK(std::fabs(floor_west - ground_end) <= 0.01);
-        CHECK(std::fabs(floor_east - floor_west) <= 0.9 * 0.30 * 5.0 + 1e-6);   // the free end sits at the reach of the floor
+        CHECK(std::fabs(floor_east - floor_west) <= 0.9 * grade * 5.0 + 1.0 / 256.0);   // the free end sits at the reach of the floor
     }
+}
+TEST_CASE("portal reach (7a-1): a short tunnel between ground ends it cannot climb - the ground gives way, no step", "[layer][roads][completion][tunnel][portal]") {
+    portal_reach_case(g2m_test::served_7a1(), 0.30, false);
+}
+// 7a-2: the same scene under the design floor (5 % road grade): the reach handler is the one of 7a-1 with the structure grade.
+TEST_CASE("portal reach (7a-2): the design floor meets the ground ends exactly, the ground gives way by the excess over 0.9 of the road grade", "[layer][roads][completion][tunnel][portal][structure]") {
+    portal_reach_case(served_road_completion_options(), served_road_completion_options().structure_max_grade, true);
 }

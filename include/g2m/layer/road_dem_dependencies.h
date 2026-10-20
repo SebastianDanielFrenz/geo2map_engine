@@ -35,4 +35,14 @@ Result<std::vector<InputTileRef>> road_bridge_dependencies(const RoadGraph& tile
 // roads.graph tiles of their nodes (road_context_dependencies, `exclude` omitted), sorted and unique. One hop: no chain.
 Result<std::vector<InputTileRef>> road_portal_dependencies(const RoadGraph& tile_graph, const RoadGraph& context,
     geo::UtmZone zone, const TileKey* exclude = nullptr);
+// Phase 7a-2 (the design floor of a tunnel component): the floor of a tunnel stretch is a function of its whole connected
+// tunnel component (stretches joined at shared nodes, only the real portals anchor it), not of a tile. One round of the
+// walk: the tunnel ways of `context` that touch a node of `tile_graph`'s ways, closed over shared nodes inside `context`
+// (the component as far as `context` knows it), and for that closure the elev.base tiles under its ways (65 m margin),
+// the roads.graph tiles of its nodes (every way incident to them) and the portal dependencies of its nodes
+// (road_portal_dependencies: the DEM and node tiles of the ground ways joining them). Sorted and unique; empty when no
+// tunnel way touches the tile. The deriver repeats the round with the graph tiles it gets until the closure stops
+// growing (derive_road_geom.cpp, the discovery stages of IDeriver).
+Result<std::vector<InputTileRef>> road_component_dependencies(const RoadGraph& tile_graph, const RoadGraph& context,
+    geo::UtmZone zone, const TileKey* exclude = nullptr);
 }

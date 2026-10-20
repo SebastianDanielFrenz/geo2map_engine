@@ -94,7 +94,11 @@ struct RoadGeomInputs {
 // The served completion options without the 7a-1 portal anchoring: the D47/D52/D65 tunnel mechanics tests compare against
 // the frozen game code and the previous releases, which anchor a tunnel floor on the DEM sample at its portal node.
 inline g2m::RoadCompletionOptions served_without_portal_anchor() {
-    auto o = g2m::served_road_completion_options(); o.tunnel_portal_anchor = false; return o;
+    auto o = g2m::served_road_completion_options(); o.tunnel_portal_anchor = false; o.tunnel_design_floor = false; return o;
+}
+// The served options of phase 7a-1 (portal anchors, the D52/D65 floors): the design floor of 7a-2 off.
+inline g2m::RoadCompletionOptions served_7a1() {
+    auto o = g2m::served_road_completion_options(); o.tunnel_design_floor = false; return o;
 }
 // `walk_margin_mm`: the D48 squares of road_bridge_dependencies (0 = the pre-D48 stage 2, a negative control).
 inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world, const g2m::TileKey& key, bool bridge_far_end = true,

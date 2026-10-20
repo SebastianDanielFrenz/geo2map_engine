@@ -122,7 +122,7 @@ RoadGraph scene_d64(double end = kEnd) {
 Result<RoadGeomTile> build_d64(const RoadGraph& world, bool overpass, RoadUnderpassStats* stats = nullptr, const Dem& dem = dem_d64) {
     RoadRules rules = builtin_road_rules_de();
     rules.underpass.overpass = overpass;
-    g2m_test::GeomOptions o; o.height_m = dem; o.completion = served_road_completion_options(); o.underpass = true;
+    g2m_test::GeomOptions o; o.height_m = dem; o.completion = g2m_test::served_7a1(); o.underpass = true;
     o.underpass_stats = stats; o.rules = &rules;
     return g2m_test::geometry_in_tile_with(world, kUnderpassTile, o);
 }
@@ -290,7 +290,7 @@ RoadGraph scene_d65(double tunnel_half, bool crossing = false) {
 struct D65Run { const RoadProfile* p = nullptr; RoadGeomTile tile; RoadCompletionStats stats; };
 // roads.geom of the scene with the served completion options, `opt` applied on top.
 Result<RoadGeomTile> build_d65(const RoadGraph& world, const Dem& dem, RoadCompletionStats* stats, const std::function<void(RoadCompletionOptions&)>& opt = {}) {
-    g2m_test::GeomOptions o; o.height_m = dem; o.completion = g2m::served_road_completion_options(); o.underpass = true; o.stats = stats;
+    g2m_test::GeomOptions o; o.height_m = dem; o.completion = g2m_test::served_7a1(); o.underpass = true; o.stats = stats;
     if (opt) opt(o.completion);
     return g2m_test::geometry_in_tile_with(world, kUnderpassTile, o);
 }
@@ -369,6 +369,7 @@ TEST_CASE("tunnel cut (D65): the terrain carve cuts the bank along the tunnel; a
     const auto run = [&](double half, double bank, CarveOptions options) {
         const RoadGraph world = scene_d65(half);
         g2m_test::CarveFixture fx(world, dem_d65(half, bank));
+        fx.completion = g2m_test::served_7a1();   // D65 carve: the floors of the 7a-1 release (the carve of the design floor is phase 7b)
         auto m = fx.model(*key0, options);
         const RoadGeomTile& geom = fx.geom(tile_key_at(kUnderpassTile.zone, 2, kUnderpassE0 + 0.5, kUnderpassN0).value());
         const RoadProfile* p = profile_of(geom, 20);
@@ -414,6 +415,7 @@ TEST_CASE("tunnel cut (D65): a ground road over the tunnel keeps its terrain - t
     const auto run = [&](CarveOptions options) {
         const RoadGraph world = scene_d65(half, true);
         g2m_test::CarveFixture fx(world, dem_d65(half, kBank));
+        fx.completion = g2m_test::served_7a1();   // D65 carve: the floors of the 7a-1 release (the carve of the design floor is phase 7b)
         auto m = fx.model(*key0, options);
         const RoadGeomTile& geom = fx.geom(tile_key_at(kUnderpassTile.zone, 2, kUnderpassE0 + 0.5, kUnderpassN0).value());
         const RoadProfile* p = profile_of(geom, 40);

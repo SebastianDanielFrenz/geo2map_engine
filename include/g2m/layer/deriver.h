@@ -104,9 +104,9 @@ public:
     // until a stage names no ref that is not already an input, or the count is
     // reached. Each call must be a pure function of the inputs it is given, so
     // the resolved set is too. The default (1) is the historical single call.
-    // roads.geom uses 2 (decision D35: the far end of incident bridges is only
+    // roads.geom uses up to 24 (decision D35: the far end of incident bridges is only
     // known once the stretch-context tiles are resolved).
-    static constexpr std::size_t kMaxDiscoveryStages = 4;
+    static constexpr std::size_t kMaxDiscoveryStages = 32;
     virtual std::size_t discovery_stages() const { return 1; }
     // Whether an input whose own derivation failed (a deterministic deriver
     // error, e.g. a roads.geom tile rejected by validation) is treated as
