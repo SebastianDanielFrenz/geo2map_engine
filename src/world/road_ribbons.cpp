@@ -4,6 +4,7 @@
 // road_priority_rank. tests/world/test_road_meshes.cpp pins the output byte for byte against the game's own meshes.
 #include "g2m/world/road_ribbons.h"
 #include "g2m/world/road_structures.h"
+#include "lattice_drape.h"
 #include "g2m/core/det_math.h"
 #include "g2m/layer/road_cross_section.h"
 #include "g2m/layer/road_furniture.h"
@@ -226,7 +227,10 @@ bool near_ring(const std::vector<g2m::geom::PointMm>& ring,double x,double y,dou
 // (the through pair, else the highest-ranked arm) keeps its paving across the junction up to its own road bed edge
 // (the cubic between its two trim cuts, or its centre line run on into the ring) and the rest of the ring takes the
 // paving of the nearest other arm - a paving-stone side road reaches up to the asphalt edge of the road it joins.
-void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometry,const g2m::TileKey& key,const RoadRibbonGround& ground,double lift) {
+void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometry,const g2m::TileKey& key,const RoadRibbonGround& caller_ground,double lift,const RoadRibbonOptions& options) {
+ const bool lattice=options.drape==RibbonDrape::Lattice;
+ detail::LatticeDrape drape(caller_ground,static_cast<double>(key.min_easting()),static_cast<double>(key.min_northing()),options.drape_tolerance_m);
+ const RoadRibbonGround ground=lattice?RoadRibbonGround([&drape](double e,double n){return drape.height_abs(e,n);}):caller_ground;
  const double ox=static_cast<double>(key.min_easting()),oy=static_cast<double>(key.min_northing());
  constexpr double kPi=3.14159265358979323846;
  struct Arm { P2 cut,in;double half=0;int surface=0,rank=0; };
@@ -371,9 +375,23 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
    const double y0=std::min({t[0].y,t[1].y,t[2].y}),y1=std::max({t[0].y,t[1].y,t[2].y});
    for(double gx=std::floor(x0-.5)+.5;gx<x1&&valid;gx+=1)
     for(double gy=std::floor(y0-.5)+.5;gy<y1&&valid;gy+=1) {
-     std::vector<P2> cell(t.begin(),t.end());
-     cell=clip(cell,0,gx,1);cell=clip(cell,0,gx+1,-1);cell=clip(cell,1,gy,1);cell=clip(cell,1,gy+1,-1);
-     if(cell.size()<3)continue;
+     std::vector<P2> whole(t.begin(),t.end());
+     whole=clip(whole,0,gx,1);whole=clip(whole,0,gx+1,-1);whole=clip(whole,1,gy,1);whole=clip(whole,1,gy+1,-1);
+     if(whole.size()<3)continue;
+     // The terrain splits this lattice cell along its diagonal into two planes. A cell whose four corners are not coplanar
+     // (twist over the tolerance) is cut there too, so the patch is the terrain surface and not a fan across both planes.
+     std::vector<std::vector<P2>> parts;
+     if(lattice) {
+      const auto h00=ground(gx+ox,gy+oy),h10=ground(gx+1+ox,gy+oy),h01=ground(gx+ox,gy+1+oy),h11=ground(gx+1+ox,gy+1+oy);
+      if(h00&&h10&&h01&&h11&&std::abs(*h00+*h11-*h10-*h01)>options.drape_tolerance_m) {
+       const double diag=gx+gy+1;std::vector<double> f;for(const auto& p:whole)f.push_back(p.x+p.y-diag);
+       auto [sw,ne]=split(whole,f);
+       if(sw.size()>=3)parts.push_back(std::move(sw));
+       if(ne.size()>=3)parts.push_back(std::move(ne));
+      }
+     }
+     if(parts.empty())parts.push_back(std::move(whole));
+     for(auto& cell:parts) {
      if(!mixed){emit(cell,-1);continue;}
      // Split the (convex, at most 1 m) cell along the road bed edge; the distance is close to linear across it.
      std::vector<double> d;for(const auto& p:cell)d.push_back(inside_major(p));
@@ -390,14 +408,21 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
      if(aj<0||arms[static_cast<std::size_t>(ai)].surface==arms[static_cast<std::size_t>(aj)].surface){emit(out,ai);continue;}
      std::vector<double> h;for(const auto& p:out)h.push_back(arm_distance(static_cast<std::size_t>(ai),p)-arm_distance(static_cast<std::size_t>(aj),p));
      const auto [near_i,near_j]=split(out,h);emit(near_i,ai);emit(near_j,aj);
+     }
     }
    if(!valid)break;
   }
   if(!valid){mesh.vertices.resize(first);mesh.indices.resize(first_index);}
  }
+ mesh.drape_node_reads+=static_cast<std::uint32_t>(drape.stats().node_reads);
 }
-RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::TileKey& key,const RoadRibbonGround& ground,double lift,const RoadSeparation& separation) {
+RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::TileKey& key,const RoadRibbonGround& caller_ground,double lift,const RoadSeparation& separation,const RoadRibbonOptions& options) {
  RoadRibbonTile mesh;mesh.key=key;const auto decks=build_road_decks(geometry,separation);
+ // Lattice drape (vault G2M-025): point heights come from the terrain triangle surface, ground-drawn ribbon triangles are
+ // cut on its lattice lines and diagonals (detail::LatticeDrape). PointSampled: the caller's function at every vertex.
+ const bool lattice=options.drape==RibbonDrape::Lattice;
+ detail::LatticeDrape drape(caller_ground,static_cast<double>(key.min_easting()),static_cast<double>(key.min_northing()),options.drape_tolerance_m);
+ const RoadRibbonGround ground=lattice?RoadRibbonGround([&drape](double e,double n){return drape.height_abs(e,n);}):caller_ground;
  // Deck height at a station of a separated stretch. The station is clamped into the deck so a ribbon row that lands
  // a rounding step past the deck end still finds it; a bridge without a deck falls back to its own profile.
  const auto deck_height=[&](const g2m::RoadGeomEntry& entry,double station,double lateral)->std::optional<double>{
@@ -419,6 +444,17 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
  // follows the ground; `raise` above the ribbon surface.
  const auto paint_rect=[&](const g2m::RoadGeomEntry& entry,double s0,double s1,double t0,double t1,double raise) {
   const auto& p=*entry.profile;const int across=std::max(1,static_cast<int>(std::ceil(std::abs(t1-t0))));
+  if(lattice&&!separated_at(entry,s0)&&!separated_at(entry,s1)) {
+   std::vector<detail::DrapeVertex> grid;grid.reserve(2*static_cast<std::size_t>(across+1));
+   for(double station:{s0,s1})for(int j=0;j<=across;++j) {
+    const double t=t0+(t1-t0)*j/across;auto pose=reference_pose(p,station);if(!pose)return;
+    grid.push_back({pose->x-det::sin(pose->heading)*t-ox,pose->y+det::cos(pose->heading)*t-oy,{0,0,1000.0,1,0,0,static_cast<double>(kPaint),0}});
+   }
+   for(int j=0;j<across;++j){const auto& a=grid[static_cast<std::size_t>(j)];const auto& a1=grid[static_cast<std::size_t>(j+1)];
+    const auto& b=grid[static_cast<std::size_t>(across+1+j)];const auto& b1=grid[static_cast<std::size_t>(across+2+j)];
+    drape.add(mesh,a,b,a1,lift+raise,options.drape_mark_tolerance_m);drape.add(mesh,a1,b,b1,lift+raise,options.drape_mark_tolerance_m);}
+   return;
+  }
   const auto first=static_cast<std::int32_t>(mesh.vertices.size());
   for(double station:{s0,s1})for(int j=0;j<=across;++j) {
    const double t=t0+(t1-t0)*j/across;auto pose=reference_pose(p,station);if(!pose){mesh.vertices.resize(first);return;}
@@ -585,6 +621,22 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
   for(const auto& a:j.approaches)if(a.status==g2m::JunctionApproachStatus::Used&&a.entry_index<geometry.entries.size()){
    const auto& e=geometry.entries[a.entry_index];trims[{e.way_id,e.stretch.start_ref,a.at_end}]=a.trim_m;}
  std::map<std::int64_t,int> degree;for(const auto& edge:geometry.source.graph.edges){++degree[edge.from_node];++degree[edge.to_node];}
+ // Merge lanes and exits (G2M-028): where a ramp lands on the added lane of a carriageway, the edge line between them is one
+ // broken line (a Fahrbahnbegrenzung at an Einfaedelungs- or Ausfaedelungsstreifen): the through carriageway's edge on the ramp's
+ // side is drawn broken and the ramp's own facing edge line is dropped, along the ramp's landing length from the node.
+ struct MergeZone { double length_m=0;bool ramp_right=true; };
+ std::map<std::tuple<std::int64_t,std::int64_t>,MergeZone> merge_nodes; // (node, single arm) -> the ramp's side and landing length
+ std::map<std::tuple<std::int64_t,std::uint32_t,bool>,MergeZone> ramp_ends;
+ for(const auto& entry:geometry.entries) {
+  if(!entry.cross_section)continue;const auto* way=find_way(geometry,entry.way_id);if(!way)continue;
+  for(const bool at_end:{false,true}) {
+   const auto& join=at_end?entry.cross_section->end_join:entry.cross_section->start_join;
+   if(join.kind!=g2m::JoinKind::Landing)continue;
+   const std::uint32_t ref=at_end?entry.stretch.end_ref:entry.stretch.start_ref;if(ref>=way->node_ids.size())continue;
+   const MergeZone zone{(at_end?entry.cross_section->offset.end_length_mm:entry.cross_section->offset.start_length_mm)/1000.0,join.raw_delta_mm<0};
+   merge_nodes[{way->node_ids[ref],join.neighbour_way_id}]=zone;ramp_ends[{entry.way_id,entry.stretch.start_ref,at_end}]=zone;
+  }
+ }
  for(const auto& entry:geometry.entries) {
   if(!entry.profile)continue;const auto& p=*entry.profile;
   const auto* way_ptr=find_way(geometry,entry.way_id);if(!way_ptr)continue;const auto& w=*way_ptr;
@@ -607,6 +659,23 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
   const double to=end_trim?std::clamp(length-*end_trim+kUnderPatchM,0.0,length):length;
   const int count=to-from>.05?std::max(1,static_cast<int>(std::ceil(to-from))):0; // metre spacing matches the terrain detail.
   const double shoulder=.30;
+  // The merge zone of this stretch, per end: [from, to] stations and the flags its quads add.
+  struct ZoneRange { double lo=0,hi=0;int bits=0; };
+  std::array<ZoneRange,2> zone_ranges{};
+  if(entry.cross_section)for(const bool at_end:{false,true}) {
+   const auto& join=at_end?entry.cross_section->end_join:entry.cross_section->start_join;auto& z=zone_ranges[at_end?1:0];
+   if(join.kind==g2m::JoinKind::Landing) {
+    // The ramp: its edge on the carriageway's side (the left of a ramp that lies to the right) is dropped.
+    const auto it=ramp_ends.find({entry.way_id,entry.stretch.start_ref,at_end});if(it==ramp_ends.end())continue;
+    z={at_end?length-it->second.length_m:0.0,at_end?length:it->second.length_m,it->second.ramp_right?kLeftEdgeHidden:kRightEdgeHidden};
+   } else if(join.kind==g2m::JoinKind::LaneChange) {
+    // The through carriageway (not the single arm the ramp lands beside): its edge on the ramp's side is broken.
+    const std::uint32_t ref=at_end?entry.stretch.end_ref:entry.stretch.start_ref;if(ref>=w.node_ids.size())continue;
+    const auto it=merge_nodes.find({w.node_ids[ref],entry.way_id});if(it!=merge_nodes.end())continue; // this is the single arm
+    const auto other=merge_nodes.find({w.node_ids[ref],join.neighbour_way_id});if(other==merge_nodes.end())continue;
+    z={at_end?length-other->second.length_m:0.0,at_end?length:other->second.length_m,other->second.ramp_right?kRightEdgeBroken:kLeftEdgeBroken};
+   }
+  }
   struct Row { double station,x,y,nx,ny,fade;Span span;bool separated; };
   for(int i=0;i<count;++i) {
    // The last row is exactly `to`: length*count/count can land one ulp past the profile end, which the profile
@@ -626,6 +695,7 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
     rows[static_cast<std::size_t>(r)]={station,xy->x,xy->y,-det::sin(xy->heading),det::cos(xy->heading),fade,span_at(entry,*layout,station),separated_at(entry,station)};
    }
    if(!valid)continue;
+   int quad_flags=flags;{const double mid_station=(stations[0]+stations[1])*.5;for(const auto& z:zone_ranges)if(z.bits!=0&&mid_station>=z.lo&&mid_station<=z.hi)quad_flags|=z.bits;}
    // Three strips across: the right verge (gravel, ground only), the road bed (asphalt, the markings divide its
    // counted lanes) and the left verge. u is measured from the centre of the counted lanes.
    const bool on_ground=!rows[0].separated&&!rows[1].separated;
@@ -633,13 +703,41 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
     const auto lo=[&](const Row& r){return strip==0?r.span.bed_right-shoulder:strip==1?r.span.bed_right:r.span.bed_left;};
     const auto hi=[&](const Row& r){return strip==0?r.span.bed_right:strip==1?r.span.bed_left:r.span.bed_left+shoulder;};
     const int across=strip==1?std::max(2,static_cast<int>(std::ceil(hi(rows[0])-lo(rows[0])))):1;
+    if(lattice&&on_ground) {
+     // On the ground: the strip's 1 m quads become triangles cut on the terrain's own triangulation.
+     std::vector<detail::DrapeVertex> grid;grid.reserve(2*static_cast<std::size_t>(across+1));
+     for(const auto& r:rows)for(int j=0;j<=across;++j) {
+      const double lateral=lo(r)+(hi(r)-lo(r))*j/across,e=r.x+r.nx*lateral,n=r.y+r.ny*lateral;
+      grid.push_back({e-ox,n-oy,{lateral-r.span.centre(),r.station,r.span.width(),r.fade,static_cast<double>(lanes),static_cast<double>(forward),static_cast<double>(quad_flags),strip==1?0.0:1.0}});
+     }
+     for(int j=0;j<across;++j){const auto& a=grid[static_cast<std::size_t>(j)];const auto& a1=grid[static_cast<std::size_t>(j+1)];
+      const auto& b=grid[static_cast<std::size_t>(across+1+j)];const auto& b1=grid[static_cast<std::size_t>(across+2+j)];
+      drape.add(mesh,a,b,a1,lift);drape.add(mesh,a1,b,b1,lift);}
+     continue;
+    }
+    if(lattice&&rows[0].separated!=rows[1].separated) {
+     // A deck row beside a ground row (a bridge end): the quad is the ramp between them. Its deck corners keep the deck height, its
+     // ground corners the terrain, and its pieces never fall below the terrain in between (LatticeDrape::add_ramp).
+     std::vector<detail::DrapeVertex> grid;grid.reserve(2*static_cast<std::size_t>(across+1));bool ok=true;
+     for(const auto& r:rows)for(int j=0;j<=across&&ok;++j) {
+      const double lateral=lo(r)+(hi(r)-lo(r))*j/across,e=r.x+r.nx*lateral,n=r.y+r.ny*lateral;
+      detail::DrapeVertex v{e-ox,n-oy,{lateral-r.span.centre(),r.station,r.span.width(),r.fade,static_cast<double>(lanes),static_cast<double>(forward),static_cast<double>(quad_flags),strip==1?0.0:1.0}};
+      if(r.separated){const auto h=deck_height(entry,r.station,lateral);if(!h){ok=false;break;}v.pin=*h;}
+      grid.push_back(v);
+     }
+     if(!ok)continue;
+     for(int j=0;j<across;++j){const auto& a=grid[static_cast<std::size_t>(j)];const auto& a1=grid[static_cast<std::size_t>(j+1)];
+      const auto& b=grid[static_cast<std::size_t>(across+1+j)];const auto& b1=grid[static_cast<std::size_t>(across+2+j)];
+      drape.add_ramp(mesh,a,b,a1,lift);drape.add_ramp(mesh,a1,b,b1,lift);}
+     continue;
+    }
     const auto first=mesh.vertices.size();bool ok=true;
     for(const auto& r:rows) {
      for(int j=0;j<=across&&ok;++j) {
       const double lateral=lo(r)+(hi(r)-lo(r))*j/across,e=r.x+r.nx*lateral,n=r.y+r.ny*lateral;
       const auto height=r.separated?deck_height(entry,r.station,lateral):ground(e,n);
       if(!height){ok=false;break;}
-      mesh.vertices.push_back({static_cast<float>(e-ox),static_cast<float>(n-oy),static_cast<float>(*height+lift),static_cast<float>(lateral-r.span.centre()),static_cast<float>(r.station),static_cast<float>(r.span.width()),static_cast<float>(r.fade),static_cast<float>(lanes),static_cast<float>(forward),static_cast<float>(flags),strip==1?0.0f:1.0f});
+      mesh.vertices.push_back({static_cast<float>(e-ox),static_cast<float>(n-oy),static_cast<float>(*height+lift),static_cast<float>(lateral-r.span.centre()),static_cast<float>(r.station),static_cast<float>(r.span.width()),static_cast<float>(r.fade),static_cast<float>(lanes),static_cast<float>(forward),static_cast<float>(quad_flags),strip==1?0.0f:1.0f});
      }
     }
     if(!ok){mesh.vertices.resize(first);continue;}
@@ -760,6 +858,11 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
    if(open[i])continue;const std::size_t k=(i+1)%n;
    const P2 q[4]={{ring[i].x/1000.0,ring[i].y/1000.0},outer[i],{ring[k].x/1000.0,ring[k].y/1000.0},outer[k]};
    if(!owned((q[0].x+q[2].x)/2,(q[0].y+q[2].y)/2))continue;
+   if(lattice) {
+    detail::DrapeVertex d[4];for(int k=0;k<4;++k)d[k]={q[k].x-ox,q[k].y-oy,{0,0,1000.0,0,0,0,0,1.0}};
+    drape.add(mesh,d[0],d[2],d[1],lift);drape.add(mesh,d[1],d[2],d[3],lift);
+    continue;
+   }
    const auto first=static_cast<std::int32_t>(mesh.vertices.size());bool ok=true;
    for(const auto& v:q){auto h=ground(v.x,v.y);if(!h){ok=false;break;}
     mesh.vertices.push_back({static_cast<float>(v.x-ox),static_cast<float>(v.y-oy),static_cast<float>(*h+lift),0,0,1000.0f,0,0,0,0,1.0f});}
@@ -767,7 +870,7 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
    mesh.indices.insert(mesh.indices.end(),{first,first+2,first+1,first+1,first+2,first+3});
   }
  }
- add_junction_surfaces(mesh,geometry,key,ground,lift);
+ add_junction_surfaces(mesh,geometry,key,caller_ground,lift,options);
  // ---- markings over the junction patches ----
  constexpr double kOverlayLiftM=kJunctionLiftM+.003,kLineLiftM=kJunctionLiftM+.004;
  // The through road's lane, centre and edge lines continue across the junction along a cubic between the two trim
@@ -779,6 +882,11 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
   const double dx=b.x-a.x,dy=b.y-a.y,len=det::hypot(dx,dy);if(len<.01)return;
   const double nx=-dy/len*width/2,ny=dx/len*width/2;
   const P2 c[4]={{a.x+nx,a.y+ny},{a.x-nx,a.y-ny},{b.x+nx,b.y+ny},{b.x-nx,b.y-ny}};
+  if(lattice) {
+   detail::DrapeVertex d[4];for(int k=0;k<4;++k)d[k]={c[k].x-ox,c[k].y-oy,{0,0,1000.0,1,0,0,static_cast<double>(kPaint),0}};
+   drape.add(mesh,d[0],d[1],d[2],lift+kLineLiftM,options.drape_mark_tolerance_m);drape.add(mesh,d[1],d[3],d[2],lift+kLineLiftM,options.drape_mark_tolerance_m);
+   return;
+  }
   const auto first=static_cast<std::int32_t>(mesh.vertices.size());
   for(const auto& q:c){auto h=ground(q.x,q.y);if(!h){mesh.vertices.resize(static_cast<std::size_t>(first));return;}
    mesh.vertices.push_back({static_cast<float>(q.x-ox),static_cast<float>(q.y-oy),static_cast<float>(*h+lift+kLineLiftM),0,0,1000.0f,1,0,0,kPaint});}
@@ -951,6 +1059,21 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
     if(!near_ring(*o.ring,r.x+r.nx*l,r.y+r.ny*l,.3))flags|=side>0?kLeftEdgeHidden:kRightEdgeHidden;
    }
   }
+  if(lattice) {
+   // The overlay strip (only its paint is drawn) follows the terrain surface like the ribbons beneath it.
+   const int across_l=std::max(2,static_cast<int>(std::ceil(std::max(wa,wb))));
+   std::vector<detail::DrapeVertex> grid;grid.reserve(rows.size()*static_cast<std::size_t>(across_l+1));
+   for(const auto& r:rows)for(int j=0;j<=across_l;++j) {
+    const double lateral=-r.width/2+r.width*j/across_l;
+    grid.push_back({r.x+r.nx*(r.offset+lateral)-ox,r.y+r.ny*(r.offset+lateral)-oy,
+                    {lateral,r.arc,r.width,1,static_cast<double>(lanes),static_cast<double>(forward),static_cast<double>(flags),0}});
+   }
+   const auto at=[&](int i,int j)->const detail::DrapeVertex&{return grid[static_cast<std::size_t>(i*(across_l+1)+j)];};
+   for(int i=0;i<count;++i)for(int j=0;j<across_l;++j){
+    drape.add(mesh,at(i,j),at(i+1,j),at(i,j+1),lift+kOverlayLiftM,options.drape_mark_tolerance_m);drape.add(mesh,at(i,j+1),at(i+1,j),at(i+1,j+1),lift+kOverlayLiftM,options.drape_mark_tolerance_m);}
+   for(const auto& g:o.gores)paint_gore(o,rows,g);
+   continue;
+  }
   const auto first=static_cast<std::int32_t>(mesh.vertices.size());bool valid=true;int across=0;
   for(const auto& r:rows) {
    if(!valid)break;
@@ -1013,6 +1136,8 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
   if(pattern==g2m::CrossingPattern::Dashes)
    for(double s:{s0,s1-.12})for(double t=lo;t<hi-.05;t+=.7)paint_rect(entry,s,s+.12,t,std::min(t+.5,hi),kLineLiftM);
  }
+ {const auto& st=drape.stats();mesh.drape_in+=static_cast<std::uint32_t>(st.triangles_in);mesh.drape_out+=static_cast<std::uint32_t>(st.pieces);mesh.drape_uncut+=static_cast<std::uint32_t>(st.uncut);
+  mesh.drape_dropped+=static_cast<std::uint32_t>(st.dropped);mesh.drape_node_reads+=static_cast<std::uint32_t>(st.node_reads);}
  return mesh;
 }
 }

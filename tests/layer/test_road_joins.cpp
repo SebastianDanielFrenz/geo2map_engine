@@ -384,13 +384,17 @@ TEST_CASE("Kalbach fixture: lane adds, drops, pockets and transitions (design F1
     SECTION("F5 link with left_of:1 pins the left edge of the lane to the reference line") {
         const auto r = resolve_at(*w.builder, 50876963, 0);
         CHECK(r.xs.anchor.edge == AnchorEdge::Left); CHECK(r.xs.anchor.source == PlacementSource::Explicit);
+        // The ends may land on a merge lane or an exit (G2M-028) and shift the whole section by metres there: the pin is the
+        // boundary less the section's own offset.
         const auto b = boundaries(r.xs, r.xs.length_m / 2);
-        CHECK(std::fabs(b[r.xs.anchor.band]) < 1e-3);
+        const double mid_offset = r.xs.offset_m(r.xs.length_m / 2);
+        CHECK(std::fabs(b[r.xs.anchor.band] - mid_offset) < 1e-3);
     }
     SECTION("F6 urban pocket on the right: the wider way absorbs and holds") {
         const auto p = join_at(w, 256917288, 4537572, 1596079422, JoinKind::InferredAlignment, 1625);
         CHECK(counted_lanes(wider(p)) == 3); CHECK(added_lane(wider(p)) == 2);
-        CHECK(wider(p).r.xs.offset.mode == OffsetMode::Hold); CHECK(std::abs(wider(p).r.xs.offset.start_mm) == 1625);
+        // Hold while the other end is a junction or a dead end; Ramps since the other end joins a merge lane (G2M-028).
+        CHECK(wider(p).r.xs.offset.mode != OffsetMode::None); CHECK((std::abs(wider(p).r.xs.offset.start_mm) == 1625 || std::abs(wider(p).r.xs.offset.end_mm) == 1625));
         CHECK(narrower(p).r.xs.offset.mode == OffsetMode::None);
     }
     SECTION("F7 ambiguous left+right tokens: no explicit placement, the lanes are added on the right") {

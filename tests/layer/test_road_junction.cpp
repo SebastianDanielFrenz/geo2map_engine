@@ -310,14 +310,18 @@ TEST_CASE("T3: a repairable bow-tie is repaired by trim extension; without the r
     const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
     const auto builder = RoadReferenceBuilder::make(*world); REQUIRE(builder);
     {
-        auto g0 = g2m_test::geometry_in_tile(*world, TileKey{g2m_test::kZone32N, 2, 455, 5421}); REQUIRE(g0);
+        // Node 527505 is an exit with a merge lane since G2M-028 (a MergeLane decline); this case is about the ring builder, so the
+        // merge-lane rules are off here.
+        auto no_merge = builtin_road_rules_de(); no_merge.merge_lane.enabled = false;
+        g2m_test::GeomOptions go; go.rules = &no_merge;
+        auto g0 = g2m_test::geometry_in_tile_with(*world, TileKey{g2m_test::kZone32N, 2, 455, 5421}, go); REQUIRE(g0);
         JunctionBuildStats s0;
-        const auto capped = build_node_junction(*g0, *builder, 527505, builtin_road_rules_de(), &s0); REQUIRE(capped);
+        const auto capped = build_node_junction(*g0, *builder, 527505, no_merge, &s0); REQUIRE(capped);
         CHECK(capped->decline == JunctionDecline::None);
         CHECK(s0.bowtie_rounds == 0); CHECK(s0.hull_fallbacks == 0);
         JunctionBuildOptions no_caps; no_caps.corner_caps = false;
         JunctionBuildStats s1;
-        REQUIRE(build_node_junction(*g0, *builder, 527505, builtin_road_rules_de(), &s1, no_caps));
+        REQUIRE(build_node_junction(*g0, *builder, 527505, no_merge, &s1, no_caps));
         CHECK(s1.bowtie_rounds == 1);   // the slice-3 behaviour
     }
     constexpr std::int64_t kNode = 2152308547;

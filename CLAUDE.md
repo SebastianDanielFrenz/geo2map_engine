@@ -212,6 +212,7 @@ geo2map_engine/
                                       key, ground fn, lift) incl. junction surfaces and markings,
                                       add_junction_surfaces, road_priority_rank (StVO 18(3) rank), lane_arrow_glyphs
                                       (turn:lanes token -> ArrowGlyph bits via parse_turn_token, G2M-024)
+                                      RoadRibbonOptions{drape = Lattice (G2M-025), tolerances}, RibbonDrape
     buildings.h                      (phase 3b) Building/BuildingPoint/BuildingGround/BuildingParams,
                                       extract_buildings, BuildingSet + build_building_set(OsmTile, ground)
     view_streamer.h                  (phase 3b) render LOD around a focus: ViewChunk (mesh + class ids, carve
@@ -231,6 +232,7 @@ geo2map_engine/
                                       (IHeightTileFetch; blocks on the caller, which is a loader thread),
                                       product<T>(kind, key, ...) + ProductContext for caller producers
   src/world/                          g2m_world implementation: road_structures.cpp, road_ribbons.cpp (phase 3a,
+                                      lattice_drape.{h,cpp} internal: drape on the terrain triangulation, G2M-025,
                                       ported from racing_game 0c027dc + 945455a, libm -> det), buildings.cpp,
                                       view_streamer.cpp, ring_streamer.cpp (phase 3b, from racing_game 5a3baed),
                                       terrain_service.cpp, job_scheduler.{h,cpp}
@@ -524,6 +526,8 @@ geo2map_engine/
     setup_dev_env.ps1                 verify (-CheckOnly) or install the toolchain
     tsan_suppressions.txt             TSan suppressions, loaded only by the linux-tsan test preset (SQLite wal-index header reads)
     refgen/                           g2m_refgen: GeographicLib reference-value generator (G2M_BUILD_REFGEN=ON only)
+    ribbon_census/                    g2m_ribbon_census (G2M-025): drapes the ribbons of a site or box both ways (point / lattice) and probes every triangle against the terrain mesh; vertices, triangles, build ms, per-class terrain-above tallies
+    xs_probe/                         g2m_xs_probe (G2M-025): join-aware cross-section dump of OSM ways, and a lane-change census
     osm_tag_probe/                    street-fidelity plan P0: g2m_osm_tag_probe, OSM tag-coverage report (road classes, crossings/signals, buildings, trees) for a regions.json region cut by admin boundaries. Library g2m_osm_tag_probe_lib (tag_probe.* pure aggregation + md/json writers, scan.* three PBF passes over a ResolvedRegion), exe under G2M_BUILD_APPS, home_probe_region.json (Main-Taunus, Hochtaunus, Frankfurt), test tests/unit/test_osm_tag_probe.cpp [osm][probe]. Run: `g2m_osm_tag_probe --pbf F --region REGIONS.json#NAME --out-md F --out-json F`; deterministic (sorted maps). Snapshot: docs/osm_tag_coverage_home.md
 ```
 
@@ -602,6 +606,9 @@ end of `CMakeLists.txt`):
   179708586 (through|slight_right|merge_to_left) and the converging merge_to_right|merge_to_left pair, lane
   independence, junction guide lines; six recorded sabotages. `tools/road_census/main.cpp` (`g2m_road_census`,
   built with g2m_tiler: `arrows STORE SCOPE X0 X1 Y0 Y1` / `way ... IDS` / `bow ... FACTOR MARGIN_M [IDS]`, G2M-024's chord-bound census) is the region census.
+  The 55 pinned cases build with `RibbonDrape::PointSampled` (the game's drape). `test_ribbon_drape.cpp` (`[ribbon_drape]`, G2M-025): pieces on the exact
+  terrain triangle surface, watertight strip, no crack on a shared edge cut on one side only, tile seam equality, nodes-only ground reads, tolerance bound,
+  NoData drop, bump no edge sees, deck-to-ground ramp, ribbons never below the terrain by more than 1 cm, decks untouched; six recorded sabotages in the file header.
   Phase 3b (`buildings`, `view_streamer`, `ring_streamer`): tests
   `test_buildings.cpp` (`[buildings]`; synthetic tag scene + every fixture tile
   with buildings == `building_pins.inc`), `test_view_streamer.cpp`
@@ -975,6 +982,15 @@ width ramps, absorber offsets Ramps/Hold/Transition, ramp clipping to the stretc
 `lateral_point(reference, s, t)`. Second committed fixture `testdata/fixtures/osm/hoechst_a66.osm.pbf`
 (see testdata/fixtures/README.md). Test: `test_road_joins.cpp` (synthetic joins, design F1-F10/H1-H7,
 edge continuity over every degree-2 join of both fixtures, context invariance).
+Slice 4b (vault G2M-028, owner site 4): merge lanes and exits at a node of degree three. `classify_merge_node` (in
+`road_cross_section_join.cpp`; needs `RoadReferenceBuilder::arms(node)`, `RoadNodeArm{way_id, ref, leaves_node}`) finds a one-way `*_link`
+that meets two one-way carriageways with balanced counted lanes; `resolve_cross_section` then gives the through pair a synthesized
+lane-add / lane-drop join and the link an `OffsetMode::Ramps` landing on the added lane's centre line plus `JoinKind::Landing` (5,
+`neighbour_way_id` = the single arm, `raw_delta_mm` = the landing; roads.geom encoding 10 since the JoinKind and JunctionDecline domains grew; encoding 9 still decodes). Rules: `MergeLaneRules`
+(`RoadRules::merge_lane`, `de.json` `merge_lane`, all [assumed], RAA model [unverified]; the loader checks the landing curvature). The ribbon
+builder (`road_ribbons.cpp`) marks the zone: the through carriageway's edge on the link's side broken (flags 64/128), the link's facing edge
+dropped (512/1024), over the landing length. Tests: `test_road_merge_lane.cpp` M1-M6 (sabotages S1-S8 in its header), the loader case in
+`test_road_rules.cpp`, `tests/world/test_merge_markings.cpp` MK1-MK3. Tool: `g2m_xs_probe --merge-census E0 N0 E1 N1 [--merge-rules on|off] [list]`.
 Slice 5: `roads.geom` encoding 6 (`kRoadGeomEncoding`; 5 still decodes, `RoadGeomTile::encoding`): section 1 is the
 roads.graph encoding-5 payload, section 2 unchanged, section 3 one cross-section record per entry
 (`RoadGeomEntry::cross_section` / `cross_section_decline`, built by `build_road_geom_tile` via
@@ -1027,7 +1043,7 @@ and `build_node_junctions(...)` (offset-intersect-trim per design 3.3-3.8, pure,
 sorted by azimuth, three rings (RoadBed, Paved, Outer) from the P1 `carve_footprint`/`lateral_point` edges as integer-mm polylines,
 corners by exact int64 segment intersection (`geom::orient`/`segments_intersect`), trims from the Outer layer, bow-tie repair by
 1 m extension rounds of the involved approaches (`junction.bowtie_rounds`), convex-hull fallback with `JunctionFlags::HullFallback`,
-reach cap (`ReachExceeded`), declines `ClusterTooLarge/ReachExceeded/SingleApproach/Degenerate/Underground`, per-approach status
+reach cap (`ReachExceeded`), declines `ClusterTooLarge/ReachExceeded/SingleApproach/Degenerate/Underground/MergeLane` (G2M-028: a node where a merge ramp lands), per-approach status
 (Used/NoProfile/NoCrossSection/Tunnel...). A node is built only when the tile holds every approach of it (else skipped, counted).
 `junction_ring_valid` is the simple-and-counter-clockwise check. Test: `test_road_junction.cpp` (X/T/Y/fork/star scenes, Hoechst
 and Frankfurt fixture census, multi-tile identity). Sabotages: swapping left/right in `edge_t` fails the corner/trim checks;

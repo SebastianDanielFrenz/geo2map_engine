@@ -37,6 +37,9 @@ struct RoadRibbonTile {
     // Turn-arrow diagnostics (not part of the mesh): lanes that got an arrow, merge arrows among them (Verschwenkungspfeil),
     // and turn:lanes values of the lanes painted that are no OSM value (they draw nothing).
     std::size_t turn_arrow_lanes = 0, merge_arrows = 0, unknown_turn_tokens = 0;
+    // Lattice drape counters (diagnostics, vault G2M-025): ribbon triangles fed in, triangles out (of which `uncut`: emitted whole,
+    // inside the tolerance), pieces dropped for lack of ground, and lattice nodes read from the caller's ground function.
+    std::uint32_t drape_in = 0, drape_out = 0, drape_uncut = 0, drape_dropped = 0, drape_node_reads = 0;
 };
 // Glyphs of the turn arrows (bits). Left/right: the full bent arrow; slight_*: a shallower bend; sharp_*: a bend back
 // toward the side; merge_*: the diagonal straight arrow (Verschwenkungspfeil, StVO Zeichen 297.1) of the lane that ends.
@@ -51,13 +54,34 @@ std::uint16_t lane_arrow_glyphs(std::string_view lane_value, std::size_t* unknow
 // Ground height (absolute metres) at absolute UTM (easting, northing); nullopt = no ground there (NoData, not loaded).
 using RoadRibbonGround = std::function<std::optional<double>(double, double)>;
 
+// How a ribbon vertex finds its height on the ground (vault G2M-025).
+//   PointSampled  every vertex = `ground` at its own position (the pre-G2M-025 behaviour: bilinear if the caller's
+//                 function is the bilinear sampler). Between its vertices a ribbon triangle is a plane that the terrain
+//                 mesh does not follow, so on a steep bank the terrain stands above the road.
+//   Lattice       the ribbon is draped on the SAME triangle surface the terrain mesh and the physics ground have: the
+//                 1 m lattice (cell centres at x.5 m absolute) with the NW-SE diagonal of height_sampler.h
+//                 (sample_height_exact). `ground` is read only at lattice nodes. Every ground-drawn ribbon triangle is
+//                 cut where it crosses a lattice line or diagonal (vertices inserted there, shared between neighbours,
+//                 so the mesh stays watertight), so no terrain triangle can stand above the road inside it.
+enum class RibbonDrape : std::uint8_t { PointSampled = 0, Lattice = 1 };
+struct RoadRibbonOptions {
+    RibbonDrape drape = RibbonDrape::Lattice;
+    // Lattice drape: a ribbon triangle is emitted uncut when its edges and every point where the terrain bends inside it
+    // stay within this many metres of the triangle's own plane (cracks are impossible: an edge is judged on its own).
+    // 0 cuts every triangle on every lattice line and diagonal.
+    double drape_tolerance_m = 0.008;
+    // The same for the markings, which sit a few mm above the road bed and must not fall under it.
+    double drape_mark_tolerance_m = 0.003;
+};
+
 // The ribbons of `geometry` inside `key` (each 1 m row and each marking is kept by the tile holding its centre), lifted
 // `lift_m` above the surface. Structure decks come from build_road_decks(geometry, separation); a stretch is drawn on a
 // deck of its own (way, stretch start_ref) where one covers the station.
 RoadRibbonTile build_road_ribbons(const RoadGeomTile& geometry, const TileKey& key, const RoadRibbonGround& ground, double lift_m,
-                                  const RoadSeparation& separation = {});
+                                  const RoadSeparation& separation = {}, const RoadRibbonOptions& options = {});
 // The junction patches alone (appended to `mesh`), in tile-local metres like build_road_ribbons.
-void add_junction_surfaces(RoadRibbonTile& mesh, const RoadGeomTile& geometry, const TileKey& key, const RoadRibbonGround& ground, double lift_m);
+void add_junction_surfaces(RoadRibbonTile& mesh, const RoadGeomTile& geometry, const TileKey& key, const RoadRibbonGround& ground, double lift_m,
+                           const RoadRibbonOptions& options = {});
 
 // Priority rank of a road for right of way (StVO 18(3) / 8): motorway 14, trunk 12, primary 10, secondary 8,
 // tertiary 6, unclassified / road 4, residential 2, living_street and anything else 0, every *_link 1. The ribbons pick

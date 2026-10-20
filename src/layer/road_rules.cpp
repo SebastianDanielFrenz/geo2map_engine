@@ -149,6 +149,23 @@ bool read_reference_rules(Reader& rd, const json& root, ReferenceRules& out) {
            rd.integer(*r, kPath, "chord_margin_mm", 0, 100000, out.chord_margin_mm);
 }
 
+bool read_merge_lane_rules(Reader& rd, const json& root, MergeLaneRules& out) {
+    const auto* m = rd.field(root, "root", "merge_lane");
+    static constexpr const char* kPath = "merge_lane";
+    if (!m || !rd.keys(*m, kPath, {"enabled", "max_through_deflection_deg", "max_ramp_angle_deg", "direction_probe_m", "landing_m_per_m",
+            "landing_min_m", "landing_max_m", "max_landing_offset_mm"}) ||
+        !rd.boolean(*m, kPath, "enabled", out.enabled) ||
+        !rd.integer(*m, kPath, "max_through_deflection_deg", 1, 89, out.max_through_deflection_deg) ||
+        !rd.integer(*m, kPath, "max_ramp_angle_deg", 1, 89, out.max_ramp_angle_deg) ||
+        !rd.integer(*m, kPath, "direction_probe_m", 1, 200, out.direction_probe_m) ||
+        !rd.integer(*m, kPath, "landing_m_per_m", 1, 1000, out.landing_m_per_m) ||
+        !rd.integer(*m, kPath, "landing_min_m", 1, 2000, out.landing_min_m) ||
+        !rd.integer(*m, kPath, "landing_max_m", 1, 2000, out.landing_max_m) ||
+        !rd.integer(*m, kPath, "max_landing_offset_mm", 1, 20000, out.max_landing_offset_mm)) return false;
+    if (out.landing_min_m > out.landing_max_m) return rd.fail("merge_lane: landing_min_m exceeds landing_max_m");
+    return true;
+}
+
 const CrossingPattern* find_pattern(const std::vector<CrossingPatternEntry>& table, std::string_view value) {
     const auto it = std::lower_bound(table.begin(), table.end(), value,
         [](const CrossingPatternEntry& e, std::string_view v) { return e.value < v; });
@@ -178,7 +195,7 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
     Reader rd;
     const auto fail = [&]() { return make_error(ErrorCode::InvalidArgument, "road rules: " + rd.err); };
     if (!rd.keys(j, "root", {"format", "country", "min_lane_mm", "added_lane_side", "cycle_lane_mm", "sidewalk_mm", "tagged_shoulder_mm",
-            "parking_mm", "traffic_calming", "junction", "furniture", "tunnel", "underpass", "reference", "min_edge_radius_m", "classes", "sources"})) return fail();
+            "parking_mm", "traffic_calming", "junction", "furniture", "tunnel", "underpass", "reference", "merge_lane", "min_edge_radius_m", "classes", "sources"})) return fail();
     std::string format;
     if (!rd.text(j, "root", "format", format)) return fail();
     if (format != "g2m.road_rules/1") return make_error(ErrorCode::Unsupported, "road rules: format '" + format + "'");
@@ -214,7 +231,8 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
         }
     }
     if (!read_junction_rules(rd, j, rules.junction) || !read_furniture_rules(rd, j, rules.furniture) || !read_tunnel_rules(rd, j, rules.tunnel) ||
-        !read_underpass_rules(rd, j, rules.underpass) || !read_reference_rules(rd, j, rules.reference)) return fail();
+        !read_underpass_rules(rd, j, rules.underpass) || !read_reference_rules(rd, j, rules.reference) ||
+        !read_merge_lane_rules(rd, j, rules.merge_lane)) return fail();
     const auto* sources = rd.field(j, "root", "sources");
     if (!sources || !rd.object(*sources, "sources")) return fail();
     for (auto it = sources->begin(); it != sources->end(); ++it)
@@ -284,6 +302,18 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
         const std::int64_t a = out.taper.lane_add_m;
         if (4 * widest * out.min_edge_radius_m > 1000 * a * a) {
             rd.fail(tp + ".lane_add_m too short for min_edge_radius_m " + std::to_string(out.min_edge_radius_m)); return fail();
+        }
+        // The landing S-ramp of a link (merge_lane): lateral offset W over a = clamp(m_per_m * W, min, max) has the same bound.
+        // Checked at the largest landing offset and at the offset where the minimum length stops binding (the worst cases).
+        if (name.size() > 5 && name.compare(name.size() - 5, 5, "_link") == 0 && rules.merge_lane.enabled) {
+            const auto& ml = rules.merge_lane;
+            for (const std::int64_t w_mm : {static_cast<std::int64_t>(ml.max_landing_offset_mm),
+                     std::min<std::int64_t>(ml.max_landing_offset_mm, static_cast<std::int64_t>(ml.landing_min_m) * 1000 / ml.landing_m_per_m)}) {
+                const std::int64_t a_m = std::clamp<std::int64_t>(ml.landing_m_per_m * w_mm / 1000, ml.landing_min_m, ml.landing_max_m);
+                if (4 * w_mm * out.min_edge_radius_m > 1000 * a_m * a_m) {
+                    rd.fail("merge_lane: the landing S-ramp of " + name + " is too sharp for min_edge_radius_m " + std::to_string(out.min_edge_radius_m)); return fail();
+                }
+            }
         }
         rules.classes.push_back(std::move(out));
     }

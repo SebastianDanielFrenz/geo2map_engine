@@ -393,15 +393,21 @@ TEST_CASE("underpass deck (D57): tile invariance needs the crossing context", "[
     CHECK(*encode_body(*x) == *encode_body(*y));
 }
 
-TEST_CASE("underpass deck (D56): encoding 9 round trip and validation", "[layer][underpass][deck][format]") {
+TEST_CASE("underpass deck (D56): encoding 10 and 9 round trip and validation", "[layer][underpass][deck][format]") {
     const RoadGraph world = underpass_scene();
     const auto tile = build(world, kUnderpassTile, tilted_cutting());
     REQUIRE(tile); REQUIRE(tile->underpasses.size() == 1);
     const auto body = encode_road_geom(*tile); REQUIRE(body);
-    CHECK(body->encoding == 9); REQUIRE(body->sections.size() == 8); CHECK(body->sections[7].type == 8);
+    CHECK(body->encoding == 10); REQUIRE(body->sections.size() == 8); CHECK(body->sections[7].type == 8);
     const auto back = decode_road_geom(*body); REQUIRE(back);
     CHECK(back->underpasses == tile->underpasses);
-    CHECK(back->encoding == 9);
+    CHECK(back->encoding == 10);
+    // The same tile as an encoding-9 body: the same bytes in every section, and it decodes with its decks.
+    auto nine = *tile; nine.encoding = kRoadGeomEncodingUnderpass;
+    const auto body9 = encode_road_geom(nine); REQUIRE(body9);
+    CHECK(body9->encoding == 9); REQUIRE(body9->sections.size() == 8);
+    for (std::size_t i = 0; i < 8; ++i) CHECK(body9->sections[i].data == body->sections[i].data);
+    const auto back9 = decode_road_geom(*body9); REQUIRE(back9); CHECK(back9->underpasses == tile->underpasses); CHECK(back9->encoding == 9);
     // Encoding 8 cannot carry a deck; an encoding-8 body has 7 sections and decodes without decks.
     auto eight = *tile; eight.encoding = 8; CHECK_FALSE(encode_road_geom(eight));
     eight.underpasses.clear(); const auto body8 = encode_road_geom(eight); REQUIRE(body8);

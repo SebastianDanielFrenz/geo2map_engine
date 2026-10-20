@@ -254,6 +254,17 @@ std::uint32_t RoadReferenceBuilder::degree(std::int64_t id) const {
     const auto i = node_index(id);
     return i == graph_->nodes.size() ? 0 : incident_begin_[i + 1] - incident_begin_[i];
 }
+std::vector<RoadNodeArm> RoadReferenceBuilder::arms(std::int64_t id) const {
+    std::vector<RoadNodeArm> out;
+    const auto ni = node_index(id);
+    if (ni == graph_->nodes.size()) return out;
+    for (auto k = incident_begin_[ni]; k < incident_begin_[ni + 1]; ++k) {
+        const auto& edge = graph_->edges[incident_edges_[k]];
+        const bool leaves = edge.from_node == id;
+        out.push_back({edge.way_id, leaves ? edge.segment_index : edge.segment_index + 1, leaves});
+    }
+    return out;
+}
 Result<std::optional<RoadStretchJoin>> RoadReferenceBuilder::join(std::int64_t id, RoadStretch stretch, bool end) const {
     const auto& graph = *graph_;
     const auto wi = std::lower_bound(graph.ways.begin(), graph.ways.end(), id,
