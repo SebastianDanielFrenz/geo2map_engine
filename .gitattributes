@@ -20,3 +20,6 @@ data/road_rules/** -text
 # carved / class layer configs (street fidelity P2).
 data/carve/** -text
 data/classifiers/** -text
+
+# data/rail_rules/*.json is embedded the same way; its SHA-256 enters the g2m.rail.geom release id (railways R1/R2).
+data/rail_rules/** -text

@@ -1,6 +1,6 @@
 // tests/golden/dump_main.cpp - g2m_golden_dump: prints one golden set's
 // hashes ("name count hash" per line) to stdout, or writes them to a file.
-//   g2m_golden_dump [g0|g1|g1c|g2|g2mesh|g2roads|g2paint|g3xs|g3j|g3d|g3c] [output file]      (default set: g0)
+//   g2m_golden_dump [g0|g1|g1c|g2|g2mesh|g2roads|g2paint|g3xs|g3j|g3d|g3c|g3rail] [output file]      (default set: g0)
 // tools/ci.ps1 compares this output across every build leg; regenerate
 // testdata/golden/g<N>_golden.txt with `g2m_golden_dump g<N> <path>` after
 // an INTENDED output change (and say why in the commit).
@@ -20,15 +20,16 @@ int main(int argc, char** argv) {
     if (argc > 1 && (std::string(argv[1]) == "g0" || std::string(argv[1]) == "g1" || std::string(argv[1]) == "g1c" ||
                      std::string(argv[1]) == "g2" || std::string(argv[1]) == "g2mesh" ||
                      std::string(argv[1]) == "g2roads" || std::string(argv[1]) == "g2paint" || std::string(argv[1]) == "g3xs" ||
-                     std::string(argv[1]) == "g3j" || std::string(argv[1]) == "g3d" || std::string(argv[1]) == "g3c")) {
+                     std::string(argv[1]) == "g3j" || std::string(argv[1]) == "g3d" || std::string(argv[1]) == "g3c" || std::string(argv[1]) == "g3rail")) {
         set = argv[1];
         arg = 2;
     }
     if (argc - arg > 1) {
-        std::fprintf(stderr, "usage: g2m_golden_dump [g0|g1|g1c|g2|g2mesh|g2roads|g2paint|g3xs|g3j|g3d|g3c] [output file]\n");
+        std::fprintf(stderr, "usage: g2m_golden_dump [g0|g1|g1c|g2|g2mesh|g2roads|g2paint|g3xs|g3j|g3d|g3c|g3rail] [output file]\n");
         return 2;
     }
-    const std::vector<g2m_golden::Entry> entries = set == "g3c" ? g2m_golden::compute_g3c()
+    const std::vector<g2m_golden::Entry> entries = set == "g3rail" ? g2m_golden::compute_g3rail()
+                                                     : set == "g3c" ? g2m_golden::compute_g3c()
                                                      : set == "g3d" ? g2m_golden::compute_g3d()
                                                      : set == "g3j" ? g2m_golden::compute_g3j()
                                                      : set == "g3xs" ? g2m_golden::compute_g3xs()

@@ -52,6 +52,7 @@ enum class LayerEncoding : std::uint16_t {
     RoadGeomTunnels = 8,   // g2m.roads.geom encoding 7 plus provenance 4, TunnelFloor (terrain migration phase 4, decision D47)
     RoadGeomUnderpasses = 9, // g2m.roads.geom encoding 8 plus section 8, underpass deck spans (decisions D53-D58)
     TerrainClass = 7,      // g2m.terrain.class (encoding 7 in that layer's id space, design 9.4); docs/formats/terrain_class.md
+    RailGeom = 1,          // g2m.rail.geom (encoding 1 in that layer's id space, railways R1/R2); docs/formats/rail_geom.md
 };
 
 // Levels a layer has tiles at, as a bit mask over TileKey levels 0..20.

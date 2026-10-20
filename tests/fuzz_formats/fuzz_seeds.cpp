@@ -8,6 +8,7 @@
 #include "g2m/layer/layer_id.h"
 #include "g2m/layer/osm_clip.h"
 #include "g2m/layer/pack.h"
+#include "g2m/layer/rail_geom_tile.h"
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/region.h"
@@ -285,6 +286,20 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         return {body(must(g2m::encode_terrain_class(t), "encode_terrain_class"))};
     }
     case Target::Osm: return osm_bodies();
+    case Target::RailGeom: {
+        // Three pieces: a bridge over a road, a ground track and a tunnel under construction (synthetic, deterministic).
+        g2m::RailGeomTile t;
+        t.key = g2m::TileKey{g2m::geo::UtmZone{32, g2m::geo::Hemisphere::North}, 2, kFuzzRailX, kFuzzRailY};
+        const auto x = t.key.min_easting() * 1000, y = t.key.min_northing() * 1000;
+        g2m::RailPiece a; a.way_id = 11; a.flags = g2m::kRailBridge | g2m::kRailElectrified; a.layer = 1; a.tracks = 2; a.gauge_mm = 1435;
+        a.xy = {{x + 10000, y + 10000}, {x + 60000, y + 10000}, {x + 110000, y + 12000}}; a.z = {25600, 25800, 26000};
+        g2m::RailPiece b = a; b.way_id = 12; b.flags = 0; b.layer = 0; b.tracks = 1; b.z = {25600, 25610, 25590};
+        g2m::RailPiece c; c.way_id = 13; c.cls = 2; c.condition = g2m::RailCondition::Construction; c.flags = g2m::kRailTunnel; c.layer = -2;
+        c.service = g2m::RailService::Yard; c.usage = g2m::RailUsage::Industrial; c.gauge_mm = 1000;
+        c.xy = {{x + 20000, y + 40000}, {x + 90000, y + 41000}}; c.z = {24000, 23800};
+        t.pieces = {a, b, c};
+        return {body(must(g2m::encode_rail_geom(t), "encode_rail_geom"))};
+    }
     case Target::Roadgeom:
     case Target::RoadCrossSectionEval: {
         g2m::RoadGraphTile graph; graph.key = g2m_test::home_tile();
