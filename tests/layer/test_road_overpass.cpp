@@ -444,3 +444,55 @@ TEST_CASE("tunnel cut (D65): a ground road over the tunnel keeps its terrain - t
     CHECK(skipped_s == 0);
     (void)over_s;
 }
+
+// ---- 7a-2: the design floor must not turn every short tunnel into an open cut ---------------------------------
+// The design floor of a short tunnel is its chord (the ground term is skipped within needed/G of a portal), and the carve
+// recognises an open cut by a floor straight within 1 cm. D65's hump rule therefore stays the only way to the exact chord;
+// any other short floor holds the portal grade over the end ramps.
+TEST_CASE("tunnel cut (7a-2): the design floor keeps D65's hump rule; a tunnel under a hill is not a cut", "[layer][carve][tunnel][d65][structure]") {
+    const auto design = [](RoadCompletionOptions& o) { o = g2m::served_road_completion_options(); };
+    const double half = 23.15;
+    for (const double height : {4.5, 15.0, 0.4}) {
+        RoadCompletionStats stats;
+        const auto tile = build_d65(scene_d65(half), dem_d65(half, height), &stats, design);
+        REQUIRE(tile);
+        const RoadProfile* p = profile_of(*tile, 20);
+        REQUIRE(p);
+        std::printf("[cut 7a-2] bank %.1f m: cut %zu, off the chord %.4f m, floor entries %zu\n", height, stats.tunnel_cut, off_chord(*p), stats.floor_entries);
+        if (height == 4.5) { CHECK(stats.tunnel_cut == 1); CHECK(off_chord(*p) < 0.01); }
+        else CHECK(stats.tunnel_cut == 0);
+    }
+}
+
+TEST_CASE("tunnel cut (7a-2): the carve opens a design-floor tunnel only under a hump of ground; the hump check off is the sabotage", "[layer][carve][tunnel][d65][structure]") {
+    const double half = 23.15;
+    const auto key0 = tile_key_at(kUnderpassTile.zone, 0, kUnderpassE0 + 0.5, kUnderpassN0);
+    REQUIRE(key0);
+    const auto run = [&](double bank, CarveOptions options) {
+        const RoadGraph world = scene_d65(half);
+        g2m_test::CarveFixture fx(world, dem_d65(half, bank));
+        fx.completion = g2m::served_road_completion_options();   // the design floor
+        auto m = fx.model(*key0, options);
+        const RoadGeomTile& geom = fx.geom(tile_key_at(kUnderpassTile.zone, 2, kUnderpassE0 + 0.5, kUnderpassN0).value());
+        const RoadProfile* p = profile_of(geom, 20);
+        REQUIRE(p);
+        double above = -1e9;
+        for (double s = 2; s <= p->reference.length_m - 2; s += 1) {
+            const auto xy = p->reference.at(s); REQUIRE(xy);
+            above = std::max(above, m.model->evaluate(xy->x, xy->y).z - ground_d65(xy->x, xy->y));
+        }
+        return std::pair{above, m.stats.tunnel_entries};
+    };
+    // A 4.5 m bank is D65's case: cut (the floor is the portal chord).
+    const auto [bank_above, bank_skipped] = run(kBank, CarveOptions{});
+    // A 15 m hill is above the hump bound: the tunnel is a tunnel, the hill stays whatever the floor looks like.
+    const auto [hill_above, hill_skipped] = run(15.0, CarveOptions{});
+    CarveOptions sabotage; sabotage.tunnel_cut_hump_check = false;
+    const auto [sab_above, sab_skipped] = run(15.0, sabotage);
+    std::printf("[cut 7a-2 carve] bank: carved centre %.3f m above the portal level, skipped %zu; hill: %.3f m, skipped %zu; hill with the hump check off: %.3f m, skipped %zu\n",
+                bank_above, bank_skipped, hill_above, hill_skipped, sab_above, sab_skipped);
+    CHECK(bank_skipped == 0); CHECK(bank_above < 0.1);
+    CHECK(hill_skipped == 1); CHECK(hill_above > 10.0);
+    CHECK(sab_skipped == 0);   // the sabotage opens a straight design floor under a 15 m hill (a trench through it)
+    CHECK(sab_above < 0.5);
+}

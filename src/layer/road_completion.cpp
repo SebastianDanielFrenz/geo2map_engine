@@ -397,7 +397,7 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
     struct FloorComponent {
         bool ok = false;
         std::vector<RoadStretch> stretches; std::vector<std::int64_t> ways;            // canonical (way id, start ref) order
-        std::vector<int> from, to; std::vector<double> length; std::vector<RoadReferenceLine> refs;
+        std::vector<std::vector<double>> ground; std::vector<int> from, to; std::vector<double> length; std::vector<RoadReferenceLine> refs;
         std::vector<std::int64_t> nodes; std::map<std::int64_t, int> node_index;
         std::vector<int> tunnel_ends; std::vector<char> portal; std::vector<std::optional<PortalAnchor>> anchor;
         structure::NetworkFloor floor;
@@ -468,7 +468,7 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
                     }
                     if (all) fs.ground[k] = low;
                 }
-                c.length.push_back(ref->length_m); c.refs.push_back(std::move(*ref)); net.stretches.push_back(std::move(fs));
+                c.ground.push_back(fs.ground); c.length.push_back(ref->length_m); c.refs.push_back(std::move(*ref)); net.stretches.push_back(std::move(fs));
                 report.length_m += c.length.back(); report.stations += count;
             }
         }
@@ -629,10 +629,22 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
             bool straight = std::fabs(chord) <= g;
             for (std::size_t k = 1; straight && k + 1 < floor.size(); ++k)
                 straight = std::fabs(floor[k] - (floor.front() + chord * structure::station_m(length, k))) <= 0.01;
-            if (straight) {
-                const bool cut = options.tunnel_cut_max_length_m > 0 && length <= options.tunnel_cut_max_length_m;
-                fit.start_grade = cut ? chord : std::clamp(chord, designed_start - kPortalGradeSlack, designed_start + kPortalGradeSlack);
-                fit.end_grade = cut ? chord : std::clamp(chord, designed_end - kPortalGradeSlack, designed_end + kPortalGradeSlack);
+            // D65 stays the only way a floor becomes an open cut (the terrain carve recognises a cut by a floor straight within 1 cm
+            // and at most tunnel_cut_max_length_m long, and carves it down to the floor): the ground over the chord must rise by a
+            // bounded hump, as before. Every other straight floor (the design floor of a short tunnel is the chord by construction)
+            // keeps the portal grades within kPortalGradeSlack and bends over the end ramps, so that it is not a cut to the carve.
+            bool cut = false;
+            if (options.tunnel_cut_max_length_m > 0 && length <= options.tunnel_cut_max_length_m && std::fabs(chord) <= g) {
+                const auto& ground = comp->ground[idx];
+                double hump = 0;
+                for (std::size_t k = 0; k < ground.size(); ++k)
+                    if (std::isfinite(ground[k])) hump = std::max(hump, ground[k] - (floor.front() + chord * structure::station_m(length, k)));
+                cut = hump >= options.tunnel_cut_hump_min_m && hump <= options.tunnel_cut_hump_max_m;
+            }
+            if (straight || cut) {
+                const double slack = options.tunnel_cut_max_length_m > 0 && length <= options.tunnel_cut_max_length_m ? 0.0 : kPortalGradeSlack;   // a short stretch that is no cut takes the portal grade itself
+                fit.start_grade = cut ? chord : std::clamp(chord, designed_start - slack, designed_start + slack);
+                fit.end_grade = cut ? chord : std::clamp(chord, designed_end - slack, designed_end + slack);
                 std::vector<VerticalSample> line{samples.front(), samples.back()};
                 if (fit.start_grade != chord || fit.end_grade != chord) {
                     const double ramp = std::min(std::max(options.ground_ramp_m, 1.0), length / 4.0);

@@ -536,7 +536,8 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
         const RoadGeomEntry& entry = m.kept.entries[e];
         if (!entry.profile || !entry.cross_section) continue;
         const RoadProfile& p = *entry.profile;
-        if (p.attributes.tunnel && !(is_tunnel_cut(p, options, rules.tunnel) && !(options.tunnel_cut_crossing_check && crossed_by_ground_road(m.kept, e)))) {
+        const auto cell_ground = [&](double x, double y) { const std::int32_t v = terrain.raw(static_cast<std::int64_t>(std::floor(x)), static_cast<std::int64_t>(std::floor(y))); return v == kHeightNoData ? kNaN : static_cast<double>(v) / 256.0; };
+        if (p.attributes.tunnel && !(is_tunnel_cut(p, options, rules.tunnel) && (!options.tunnel_cut_hump_check || g2m::tunnel_cut_hump_ok(p, rules.tunnel, cell_ground)) && !(options.tunnel_cut_crossing_check && crossed_by_ground_road(m.kept, e)))) {
             if (stats) ++stats->tunnel_entries;
             continue;
         }
@@ -1096,7 +1097,7 @@ LayerDesc terrain_carved_desc() {
 
 std::string terrain_carved_config_text() {
     const auto& sha = builtin_carve_default().content_sha256;
-    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 tunnel-cut=D65/" + std::to_string(builtin_road_rules_de().tunnel.cut_max_length_m) + " carve=" +
+    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 tunnel-cut=D65/" + std::to_string(builtin_road_rules_de().tunnel.cut_max_length_m) + "+hump carve=" +
         to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even";
 }
 
@@ -1220,8 +1221,23 @@ Result<DeriveResult> TerrainCarvedDeriver::derive(const DeriveRequest& request) 
     return DeriveResult{std::move(*body), in.datum, 0};
 }
 
-bool tunnel_entry_is_carved(const RoadGeomTile& tile, std::size_t entry, const CarveOptions& options, const TunnelRules& rules) {
+bool tunnel_cut_hump_ok(const RoadProfile& p, const TunnelRules& rules, const CutGroundAt& ground_m) {
+    const double length = p.reference.length_m;
+    const auto a = p.at(0), b = p.at(length);
+    if (!a || !b || !(length > 0)) return false;
+    double hump = -std::numeric_limits<double>::infinity();
+    for (double s = 0; s <= length; s += 1.0) {
+        const auto pose = p.reference.at(s);
+        if (!pose) continue;
+        const double g = ground_m(pose->x, pose->y);
+        if (!std::isfinite(g)) continue;
+        hump = std::max(hump, g - (a->height_m + (b->height_m - a->height_m) * s / length));
+    }
+    return std::isfinite(hump) && hump >= rules.cut_hump_min_mm / 1000.0 - kTunnelCutHumpToleranceM &&
+           hump <= rules.cut_hump_max_mm / 1000.0 + kTunnelCutHumpToleranceM;
+}
+bool tunnel_entry_is_carved(const RoadGeomTile& tile, std::size_t entry, const CarveOptions& options, const TunnelRules& rules, const CutGroundAt* ground_m) {
     if (entry >= tile.entries.size() || !tile.entries[entry].profile || !tile.entries[entry].profile->attributes.tunnel) return false;
-    return is_tunnel_cut(*tile.entries[entry].profile, options, rules) && !(options.tunnel_cut_crossing_check && crossed_by_ground_road(tile, entry));
+    return is_tunnel_cut(*tile.entries[entry].profile, options, rules) && (!ground_m || !options.tunnel_cut_hump_check || tunnel_cut_hump_ok(*tile.entries[entry].profile, rules, *ground_m)) && !(options.tunnel_cut_crossing_check && crossed_by_ground_road(tile, entry));
 }
 } // namespace g2m

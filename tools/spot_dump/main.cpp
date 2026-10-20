@@ -160,6 +160,9 @@ int main(int argc, char** argv) {
         struct EndAt { std::int64_t way; int prov; bool tunnel, bridge; double z, grade, length, max_grade; };
         struct NodeEnds { double east = 0, north = 0; std::vector<EndAt> ends; int declined_ground = 0; std::vector<std::string> declined_msgs; };
         std::map<std::int64_t, NodeEnds> node_ends;
+        // 7a-2: the carve opens a short straight floor only under a hump of ground (D65); the base DEM is read as the carve reads it.
+        Sampler hump_dem{server, manifest->rid, std::string(kTerrainHeightLayer), zone, {}, {}};
+        const CutGroundAt hump_ground = [&](double x, double y) { return hump_dem.at(x, y); };
         std::set<std::tuple<std::int64_t, std::uint32_t, int>> seen_ends, seen_declined;
         for (std::int32_t ty = k0->y; ty <= k1->y; ++ty) for (std::int32_t tx = k0->x; tx <= k1->x; ++tx) {
             TileKey key = *k0; key.x = tx; key.y = ty;
@@ -228,14 +231,17 @@ int main(int argc, char** argv) {
                         }
                         const auto way = std::lower_bound(graph.ways.begin(), graph.ways.end(), e.way_id, [](const auto& w, auto id) { return w.osm_id < id; });
                         const auto xy = p.reference.at(0.5 * p.reference.length_m);
+                        const bool short_straight = dev <= 0.01 && p.reference.length_m <= 80;
+                        const bool carved_flag = csv && short_straight && tunnel_entry_is_carved(*tile, ei, CarveOptions{}, builtin_road_rules_de().tunnel, &hump_ground);
+                        const bool carved_nohump = csv && short_straight && tunnel_entry_is_carved(*tile, ei, CarveOptions{}, builtin_road_rules_de().tunnel, nullptr);
                         if (csv && xy && way != graph.ways.end() && way->osm_id == e.way_id)
                             csv << e.way_id << ',' << e.stretch.start_ref << ',' << e.stretch.end_ref << ',' << xy->x << ',' << xy->y << ",,," << "yes" << ",tunnel-floor,0,\"len="
-                                << p.reference.length_m << " off_chord=" << dev << "\"\n";
+                                << p.reference.length_m << " off_chord=" << dev << " carved=" << carved_flag << " carved_without_hump_check=" << carved_nohump << "\"\n";
                         ++tunnel_floors; if (dev <= 0.01) ++tunnel_straight;
                         if (dev <= 0.01 && p.reference.length_m <= 80) {
                             ++tunnel_straight_short;
-                            if (tunnel_entry_is_carved(*tile, ei, CarveOptions{}, builtin_road_rules_de().tunnel)) ++tunnel_carved;
-                            else if (tunnel_entry_is_carved(*tile, ei, [] { CarveOptions o; o.tunnel_cut_crossing_check = false; return o; }(), builtin_road_rules_de().tunnel)) {
+                            if (tunnel_entry_is_carved(*tile, ei, CarveOptions{}, builtin_road_rules_de().tunnel, &hump_ground)) ++tunnel_carved;
+                            else if (tunnel_entry_is_carved(*tile, ei, [] { CarveOptions o; o.tunnel_cut_crossing_check = false; return o; }(), builtin_road_rules_de().tunnel, &hump_ground)) {
                                 ++tunnel_crossed;
                                 std::cout << "  crossed by a ground road, left uncarved: way " << e.way_id << " len " << p.reference.length_m << " at " << (xy ? xy->x : 0) << ' ' << (xy ? xy->y : 0) << std::endl;
                             }
