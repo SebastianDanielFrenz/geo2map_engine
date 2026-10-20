@@ -14,6 +14,7 @@ add_executable(g2m_world_tests
   test_road_meshes.cpp
   test_road_arrows.cpp
   test_ribbon_drape.cpp
+  test_merge_markings.cpp
   test_buildings.cpp
   test_view_streamer.cpp
   test_ring_streamer.cpp

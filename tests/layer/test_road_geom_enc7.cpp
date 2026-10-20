@@ -134,7 +134,7 @@ TEST_CASE("T8: every rule of the 9.2 validation rejects its own malformed body",
     rejects("node not in the graph", "not in the graph", [](auto& t) { t.junctions[junction_at(t, 3)].nodes.push_back(999999); });
     rejects("junction order", "junction order", [](auto& t) { std::swap(t.junctions[0], t.junctions[1]); });
     rejects("flags outside the mask", "junction flags", [](auto& t) { t.junctions[0].flags |= 32; });
-    rejects("decline out of range", "junction decline", [](auto& t) { t.junctions[0].decline = static_cast<JunctionDecline>(6); });
+    rejects("decline out of range", "junction decline", [](auto& t) { t.junctions[0].decline = static_cast<JunctionDecline>(7); });
     rejects("cluster flag on one node", "cluster flag", [](auto& t) { t.junctions[0].flags |= static_cast<std::uint16_t>(JunctionFlags::Cluster); });
     // Indices, status, ends, trims.
     rejects("approach entry index", "approach entry", [](auto& t) { t.junctions[0].approaches[0].entry_index = t.entries.size(); });

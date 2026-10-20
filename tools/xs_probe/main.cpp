@@ -1,12 +1,19 @@
 // tools/xs_probe/main.cpp - g2m_xs_probe: read-only dump of the join-aware cross-section of OSM ways (vault G2M-025).
 //
 //   g2m_xs_probe STORE SCOPE TILE_KEY WAY_ID... [--census]
+//   g2m_xs_probe STORE SCOPE TILE_KEY --merge-census E0 N0 E1 N1 [--merge-rules on|off]
 //
 // Derives the roads.graph of the level-2 tile and its eight neighbours from the immutable source store, merges them (world
 // node degrees), and prints for every stretch of each named way: the bands (kind, direction, width, turn bits, start and
 // end ramps), the anchor, the offset correction, both joins, and the degree of the end nodes. With --census instead of ways,
 // every way of the centre tile is checked for lane-count changes at nodes: the node degree, the counted lanes of the ways
 // meeting there and whether the cross-section resolver gave the end a join (and so a taper).
+//
+// --merge-census walks every level-2 tile of the UTM box (the tile key only names the zone and level; each node is counted in
+// the tile that contains it) and counts the nodes of degree three where one one-way arm has the counted lanes of the other
+// two together and one of those is a *_link (merge-lane / exit candidates, G2M-028), how many of them the cross-section
+// resolver gave a landing, and the degree-two nodes whose ways differ in counted lanes, with and without a join (a taper).
+// --merge-rules off resolves with merge_lane.enabled = false (the state before G2M-028).
 //
 // Not part of any product; used to inspect lane adds and lane drops by hand.
 #include "g2m/core/tile_key.h"
@@ -17,6 +24,9 @@
 #include "g2m/server/tile_store.h"
 
 #include <algorithm>
+#include <array>
+#include <memory>
+#include <optional>
 #include <cstdio>
 #include <iostream>
 #include <map>
@@ -35,7 +45,7 @@ const char* dir_name(LaneDirection d) {
     return n[static_cast<int>(d)];
 }
 const char* join_name(JoinKind k) {
-    static const char* n[] = {"none", "consistent", "lane_change", "inferred_alignment", "placement_conflict"};
+    static const char* n[] = {"none", "consistent", "lane_change", "inferred_alignment", "placement_conflict", "landing"};
     return n[static_cast<int>(k)];
 }
 Result<RoadGraph> derive_graph(TileStore& store, const char* scope, const TileKey& key) {
@@ -59,6 +69,122 @@ Result<RoadGraph> derive_graph(TileStore& store, const char* scope, const TileKe
 }
 } // namespace
 
+namespace {
+int merge_census(TileStore& store, const char* scope, const TileKey& zone_key, double e0, double n0, double e1, double n1, bool rules_on, bool list_missed) {
+    RoadRules rules = builtin_road_rules_de();
+    rules.merge_lane.enabled = rules_on && rules.merge_lane.enabled;
+    const auto k0 = tile_key_at(zone_key.zone, 2, e0, n0), k1 = tile_key_at(zone_key.zone, 2, e1, n1);
+    if (!k0 || !k1) { std::cerr << "box outside the zone\n"; return 1; }
+    std::map<std::pair<std::int32_t, std::int32_t>, std::shared_ptr<RoadGraph>> cache;   // (y, x)
+    const auto graph_at = [&](const TileKey& k) -> std::shared_ptr<RoadGraph> {
+        const auto it = cache.find({k.y, k.x});
+        if (it != cache.end()) return it->second;
+        auto g = derive_graph(store, scope, k);
+        auto ptr = g ? std::make_shared<RoadGraph>(std::move(*g)) : std::shared_ptr<RoadGraph>{};
+        cache.emplace(std::make_pair(k.y, k.x), ptr);
+        return ptr;
+    };
+    std::size_t tiles = 0, deg3 = 0, candidates = 0, merges = 0, diverges = 0, landed = 0, landed_merge = 0, landed_diverge = 0, through_tapers = 0;
+    std::size_t d2_differ = 0, d2_taper = 0;
+    std::map<std::string, std::size_t> missed;
+    for (std::int32_t ty = k0->y; ty <= k1->y; ++ty) {
+        for (auto it = cache.begin(); it != cache.end();) it = it->first.first < ty - 1 ? cache.erase(it) : std::next(it);   // keep three tile rows
+        for (std::int32_t tx = k0->x; tx <= k1->x; ++tx) {
+            TileKey key = *k0; key.x = tx; key.y = ty;
+            std::vector<std::shared_ptr<RoadGraph>> keep;
+            std::vector<const RoadGraph*> ptrs;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    TileKey k = key; k.x += dx; k.y += dy;
+                    if (auto g = graph_at(k)) { keep.push_back(g); ptrs.push_back(g.get()); }
+                }
+            const auto merged = merge_road_graphs(ptrs);
+            if (!merged) continue;
+            const auto builder = RoadReferenceBuilder::make(*merged);
+            if (!builder) continue;
+            ++tiles;
+            const double lo_e = static_cast<double>(key.min_easting()), lo_n = static_cast<double>(key.min_northing()), size = static_cast<double>(key.size_m());
+            const auto info = [&](std::int64_t way_id, int& counted, bool& oneway_fwd, std::string& hw) {
+                counted = 0; oneway_fwd = false;
+                const auto* w = std::lower_bound(merged->ways.data(), merged->ways.data() + merged->ways.size(), way_id, [](const RoadGraphWay& a, std::int64_t v) { return a.osm_id < v; });
+                if (w == merged->ways.data() + merged->ways.size() || w->osm_id != way_id) return;
+                for (const auto& t : w->tags) if (t.first == "highway") hw = t.second;
+                const auto b = resolve_cross_section_base(*w, rules);
+                if (!b || !b->xs) return;
+                oneway_fwd = (b->xs->flags & kXsOneway) && !(b->xs->flags & kXsReversedOneway);
+                for (const auto& band : b->xs->bands) counted += band.counted;
+            };
+            const auto section_at = [&](std::int64_t way_id, std::uint32_t ref, bool at_end) -> std::optional<RoadCrossSection> {
+                const auto fits = builder->fit_stretches(way_id);
+                if (!fits) return {};
+                for (const auto& fit : *fits) {
+                    if ((at_end ? fit.stretch.end_ref : fit.stretch.start_ref) != ref || !fit.reference) continue;
+                    const auto xs = resolve_cross_section(*builder, way_id, fit.stretch, fit.reference->length_m, rules);
+                    if (xs && xs->xs) return *xs->xs;
+                }
+                return {};
+            };
+            for (const auto& node : merged->nodes) {
+                const double e = static_cast<double>(node.position.x) / 1000.0, n = static_cast<double>(node.position.y) / 1000.0;
+                if (e < lo_e || e >= lo_e + size || n < lo_n || n >= lo_n + size) continue;
+                if (e < e0 || e > e1 || n < n0 || n > n1) continue;
+                const auto deg = builder->degree(node.osm_id);
+                const auto arms = builder->arms(node.osm_id);
+                if (deg == 2 && arms.size() == 2 && arms[0].way_id != arms[1].way_id) {
+                    int c0, c1; bool o0, o1; std::string h0, h1;
+                    info(arms[0].way_id, c0, o0, h0); info(arms[1].way_id, c1, o1, h1);
+                    if (c0 > 0 && c1 > 0 && c0 != c1) {
+                        ++d2_differ;
+                        const auto x = section_at(arms[0].way_id, arms[0].ref, !arms[0].leaves_node);
+                        if (x && (arms[0].leaves_node ? x->start_join : x->end_join).kind == JoinKind::LaneChange) ++d2_taper;
+                    }
+                    continue;
+                }
+                if (deg != 3 || arms.size() != 3) continue;
+                ++deg3;
+                if (arms[0].way_id == arms[1].way_id || arms[1].way_id == arms[2].way_id || arms[0].way_id == arms[2].way_id) continue;
+                std::array<int, 3> cnt{}; std::array<bool, 3> one{}; std::array<std::string, 3> hws;
+                bool all = true;
+                for (std::size_t i = 0; i < 3; ++i) { info(arms[i].way_id, cnt[i], one[i], hws[i]); all = all && one[i] && cnt[i] > 0; }
+                if (!all) continue;
+                const int leaving = int(arms[0].leaves_node) + int(arms[1].leaves_node) + int(arms[2].leaves_node);
+                if (leaving != 1 && leaving != 2) continue;
+                const bool merge = leaving == 1;
+                std::size_t si = 0;
+                for (std::size_t i = 0; i < 3; ++i) if (arms[i].leaves_node == merge) si = i;
+                const std::size_t xi = (si + 1) % 3, yi = (si + 2) % 3;
+                if (cnt[si] != cnt[xi] + cnt[yi]) continue;
+                const auto is_link = [&](std::size_t i) { const auto& h = hws[i]; return h.size() > 5 && h.substr(h.size() - 5) == "_link"; };
+                if (!is_link(xi) && !is_link(yi)) continue;
+                ++candidates; (merge ? merges : diverges) += 1;
+                bool got_landing = false, got_through = false;
+                for (const auto& a : arms) {
+                    const auto x = section_at(a.way_id, a.ref, !a.leaves_node);
+                    if (!x) continue;
+                    const auto& j = a.leaves_node ? x->start_join : x->end_join;
+                    got_landing = got_landing || j.kind == JoinKind::Landing;
+                    got_through = got_through || j.kind == JoinKind::LaneChange;
+                }
+                if (got_landing) { ++landed; (merge ? landed_merge : landed_diverge) += 1; }
+                else {
+                    missed[got_through ? "taper_without_landing" : "no_taper"] += 1;
+                    if (list_missed) {
+                        std::printf("miss %s node %lld E %.1f N %.1f arms %lld/%lld/%lld lanes %d/%d/%d single %zu merge %d\n", got_through ? "taper" : "none", static_cast<long long>(node.osm_id), e, n,
+                            static_cast<long long>(arms[0].way_id), static_cast<long long>(arms[1].way_id), static_cast<long long>(arms[2].way_id), cnt[0], cnt[1], cnt[2], si, merge ? 1 : 0);
+                    }
+                }
+                if (got_through) ++through_tapers;
+            }
+        }
+    }
+    std::cout << "merge_census rules=" << (rules.merge_lane.enabled ? "on" : "off") << " tiles=" << tiles << " degree3_nodes=" << deg3
+              << " candidates=" << candidates << " (merge " << merges << ", diverge " << diverges << ") landed=" << landed << " (merge " << landed_merge << ", diverge " << landed_diverge
+              << ") candidates_with_lane_taper=" << through_tapers << " deg2_lane_count_changes=" << d2_differ << " deg2_with_taper=" << d2_taper << '\n';
+    for (const auto& [k, v] : missed) std::cout << "  candidate without landing: " << k << " " << v << '\n';
+    return 0;
+}
+} // namespace
+
 int main(int argc, char** argv) {
     if (argc < 5) { std::cerr << "usage: g2m_xs_probe STORE SCOPE TILE_KEY WAY_ID... [--census]\n"; return 1; }
     const auto key = parse_tile_path(argv[3]);
@@ -66,6 +192,11 @@ int main(int argc, char** argv) {
     TileStoreConfig config; config.dir = argv[1]; config.read_only = true;
     auto store = TileStore::open(config);
     if (!store) { std::cerr << store.error().message << '\n'; return 1; }
+    if (std::string_view(argv[4]) == "--merge-census") {
+        if (argc < 9) { std::cerr << "usage: ... --merge-census E0 N0 E1 N1 [--merge-rules on|off]\n"; return 1; }
+        const bool on = !(argc >= 11 && std::string_view(argv[10]) == "off");
+        return merge_census(**store, argv[2], *key, std::atof(argv[5]), std::atof(argv[6]), std::atof(argv[7]), std::atof(argv[8]), on, argc >= 12 && std::string_view(argv[11]) == "list");
+    }
     std::vector<std::int64_t> ways;
     bool census = false;
     for (int i = 4; i < argc; ++i) {

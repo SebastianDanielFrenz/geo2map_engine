@@ -233,7 +233,7 @@ int main(int argc, char** argv) {
                         std::printf("   tri");
                         for (int a = 0; a < 3; ++a) {
                             const auto th = sample_height_exact(lookup, zone, 0, 0, ox + v[a]->x, oy + v[a]->y);
-                            std::printf(" | E %.2f N %.2f z %.3f terr %.3f v %.2f fl %g vg %g", ox + v[a]->x, oy + v[a]->y, double(v[a]->z), th ? *th : -1.0, double(v[a]->v), double(v[a]->flags), double(v[a]->verge));
+                            std::printf(" | E %.3f N %.3f z %.3f terr %.3f v %.2f fl %g vg %g u %.3f w %.3f ln %g fw %g fd %.3f", ox + v[a]->x, oy + v[a]->y, double(v[a]->z), th ? *th : -1.0, double(v[a]->v), double(v[a]->flags), double(v[a]->verge), double(v[a]->u), double(v[a]->width), double(v[a]->lanes), double(v[a]->forward), double(v[a]->fade));
                         }
                         std::printf(" deck=%d\n", decks.covers(ox + (v[0]->x + v[1]->x + v[2]->x) / 3, oy + (v[0]->y + v[1]->y + v[2]->y) / 3) ? 1 : 0);
                     }

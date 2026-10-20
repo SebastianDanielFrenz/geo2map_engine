@@ -707,6 +707,14 @@ RoadJunction build_from(const RoadGeomTile& tile, const std::vector<NodeInput>& 
     };
     if (all_tunnels) return finish(JunctionDecline::Underground);
     if (stubs.size() < 2) return finish(JunctionDecline::SingleApproach);
+    // A merge lane or an exit that lands on the added lane (G2M-028): the three carriageways meet in their lane-change joins and
+    // the link ends off the node, so there is no junction to patch (the ring of the three would fold over the added lane).
+    if (nodes.size() == 1) {
+        for (const auto& u : stubs) {
+            const auto& xs = tile.entries[u.r.entry].cross_section;
+            if (xs && (u.r.at_end ? xs->end_join : xs->start_join).kind == JoinKind::Landing) return finish(JunctionDecline::MergeLane);
+        }
+    }
 
     // ---- darts: stubs first (index = position in `stubs`, ascending key), then the internal darts ----
     std::vector<Dart> darts(stubs.size() + internal.size());

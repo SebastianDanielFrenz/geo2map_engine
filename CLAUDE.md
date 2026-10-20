@@ -982,6 +982,15 @@ width ramps, absorber offsets Ramps/Hold/Transition, ramp clipping to the stretc
 `lateral_point(reference, s, t)`. Second committed fixture `testdata/fixtures/osm/hoechst_a66.osm.pbf`
 (see testdata/fixtures/README.md). Test: `test_road_joins.cpp` (synthetic joins, design F1-F10/H1-H7,
 edge continuity over every degree-2 join of both fixtures, context invariance).
+Slice 4b (vault G2M-028, owner site 4): merge lanes and exits at a node of degree three. `classify_merge_node` (in
+`road_cross_section_join.cpp`; needs `RoadReferenceBuilder::arms(node)`, `RoadNodeArm{way_id, ref, leaves_node}`) finds a one-way `*_link`
+that meets two one-way carriageways with balanced counted lanes; `resolve_cross_section` then gives the through pair a synthesized
+lane-add / lane-drop join and the link an `OffsetMode::Ramps` landing on the added lane's centre line plus `JoinKind::Landing` (5,
+`neighbour_way_id` = the single arm, `raw_delta_mm` = the landing; roads.geom encoding 10 since the JoinKind and JunctionDecline domains grew; encoding 9 still decodes). Rules: `MergeLaneRules`
+(`RoadRules::merge_lane`, `de.json` `merge_lane`, all [assumed], RAA model [unverified]; the loader checks the landing curvature). The ribbon
+builder (`road_ribbons.cpp`) marks the zone: the through carriageway's edge on the link's side broken (flags 64/128), the link's facing edge
+dropped (512/1024), over the landing length. Tests: `test_road_merge_lane.cpp` M1-M6 (sabotages S1-S8 in its header), the loader case in
+`test_road_rules.cpp`, `tests/world/test_merge_markings.cpp` MK1-MK3. Tool: `g2m_xs_probe --merge-census E0 N0 E1 N1 [--merge-rules on|off] [list]`.
 Slice 5: `roads.geom` encoding 6 (`kRoadGeomEncoding`; 5 still decodes, `RoadGeomTile::encoding`): section 1 is the
 roads.graph encoding-5 payload, section 2 unchanged, section 3 one cross-section record per entry
 (`RoadGeomEntry::cross_section` / `cross_section_decline`, built by `build_road_geom_tile` via
@@ -1034,7 +1043,7 @@ and `build_node_junctions(...)` (offset-intersect-trim per design 3.3-3.8, pure,
 sorted by azimuth, three rings (RoadBed, Paved, Outer) from the P1 `carve_footprint`/`lateral_point` edges as integer-mm polylines,
 corners by exact int64 segment intersection (`geom::orient`/`segments_intersect`), trims from the Outer layer, bow-tie repair by
 1 m extension rounds of the involved approaches (`junction.bowtie_rounds`), convex-hull fallback with `JunctionFlags::HullFallback`,
-reach cap (`ReachExceeded`), declines `ClusterTooLarge/ReachExceeded/SingleApproach/Degenerate/Underground`, per-approach status
+reach cap (`ReachExceeded`), declines `ClusterTooLarge/ReachExceeded/SingleApproach/Degenerate/Underground/MergeLane` (G2M-028: a node where a merge ramp lands), per-approach status
 (Used/NoProfile/NoCrossSection/Tunnel...). A node is built only when the tile holds every approach of it (else skipped, counted).
 `junction_ring_valid` is the simple-and-counter-clockwise check. Test: `test_road_junction.cpp` (X/T/Y/fork/star scenes, Hoechst
 and Frankfurt fixture census, multi-tile identity). Sabotages: swapping left/right in `edge_t` fails the corner/trim checks;

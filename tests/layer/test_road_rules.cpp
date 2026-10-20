@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "acd18c88d4c9358e1a3967c975b8690d59e77f90a4295728654436657f8de0b5");
+    CHECK(to_hex(digest) == "42f310beba4023da5542a6c22145cd6881d442a45e499822ac7015af090afd50");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -250,4 +250,35 @@ TEST_CASE("The reference block: the chord bound of the reference lines (G2M-024)
     const auto off = load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 0, \"chord_margin_mm\": 0 }"));
     REQUIRE(off); CHECK(off->reference.chord_half_width_percent == 0); CHECK(off->reference.chord_margin_mm == 0);   // 0 and 0 = off
     CHECK(off->underpass == builtin_road_rules_de().underpass);
+}
+
+TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add landing (G2M-028)", "[layer][road_rules][road_merge_lane]") {
+    const auto& ml = builtin_road_rules_de().merge_lane;
+    CHECK(ml.enabled);
+    CHECK(ml.max_through_deflection_deg == 35); CHECK(ml.max_ramp_angle_deg == 60); CHECK(ml.direction_probe_m == 10);
+    CHECK(ml.landing_m_per_m == 12); CHECK(ml.landing_min_m == 30); CHECK(ml.landing_max_m == 80); CHECK(ml.max_landing_offset_mm == 8000);
+    const std::string from = "\"merge_lane\": { \"enabled\": true,";
+    CHECK_FALSE(load_text(mutated(from, "\"merge_lanex\": { \"enabled\": true,")));        // the block is required
+    CHECK_FALSE(load_text(mutated(from, "\"merge_lane\": { \"enabled\": 1,")));            // a boolean
+    CHECK_FALSE(load_text(mutated(from, "\"merge_lane\": { \"bogus\": 1, \"enabled\": true,")));
+    CHECK_FALSE(load_text(mutated("\"max_through_deflection_deg\": 35", "\"max_through_deflection_deg\": 0")));
+    CHECK_FALSE(load_text(mutated("\"max_through_deflection_deg\": 35", "\"max_through_deflection_deg\": 90")));
+    CHECK_FALSE(load_text(mutated("\"max_ramp_angle_deg\": 60", "\"max_ramp_angle_deg\": 90")));
+    CHECK_FALSE(load_text(mutated("\"max_ramp_angle_deg\": 60", "\"max_ramp_angle_deg\": 60.5")));   // integer degrees
+    CHECK_FALSE(load_text(mutated("\"direction_probe_m\": 10", "\"direction_probe_m\": 0")));
+    CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1001")));
+    CHECK_FALSE(load_text(mutated("\"landing_min_m\": 30", "\"landing_min_m\": 81")));             // above landing_max_m
+    CHECK_FALSE(load_text(mutated("\"max_landing_offset_mm\": 8000", "\"max_landing_offset_mm\": 20001")));
+    // The landing S-ramp must not be sharper than min_edge_radius_m of the link classes: 4 W / a^2 <= 1 / R.
+    CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1")));          // 8 m over 30 m: radius far under 60 m
+    const auto off = load_text(mutated(from, "\"merge_lane\": { \"enabled\": false,"));
+    REQUIRE(off); CHECK_FALSE(off->merge_lane.enabled);
+    CHECK(off->underpass == builtin_road_rules_de().underpass);
+    // A disabled block is not checked against the curvature bound (nothing lands).
+    auto sharp = mutated(from, "\"merge_lane\": { \"enabled\": false,");
+    const std::string rate = "\"landing_m_per_m\": 12";
+    const auto at = sharp.find(rate);
+    REQUIRE(at != std::string::npos);
+    sharp.replace(at, rate.size(), "\"landing_m_per_m\": 1");
+    CHECK(load_text(sharp));
 }

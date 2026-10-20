@@ -90,7 +90,8 @@ struct OffsetCorrection {           // lateral shift c(s) added to the anchor po
 };
 
 enum class JoinKind : std::uint8_t { None = 0 /*junction or dead end*/, Consistent = 1, LaneChange = 2,
-                                     InferredAlignment = 3, PlacementConflict = 4 };
+                                     InferredAlignment = 3, PlacementConflict = 4,
+                                     Landing = 5 /* a merge / exit ramp's end, landed on the added lane of the single arm (G2M-028): neighbour = that way, raw_delta_mm = the landing offset */ };
 struct JoinRecord {
     JoinKind kind = JoinKind::None;
     std::int64_t neighbour_way_id = 0;   // 0 when kind == None

@@ -216,6 +216,8 @@ TEST_CASE("T1 fixtures: z on the reference equals the profile along real stretch
         if (!entry.profile || !entry.cross_section) continue;
         // Entries with a carved feature are skipped: F is non-zero on the reference there.
         if (std::any_of(geometry->features.begin(), geometry->features.end(), [&](const auto& x) { return x.entry_index == ei; })) continue;
+        // A merge ramp lands off its reference line (G2M-028): t = 0 is then off the carriageway centre and the crown shows.
+        if (entry.cross_section->start_join.kind == JoinKind::Landing || entry.cross_section->end_join.kind == JoinKind::Landing) continue;
         ++checked;
         const double length = entry.profile->reference.length_m;
         for (double s = 0; s <= length; s += 2.5) {
