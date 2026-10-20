@@ -86,6 +86,7 @@ struct NodeRec { double east = 0, north = 0; std::vector<End> ends; int declined
 struct Scan {
     std::map<std::int64_t, NodeRec> nodes;
     std::size_t floors = 0, invariance_mismatch = 0;
+    RoadCompletionStats sum;            // 7a-2 design-floor counters summed over tiles
     std::size_t infeasible_pairs = 0;   // 7a-2: adjacent portal pairs the floor cannot climb between (anchors moved; summed over tiles)
 };
 
@@ -102,6 +103,13 @@ Scan scan(const RoadGraph& world, const DemFn& dem, const RoadCompletionOptions&
         RoadCompletionStats tile_stats; go.stats = &tile_stats;
         auto tile = g2m_test::geometry_in_tile_with(world, key, go); REQUIRE(tile);
         out.infeasible_pairs += tile_stats.floor_pairs_shifted;
+        out.sum.floor_components += tile_stats.floor_components; out.sum.floor_pairs += tile_stats.floor_pairs;
+        out.sum.floor_pairs_beyond_grade += tile_stats.floor_pairs_beyond_grade; out.sum.floor_pairs_still_beyond_grade += tile_stats.floor_pairs_still_beyond_grade;
+        out.sum.floor_anchor_misses += tile_stats.floor_anchor_misses; out.sum.floor_unsolved += tile_stats.floor_unsolved; out.sum.floor_not_converged += tile_stats.floor_not_converged;
+        out.sum.floor_entries += tile_stats.floor_entries; out.sum.floor_entry_failed += tile_stats.floor_entry_failed; out.sum.floor_entry_straight += tile_stats.floor_entry_straight;
+        out.sum.floor_fit_over_250mm += tile_stats.floor_fit_over_250mm;
+        out.sum.floor_fit_max_deviation_m = std::max(out.sum.floor_fit_max_deviation_m, tile_stats.floor_fit_max_deviation_m);
+        out.sum.floor_max_shift_m = std::max(out.sum.floor_max_shift_m, tile_stats.floor_max_shift_m);
         for (std::size_t i = 0; i < tile->entries.size(); ++i) {
             const auto& e = tile->entries[i];
             const auto* way = find_way(world, e.way_id);
@@ -306,6 +314,12 @@ TEST_CASE("portal continuity (7a-1): tunnel floors meet the ground road at every
             const std::string label = std::string(file) + (tilted ? " tilted" : " flat");
             const Verdict v = judge(s, label.c_str());
             CHECK(s.floors > 0);
+            std::printf("[portal 7a-2 %s] components %zu (tile reads), unsolved %zu, not converged %zu; adjacent pairs %zu, %zu beyond the grade outright, %zu still beyond after the move, anchors moved up to %.3f m, %zu anchor misses; entries %zu (%zu straight, %zu failed); fit deviation max %.3f m (%zu over 0.25 m)\n",
+                label.c_str(), s.sum.floor_components, s.sum.floor_unsolved, s.sum.floor_not_converged, s.sum.floor_pairs, s.sum.floor_pairs_beyond_grade,
+                s.sum.floor_pairs_still_beyond_grade, s.sum.floor_max_shift_m, s.sum.floor_anchor_misses, s.sum.floor_entries, s.sum.floor_entry_straight,
+                s.sum.floor_entry_failed, s.sum.floor_fit_max_deviation_m, s.sum.floor_fit_over_250mm);
+            CHECK(s.sum.floor_unsolved == 0);
+            CHECK(s.sum.floor_anchor_misses == 0);
             // 7a-2: an anchor is met exactly (dz_bad 0) except at the portals of a pair the floor cannot climb between under the road grade: the
             // reach rule moves the anchors toward each other, a ground stretch that was accepted strictly keeps its end and a step of the
             // move remains there; every such node is one of the counted infeasible pairs (two portals per pair at most).

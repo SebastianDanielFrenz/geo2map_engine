@@ -60,9 +60,9 @@ struct Env {
 };
 // The deriver's inputs (both discovery stages); `bridge_far_end` = false stops after stage 1 (the pre-D35 set).
 std::unique_ptr<Env> make_env(const RoadGraph& world, const TileKey& key, const Fn& height, bool bridge_far_end = true,
-        std::int64_t walk_margin_mm = kRoadBridgeWalkMarginMm) {
+        std::int64_t walk_margin_mm = kRoadBridgeWalkMarginMm, bool components = true) {
     auto env = std::make_unique<Env>();
-    auto in = g2m_test::road_geom_inputs(world, key, bridge_far_end, walk_margin_mm); REQUIRE(in);
+    auto in = g2m_test::road_geom_inputs(world, key, bridge_far_end, walk_margin_mm, components); REQUIRE(in);
     env->tile = std::move(in->tile); env->context = std::move(in->context);
     env->heights.resize(in->dem_keys.size());
     std::vector<const HeightTile*> views;
@@ -1359,4 +1359,117 @@ TEST_CASE("portal reach (7a-1): a short tunnel between ground ends it cannot cli
 // 7a-2: the same scene under the design floor (5 % road grade): the reach handler is the one of 7a-1 with the structure grade.
 TEST_CASE("portal reach (7a-2): the design floor meets the ground ends exactly, the ground gives way by the excess over 0.9 of the road grade", "[layer][roads][completion][tunnel][portal][structure]") {
     portal_reach_case(served_road_completion_options(), served_road_completion_options().structure_max_grade, true);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Phase 7a-2: the design floor of a tunnel COMPONENT. A Y of three tunnels meets at node 200 (500, 0), three tiles wide: the
+// west leg runs 1200 m to a degree-2 join in tile 454 and on in its own way to a mouth in tile 453, the two east legs end in tile 456. The floor is one function of the whole Y: a
+// single value at the shared node, the same from every tile that reads any leg of it.
+namespace {
+const TileKey kTileWest2{zone, 2, 454, 5421}, kTileWest3{zone, 2, 453, 5421};
+std::vector<N> leg(std::int64_t first_id, double x0, double y0, double x1, double y1, double step, std::int64_t first_node_id = -1) {
+    std::vector<N> out;
+    const double len = std::hypot(x1 - x0, y1 - y0); const int n = static_cast<int>(std::ceil(len / step));
+    for (int i = 0; i <= n; ++i) out.push_back({i == 0 && first_node_id >= 0 ? first_node_id : first_id + i, x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n});
+    return out;
+}
+std::vector<std::int64_t> ids_of(const std::vector<N>& v) { std::vector<std::int64_t> r; for (const auto& n : v) r.push_back(n.id); return r; }
+// Tunnel ways 31 (west), 32 (north-east), 33 (south-east) from node 200; ground roads 10 (west), 12 (NE), 13 (SE) beyond the mouths.
+RoadGraph y_world() {
+    const auto w = leg(1000, 500, 0, -700, 0, 25, 200), ne = leg(2000, 500, 0, 700, 90, 25, 200), se = leg(3000, 500, 0, 700, -90, 25, 200);
+    const auto w2 = leg(4000, -700, 0, -1700, 0, 25, w.back().id);   // the west leg continues in its own way, a degree-2 join at (-700, 0)
+    std::vector<N> nodes = w;
+    nodes.insert(nodes.end(), w2.begin() + 1, w2.end());
+    nodes.insert(nodes.end(), ne.begin() + 1, ne.end()); nodes.insert(nodes.end(), se.begin() + 1, se.end());
+    nodes.push_back({1, -2000, 0}); nodes.push_back({2, -1850, 0});
+    nodes.push_back({3, 850, 160}); nodes.push_back({4, 1000, 220});
+    nodes.push_back({5, 850, -160}); nodes.push_back({6, 1000, -220});
+    return world_of(nodes, {{10, {1, 2, w2.back().id}}, {31, ids_of(w), kTunnel}, {34, ids_of(w2), kTunnel}, {32, ids_of(ne), kTunnel}, {33, ids_of(se), kTunnel},
+        {12, {ne.back().id, 3, 4}}, {13, {se.back().id, 5, 6}}});
+}
+double y_terrain(double e, double n) {
+    const double x = e - kOriginE, y = n - kOriginN;
+    return 100.0 + 0.012 * x + 0.01 * y + 25.0 * std::exp(-((x - 100) * (x - 100)) / (2 * 200.0 * 200.0));
+}
+double max_grade_of(const RoadProfile& p) {
+    double worst = 0; const double L = p.reference.length_m;
+    for (double s = 1; s <= L; s += 1) worst = std::max(worst, std::fabs(p.at(s)->height_m - p.at(s - 1)->height_m));
+    return worst;
+}
+}
+TEST_CASE("design floor (7a-2): a Y of three tunnels has ONE floor value at its shared node, below the ground and within the road grade; chains solved separately are the recorded sabotage", "[layer][roads][completion][tunnel][structure][component]") {
+    const auto world = y_world();
+    const auto env = make_env(world, kTile, y_terrain);
+    const auto o = served_road_completion_options();
+    REQUIRE(o.tunnel_design_floor);
+    RoadCompletionStats st;
+    const auto tile = build_with(*env, o, &st);
+    const auto w = index_of(tile, 31, 0), ne = index_of(tile, 32, 0), se = index_of(tile, 33, 0);
+    for (const auto i : {w, ne, se}) { REQUIRE(tile.entries[i].profile); CHECK(tile.origins[i].provenance == ProfileProvenance::TunnelFloor); }
+    // Recorded sabotage (road_completion.cpp component_for following only the same way, i.e. every way solved as its own chain): 14 failures
+    // in the two component cases - 4 components, the shared node a free end at the DEM sample (109.383 m, not 103.620), grades 0.0009/0.0073 on two legs.
+    CHECK(st.floor_components == 1);
+    CHECK(st.floor_stretches == 4);
+    CHECK(st.floor_portals == 3);
+    CHECK(st.floor_free_portals == 0);
+    CHECK(st.floor_unsolved == 0);
+    CHECK(st.floor_anchor_misses == 0);
+    const double jw = end_height(tile, w, false), jne = end_height(tile, ne, false), jse = end_height(tile, se, false);
+    std::printf("[component Y] shared node: west %.6f, north-east %.6f, south-east %.6f; ground at the node %.3f; grades %.4f %.4f %.4f; %zu passes\n", jw, jne, jse,
+        y_terrain(kOriginE + 500, kOriginN), max_grade_of(*tile.entries[w].profile), max_grade_of(*tile.entries[ne].profile), max_grade_of(*tile.entries[se].profile),
+        st.floor_reports.empty() ? 0u : st.floor_reports.front().passes);
+    CHECK(std::fabs(jw - jne) < 1e-6); CHECK(std::fabs(jw - jse) < 1e-6);
+    const double needed = o.structure_clearance_m + o.structure_roof_m;
+    CHECK(jw <= y_terrain(kOriginE + 500, kOriginN) - needed + 0.01);   // under the ground at the junction: not the DEM sample a free end would take
+    for (const auto i : {w, ne, se}) CHECK(max_grade_of(*tile.entries[i].profile) <= o.structure_max_grade + 0.01);
+}
+namespace {
+// y_terrain with a ripple around the west mouth, so the ground road's level there is not the DEM sample at the node.
+double y_bumpy(double e, double n) { const double x = e - kOriginE; return y_terrain(e, n) + (x < -1600 ? 0.4 * std::sin(x / 6.4) : 0.0); }
+}
+TEST_CASE("design floor (7a-2): a component across four tiles gives the same floor from every tile; the context without the component walk is the control", "[layer][roads][completion][tunnel][structure][component][invariance]") {
+    const auto world = y_world();
+    const auto o = served_road_completion_options();
+    const auto far_west = make_env(world, kTileWest3, y_bumpy), west = make_env(world, kTileWest2, y_bumpy), mid = make_env(world, kTile, y_bumpy), east = make_env(world, kTileEast, y_bumpy);
+    RoadCompletionStats s0, sw, sm, se;
+    const auto z = build_with(*far_west, o, &s0), a = build_with(*west, o, &sw), b = build_with(*mid, o, &sm), c = build_with(*east, o, &se);
+    for (const auto* s : {&s0, &sw, &sm, &se}) { CHECK(s->floor_unsolved == 0); CHECK(s->floor_components == 1); CHECK(s->floor_stretches == 4); }
+    const auto same_in = [&](const RoadGeomTile& x, const RoadGeomTile& y, std::int64_t way) {
+        const auto i = index_of(x, way, 0), j = index_of(y, way, 0);
+        return x.origins[i].provenance == ProfileProvenance::TunnelFloor && same_outcome(x.entries[i], x.origins[i], y.entries[j], y.origins[j]);
+    };
+    // Way 34 is read by tiles 453 and 454, way 31 by 454 and 455, ways 32 and 33 by 455 and 456: byte-identical outcome.
+    CHECK(same_in(z, a, 34)); CHECK(same_in(a, b, 31)); CHECK(same_in(b, c, 32)); CHECK(same_in(b, c, 33));
+    // The junction height seen from the west tile (leg 31) is the one the east tile (leg 32) has; the same at the degree-2 join (-700, 0).
+    const double jw = end_height(b, index_of(b, 31, 0), false), je = end_height(c, index_of(c, 32, 0), false);
+    const double kw = end_height(a, index_of(a, 31, 0), true), ke = end_height(z, index_of(z, 34, 0), false);
+    std::printf("[component Y] junction from the middle tile %.9f, from the east tile %.9f; degree-2 join from tile 454 %.9f, from tile 453 %.9f\n", jw, je, kw, ke);
+    CHECK(jw == je); CHECK(kw == ke);
+    // The mouths meet the ground roads' ends (anchors are exact), in the tile that holds the road.
+    CHECK(std::fabs(end_height(z, index_of(z, 34, 0), true) - end_height(z, last_of(z, 10), true)) <= 0.01);
+    CHECK(std::fabs(end_height(c, index_of(c, 32, 0), true) - end_height(c, index_of(c, 12, 0), false)) <= 0.01);
+    CHECK(std::fabs(end_height(c, index_of(c, 33, 0), true) - end_height(c, index_of(c, 13, 0), false)) <= 0.01);
+    // Control: without the component walk the east tile's context lacks the ground road at the far mouth (three tiles on).
+    const auto narrow = make_env(world, kTileEast, y_bumpy, true, kRoadBridgeWalkMarginMm, false);
+    const auto has_way = [](const Env& e, std::int64_t id) { return std::any_of(e.context.ways.begin(), e.context.ways.end(), [&](const auto& w) { return w.osm_id == id; }); };
+    std::printf("[component Y] east tile's context: way 34 / ground road 10 with the walk %d/%d, without %d/%d\n",
+        has_way(*east, 34) ? 1 : 0, has_way(*east, 10) ? 1 : 0, has_way(*narrow, 34) ? 1 : 0, has_way(*narrow, 10) ? 1 : 0);
+    CHECK(has_way(*east, 34)); CHECK(has_way(*east, 10)); CHECK_FALSE(has_way(*narrow, 10));   // way 34 itself is in the stage-1 context (its nodes lie in tile 454, a node tile of way 31)
+    // ... so the component cannot be solved in that tile: no floor, where every other tile has the same one.
+    RoadCompletionStats sn; const auto d = build_with(*narrow, o, &sn);
+    const auto i32 = index_of(d, 32, 0);
+    const bool same = d.entries[i32].profile && same_outcome(c.entries[index_of(c, 32, 0)], c.origins[index_of(c, 32, 0)], d.entries[i32], d.origins[i32]);
+    std::printf("[component Y] control (no component walk): east tile unsolved components %zu (with the walk %zu), same floor: %d\n", sn.floor_unsolved, se.floor_unsolved, same ? 1 : 0);
+    CHECK(sn.floor_unsolved == 1);   // the far mouth lies outside the tile's DEM and graph reads
+    CHECK_FALSE(same);
+}
+TEST_CASE("design floor (7a-2): golden bytes of one tunnel tile (the Y component, tile 455)", "[layer][roads][completion][tunnel][structure][component][golden]") {
+    const auto world = y_world();
+    const auto env = make_env(world, kTile, y_terrain);
+    const auto tile = build_with(*env, served_road_completion_options());
+    auto bytes = encode_road_geom(tile); REQUIRE(bytes);
+    const auto body = encode_body(*bytes); REQUIRE(body);
+    Fnv1a64 hash; hash.u64(body->size()); hash.bytes(body->data(), body->size());
+    std::printf("[golden Y tile 455] %zu body bytes, fnv %016llx\n", body->size(), static_cast<unsigned long long>(hash.value()));
+    CHECK(hash.value() == 0x3028837f4a976ec2ull);   // recorded 7a-2 (design floor, encoding 10 as served today); a change must be explained in the commit
 }

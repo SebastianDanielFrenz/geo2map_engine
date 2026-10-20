@@ -102,7 +102,7 @@ inline g2m::RoadCompletionOptions served_7a1() {
 }
 // `walk_margin_mm`: the D48 squares of road_bridge_dependencies (0 = the pre-D48 stage 2, a negative control).
 inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world, const g2m::TileKey& key, bool bridge_far_end = true,
-        std::int64_t walk_margin_mm = g2m::kRoadBridgeWalkMarginMm) {
+        std::int64_t walk_margin_mm = g2m::kRoadBridgeWalkMarginMm, bool components = true) {
     using namespace g2m;
     RoadGeomInputs in;
     auto tile = select_road_graph_tile(world, key); if (!tile) return tile.error();
@@ -125,6 +125,18 @@ inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world,
         const auto portals = road_portal_dependencies(in.tile.graph, *context, key.zone, &key); if (!portals) return portals.error();
         for (const auto& d : *portals) (d.layer == kRoadGraphLayer ? graph_keys : dem_keys).insert(d.key);
         context = merge(); if (!context) return context.error();
+        // 7a-2: the tunnel components of the tile, one round of road_component_dependencies per pass over the growing context
+        // (the deriver's component_dependencies); the closure is the component whatever tile asks.
+        for (int round = 0; components && round < 256; ++round) {
+            const auto step = road_component_dependencies(in.tile.graph, *context, key.zone, &key); if (!step) return step.error();
+            bool grew = false;
+            for (const auto& d : *step) {
+                auto& set = d.layer == kRoadGraphLayer ? graph_keys : dem_keys;
+                if (set.insert(d.key).second && d.layer == kRoadGraphLayer) grew = true;
+            }
+            if (!grew) break;
+            context = merge(); if (!context) return context.error();
+        }
     }
     in.context = std::move(*context);
     in.dem_keys.assign(dem_keys.begin(), dem_keys.end());
