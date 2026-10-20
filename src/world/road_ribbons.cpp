@@ -5,6 +5,7 @@
 #include "g2m/world/road_ribbons.h"
 #include "g2m/world/road_structures.h"
 #include "g2m/core/det_math.h"
+#include "g2m/layer/road_cross_section.h"
 #include "g2m/layer/road_furniture.h"
 #include <algorithm>
 #include <charconv>
@@ -22,6 +23,26 @@ std::string tag(const g2m::RoadGraphWay& way,std::string_view key) {for(const au
 int integer(const std::string& s) {int n=0;auto r=std::from_chars(s.data(),s.data()+s.size(),n);return r.ec==std::errc{}&&r.ptr==s.data()+s.size()&&n>=0&&n<=30?n:0;}
 
 }
+std::uint16_t lane_arrow_glyphs(std::string_view lane_value,std::size_t* unknown_tokens){
+ std::uint16_t turns=0;
+ for(std::size_t begin=0;begin<=lane_value.size();) {
+  const auto end=lane_value.find(';',begin);
+  const auto piece=lane_value.substr(begin,end==std::string_view::npos?std::string_view::npos:end-begin);
+  const auto bit=g2m::parse_turn_token(piece);
+  if(bit)turns|=*bit;else if(unknown_tokens)++*unknown_tokens; // an unknown value draws nothing and is counted
+  if(end==std::string_view::npos)break;begin=end+1;
+ }
+ using g2m::TurnBit;
+ std::uint16_t glyphs=0;
+ const auto map=[&](std::uint16_t turn,std::uint16_t glyph){if(turns&turn)glyphs|=glyph;};
+ map(TurnBit::kTurnThrough,kArrowThrough);map(TurnBit::kTurnLeft,kArrowLeft);map(TurnBit::kTurnRight,kArrowRight);
+ map(TurnBit::kTurnSlightLeft,kArrowSlightLeft);map(TurnBit::kTurnSlightRight,kArrowSlightRight);
+ map(TurnBit::kTurnSharpLeft,kArrowSharpLeft);map(TurnBit::kTurnSharpRight,kArrowSharpRight);
+ // none and reverse draw nothing. A merge marks the lane that ends: with any other direction on the same lane it
+ // continues, so no Verschwenkungspfeil.
+ if(!glyphs){map(TurnBit::kTurnMergeToLeft,kArrowMergeLeft);map(TurnBit::kTurnMergeToRight,kArrowMergeRight);}
+ return glyphs;
+}
 int road_priority_rank(const g2m::RoadGraphWay& w){
  const auto highway=tag(w,"highway");
  // A link yields where it ends: onto its road (merging, StVO 18(3)) and at the ramp terminal onto any road but a
@@ -31,6 +52,19 @@ int road_priority_rank(const g2m::RoadGraphWay& w){
  const auto it=rank.find(highway);return it==rank.end()?0:it->second;
 }
 namespace {
+// ---- turn arrows (lane markings from OSM turn:lanes) ----
+// The glyph of every turn:lanes token, from the explicit table road_cross_section.h's parse_turn_token reads (no substring
+// tests: "slight_right" and "merge_to_left" contain "right" and "left"). Glyphs are drawn in (side, along) metres from
+// the lane centre at the arrow station: side > 0 is the left of travel, along > 0 ahead. Stroke = the shaft segment
+// (ax, ay, bx, by), head = three triangle vertices. The mirrored copy (right-hand variants) negates side.
+struct ArrowShape { double stroke[4]; double head[6]; };
+// Slight (30 degrees off the shaft) and sharp (120 degrees: back toward the side) bends; the full left/right turn
+// keeps its original literal glyph in the painter. Merge: the diagonal of a lane that ends, 19.4 degrees off the lane
+// direction, from 0.55 m on the near side of the lane centre 2 m behind the station to 0.75 m across 1.7 m ahead; the
+// head stays inside a lane of the 2.4 m minimum width (0.75 + 0.45 half base < 1.2).
+constexpr ArrowShape kSlightShape{{0,0,.55,.95},{.221,1.14,.879,.76,.85,1.47}};
+constexpr ArrowShape kSharpShape{{0,0,.606,-.35},{.781,-.047,.431,-.653,1.0825,-.625}};
+constexpr ArrowShape kMergeShape{{-.55,-2,.468,.898},{.043,1.047,.893,.749,.75,1.7}};
 constexpr double kJunctionLiftM=0.004; // above the ribbons (lift) and the turn arrows (+3 mm)
 // ---- junction surfaces (geo2map roads.geom encoding 7, design D44 kerb returns) ----
 struct P2 { double x,y; };
@@ -121,6 +155,18 @@ std::optional<LaneLayout> lane_layout(const g2m::RoadGeomEntry& entry,const g2m:
  // A paving-stone or cobbled road carries no painted lines.
  l.flags=(paving&kStones)!=0?paving:((marking?kMarking:0)|(edge_lines?kEdgeLines:0)|(tag(w,"overtaking")=="no"?kSolidSeparator:0)|(l.fast?kFast:0)|paving);
  return l;
+}
+// A turn:lanes lane (one token, ';' compounds allowed) that only turns left: left, slight_left or sharp_left, optionally with
+// reverse, and no other value (through, right family, merge_to_*, none).
+bool left_only_lane(std::string_view lane_value) {
+ constexpr std::uint16_t kLeft=g2m::kTurnLeft|g2m::kTurnSlightLeft|g2m::kTurnSharpLeft;
+ std::uint16_t turns=0;
+ for(std::size_t begin=0;begin<=lane_value.size();) {
+  const auto end=lane_value.find(';',begin);
+  if(const auto bit=g2m::parse_turn_token(lane_value.substr(begin,end==std::string_view::npos?std::string_view::npos:end-begin)))turns|=*bit;
+  if(end==std::string_view::npos)break;begin=end+1;
+ }
+ return (turns&kLeft)!=0&&(turns&~(kLeft|g2m::kTurnReverse))==0;
 }
 const g2m::RoadGraphWay* find_way(const g2m::RoadGeomTile& geometry,std::int64_t id) {
  auto it=std::lower_bound(geometry.source.graph.ways.begin(),geometry.source.graph.ways.end(),id,[](const auto& w,auto v){return w.osm_id<v;});
@@ -490,7 +536,8 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
    const auto turns=a.layout.one?tag(*a.way,"turn:lanes"):tag(*a.way,a.at_end?"turn:lanes:forward":"turn:lanes:backward");
    int g=0;std::size_t begin=0,tokens=0;bool counting=true;
    while(true){const auto end=turns.find('|',begin);const auto t=turns.substr(begin,end==std::string::npos?std::string::npos:end-begin);++tokens;
-    if(counting&&t.find("left")!=std::string::npos&&t.find("through")==std::string::npos&&t.find("right")==std::string::npos)++g;else counting=false;
+    // A left-only lane: a left family value and no through, right or merge value (merge_to_left is a lane that ends).
+    if(counting&&left_only_lane(t))++g;else counting=false;
     if(end==std::string::npos)break;begin=end+1;}
    if(turns.empty()||static_cast<int>(tokens)!=a.in_lanes||g<2)continue;
    const Approach* target=nullptr;double target_dev=1e9;
@@ -644,14 +691,33 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
      mesh.vertices.insert(mesh.vertices.end(),{*a,*b,*c});mesh.indices.insert(mesh.indices.end(),{first,first+1,first+2});
     };
     const auto stroke=[&](double ax,double ay,double bx,double by){const double dx=bx-ax,dy=by-ay,len=det::hypot(dx,dy);if(len<.01)return;const double nx=-dy/len*.11,ny=dx/len*.11;triangle(ax+nx,ay+ny,ax-nx,ay-ny,bx+nx,by+ny);triangle(ax-nx,ay-ny,bx-nx,by-ny,bx+nx,by+ny);};
-    const auto& token=tokens[lane];
-    const bool through=token.find("through")!=std::string::npos;
-    const bool left=token.find("left")!=std::string::npos,right=token.find("right")!=std::string::npos;
-    if(!through&&!left&&!right)continue;
+    std::size_t unknown=0;
+    const auto glyphs=lane_arrow_glyphs(tokens[lane],&unknown);
+    mesh.unknown_turn_tokens+=unknown;
+    if(!glyphs)continue;
+    ++mesh.turn_arrow_lanes;
+    // A head wound counter-clockwise in (side, along); the mirrored copy swaps two vertices to keep that winding.
+    const auto bend=[&](const ArrowShape& a,double sign){
+     stroke(sign*a.stroke[0],a.stroke[1],sign*a.stroke[2],a.stroke[3]);
+     if(sign>0)triangle(a.head[0],a.head[1],a.head[2],a.head[3],a.head[4],a.head[5]);
+     else triangle(-a.head[0],a.head[1],-a.head[4],a.head[5],-a.head[2],a.head[3]);
+    };
+    if(glyphs&(kArrowMergeLeft|kArrowMergeRight)) {
+     // Verschwenkungspfeil (StVO Zeichen 297.1): one diagonal arrow in the lane that ends, pointing into the lane it
+     // merges into. It replaces the shared shaft; lane_arrow_glyphs sets it only for a lane with no other direction.
+     ++mesh.merge_arrows;
+     if(glyphs&kArrowMergeLeft)bend(kMergeShape,1);
+     if(glyphs&kArrowMergeRight)bend(kMergeShape,-1);
+     continue;
+    }
     stroke(0,-2,0,0);
-    if(through){stroke(0,0,0,1.1);triangle(-.45,.85,.45,.85,0,1.7);}
-    if(left){stroke(0,0,.7,.5);triangle(.65,.15,.65,.85,1.15,.5);}
-    if(right){stroke(0,0,-.7,.5);triangle(-.65,.15,-.65,.85,-1.15,.5);}
+    if(glyphs&kArrowThrough){stroke(0,0,0,1.1);triangle(-.45,.85,.45,.85,0,1.7);}
+    if(glyphs&kArrowLeft){stroke(0,0,.7,.5);triangle(.65,.15,.65,.85,1.15,.5);}
+    if(glyphs&kArrowRight){stroke(0,0,-.7,.5);triangle(-.65,.15,-.65,.85,-1.15,.5);}
+    if(glyphs&kArrowSlightLeft)bend(kSlightShape,1);
+    if(glyphs&kArrowSlightRight)bend(kSlightShape,-1);
+    if(glyphs&kArrowSharpLeft)bend(kSharpShape,1);
+    if(glyphs&kArrowSharpRight)bend(kSharpShape,-1);
    }
   };
   if(one)arrows(tag(w,"turn:lanes"),direction=="-1"?-1:1,0,lanes);

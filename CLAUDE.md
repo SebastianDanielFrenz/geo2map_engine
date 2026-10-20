@@ -210,7 +210,8 @@ geo2map_engine/
                                       caller's RoadSeparation), StructureSet + build_structure_set(RoadGeomTile)
     road_ribbons.h                   (phase 3a) RoadRibbonVertex/RoadRibbonTile, build_road_ribbons(geometry,
                                       key, ground fn, lift) incl. junction surfaces and markings,
-                                      add_junction_surfaces, road_priority_rank (StVO 18(3) rank)
+                                      add_junction_surfaces, road_priority_rank (StVO 18(3) rank), lane_arrow_glyphs
+                                      (turn:lanes token -> ArrowGlyph bits via parse_turn_token, G2M-024)
     buildings.h                      (phase 3b) Building/BuildingPoint/BuildingGround/BuildingParams,
                                       extract_buildings, BuildingSet + build_building_set(OsmTile, ground)
     view_streamer.h                  (phase 3b) render LOD around a focus: ViewChunk (mesh + class ids, carve
@@ -597,6 +598,10 @@ end of `CMakeLists.txt`):
   `refgen/refgen_meshes.cpp`, target `g2m_world_mesh_refgen` only with
   `-DG2M_WORLD_MESH_REFGEN_DIR=<dir>`), plus the game's two junction-surface
   tests. g2m_world_tests links `g2m_decode` and reads the OSM fixtures.
+  `test_road_arrows.cpp` (`[arrows]`, G2M-024): the turn:lanes token table, the ribbon of the real trunk_link
+  179708586 (through|slight_right|merge_to_left) and the converging merge_to_right|merge_to_left pair, lane
+  independence, junction guide lines; six recorded sabotages. `tools/road_census/main.cpp` (`g2m_road_census`,
+  built with g2m_tiler: `arrows STORE SCOPE X0 X1 Y0 Y1` / `way ... IDS` / `bow ... FACTOR MARGIN_M [IDS]`, G2M-024's chord-bound census) is the region census.
   Phase 3b (`buildings`, `view_streamer`, `ring_streamer`): tests
   `test_buildings.cpp` (`[buildings]`; synthetic tag scene + every fixture tile
   with buildings == `building_pins.inc`), `test_view_streamer.cpp`
@@ -1194,9 +1199,27 @@ constant grade between its portal samples (DEM floor below, or when steeper than
 with the game's mesh code). Tests `[tunnel]` in test_road_completion.cpp (tile edge invariance + controls, fixture measurement)
 and test_road_rules.cpp.
 
+Reference-line chord bound (vault G2M-024): `de.json` block `reference` (`ReferenceRules{chord_half_width_percent 100,
+chord_margin_mm 3000}`, both [assumed], 0/0 = off, integers 0..1000 / 0..100000, required). `build_road_geom_tile` writes
+them into `ReferenceFitLimits::chord_half_width_factor/chord_margin_m` (whatever the caller set); `road_reference.cpp`
+`fit_geometry` refuses a clothoid whose perpendicular distance from its node-pair chord exceeds factor x half the way's width
++ margin (falls to `rounded()`), the smoothing refit passes bound - half corridor; `fit_stretch` keeps the unbounded fit when
+the bounded one is unfittable (`RoadReferenceLine::chord_bound_relaxed`, OR-ed by `fit()`). roads.geom config text gains
+`reference-chord=G2M-024/100/3000` (the roads.geom release id and the de.json rules hash moved). Census: lines > 3 m from the
+OSM polyline 16435 -> 5432, > 10 m 4699 -> 5, max 31.99 -> 16.9 m, 11039 stretches changed, motorway/trunk 0 changed;
+`g2m_road_census bow STORE SCOPE X0 X1 Y0 Y1 FACTOR MARGIN_M [WAY...]`. Tests `tests/layer/test_road_chord_bound.cpp`
+(`[chord]`: the two-node track between bending ways 26.8/19.9/15.8 m -> 0, the 150 degree hairpin 23 -> 0.67 m, motorway R
+400 m bit-identical, relaxed hairpin on a primary road, limits validation, injection through the built tile; sabotages: check
+removed, factor/margin not injected, rescue removed, bound x0.1 - a same-parameter distance instead of the perpendicular one
+is indistinguishable on every case tried) and the `reference` block cases in test_road_rules.cpp (`[reference]`).
+`test_road_junction.cpp` D34 runs its census with the bound off (the shipped bound straightens a bowed way at the junction
+whose offset rings did not nest). Re-recorded for the moved reference lines: goldens g3c (21 of 26 lines), g3d (7 of 9), g3j
+(19 of 73), g3xs (19 of 27) - with the bound off (0/0) all four pass unchanged, so the bound is the whole cause - and 32
+cases of `road_mesh_pins.inc`.
+
 Underpass decks (design D53-D58, owner decision 2026-10-15, racing_game PR #5): `data/road_rules/de.json` block `underpass`
 (`UnderpassRules`: enabled, min_depth 1 m, window 50 m, sag radius 300 m, max span 80 m, abutment 2 m, depth tol 0.1 m,
-lower margin 1 m, end clearance 1 m; de.json SHA `2fe0826f...dfa0`). `include/g2m/layer/road_underpass.h`
+lower margin 1 m, end clearance 1 m; de.json SHA `acd18c88...e0b5` since G2M-024 (was `8543303a...ca4a` after D65, `2fe0826f...dfa0` before)). `include/g2m/layer/road_underpass.h`
 `RoadUnderpassFinder` (spans per ground stretch: crossing of a lower-layer/tunnel way without a shared node, rims from the
 upper hull of the window minus a 300 m sag, deck = lower footprint + depression + abutments clipped to the rims; mask =
 rim chord over the span, applied via `RoadProfileLimits::underpass` in strict/Retry and GroundCompleted) and

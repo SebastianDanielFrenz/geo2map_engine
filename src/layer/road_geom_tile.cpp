@@ -311,6 +311,9 @@ Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const Road
     // the limits, and names the decks served afterwards.
     std::optional<RoadUnderpassFinder> finder;
     RoadProfileLimits profile_limits = limits;
+    // G2M-024: the chord bound of the reference fits is de.json's reference block (zero = off), whatever the caller set.
+    profile_limits.reference.chord_half_width_factor = static_cast<double>(rules.reference.chord_half_width_percent) / 100.0;
+    profile_limits.reference.chord_margin_m = static_cast<double>(rules.reference.chord_margin_mm) / 1000.0;
     if (underpass.enabled && rules.underpass.enabled) {
         const RoadGraph& crossings = underpass.crossings ? *underpass.crossings : context ? *context : graph.graph;
         if (underpass.crossings) { const auto ok = contains_tile_ways(crossings); if (!ok) return invalid("crossing graph lacks a tile way"); }

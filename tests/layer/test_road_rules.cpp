@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "8543303a6f630f588d135f6a44ae4571ec7f996fe970ad8f33b1b7c6a7fcca4a");
+    CHECK(to_hex(digest) == "acd18c88d4c9358e1a3967c975b8690d59e77f90a4295728654436657f8de0b5");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -233,4 +233,21 @@ TEST_CASE("The underpass block: the deck rules of untagged grade-separated cross
     const auto off = load_text(mutated(from, "\"underpass\": { \"enabled\": false,"));
     REQUIRE(off); CHECK_FALSE(off->underpass.enabled);
     CHECK(off->tunnel == builtin_road_rules_de().tunnel);
+}
+
+TEST_CASE("The reference block: the chord bound of the reference lines (G2M-024)", "[layer][road_rules][reference]") {
+    const auto& r = builtin_road_rules_de().reference;
+    CHECK(r.chord_half_width_percent == 100); CHECK(r.chord_margin_mm == 3000);
+    CHECK(embedded_text().find("\"reference\": \"Vault G2M-024") != std::string::npos);   // the source tag
+    const std::string from = "\"reference\": { \"chord_half_width_percent\": 100, \"chord_margin_mm\": 3000 }";
+    CHECK_FALSE(load_text(mutated(from, "\"referencex\": { \"chord_half_width_percent\": 100, \"chord_margin_mm\": 3000 }")));  // required
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 100 }")));                         // both keys
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 100, \"chord_margin_mm\": 3000, \"bogus\": 1 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": -1, \"chord_margin_mm\": 3000 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 1001, \"chord_margin_mm\": 3000 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 100, \"chord_margin_mm\": 100001 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 100, \"chord_margin_mm\": 3000.5 }")));  // integers only
+    const auto off = load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 0, \"chord_margin_mm\": 0 }"));
+    REQUIRE(off); CHECK(off->reference.chord_half_width_percent == 0); CHECK(off->reference.chord_margin_mm == 0);   // 0 and 0 = off
+    CHECK(off->underpass == builtin_road_rules_de().underpass);
 }

@@ -353,7 +353,8 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
         rules_hex + " join-bisector=1 context=nodes junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/200 "
         "completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05 corner-fillet=1 width-taper=5"
         " tunnel-floor=5/0.29999999999999999/20/chord:200 tunnel-cut=80/1/8 bridge-anchor-reuse=1 bridge-walk-margin=205 underpass=1 crossing-context=1"
-        " underpass-tags=D61 underpass-join=D63/61000 overpass-mask=D64";
+        " underpass-tags=D61 underpass-join=D63/61000 overpass-mask=D64"
+        " reference-chord=G2M-024/100/3000";
     CHECK(road_geom_config_text() == after);
     CHECK(deriver.config_hash() == Sha256::of(after));
     CHECK(road_geom_desc().encoding == 9);

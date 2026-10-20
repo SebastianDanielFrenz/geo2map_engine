@@ -141,6 +141,14 @@ bool read_underpass_rules(Reader& rd, const json& root, UnderpassRules& out) {
     return true;
 }
 
+bool read_reference_rules(Reader& rd, const json& root, ReferenceRules& out) {
+    const auto* r = rd.field(root, "root", "reference");
+    static constexpr const char* kPath = "reference";
+    return r && rd.keys(*r, kPath, {"chord_half_width_percent", "chord_margin_mm"}) &&
+           rd.integer(*r, kPath, "chord_half_width_percent", 0, 1000, out.chord_half_width_percent) &&
+           rd.integer(*r, kPath, "chord_margin_mm", 0, 100000, out.chord_margin_mm);
+}
+
 const CrossingPattern* find_pattern(const std::vector<CrossingPatternEntry>& table, std::string_view value) {
     const auto it = std::lower_bound(table.begin(), table.end(), value,
         [](const CrossingPatternEntry& e, std::string_view v) { return e.value < v; });
@@ -170,7 +178,7 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
     Reader rd;
     const auto fail = [&]() { return make_error(ErrorCode::InvalidArgument, "road rules: " + rd.err); };
     if (!rd.keys(j, "root", {"format", "country", "min_lane_mm", "added_lane_side", "cycle_lane_mm", "sidewalk_mm", "tagged_shoulder_mm",
-            "parking_mm", "traffic_calming", "junction", "furniture", "tunnel", "underpass", "min_edge_radius_m", "classes", "sources"})) return fail();
+            "parking_mm", "traffic_calming", "junction", "furniture", "tunnel", "underpass", "reference", "min_edge_radius_m", "classes", "sources"})) return fail();
     std::string format;
     if (!rd.text(j, "root", "format", format)) return fail();
     if (format != "g2m.road_rules/1") return make_error(ErrorCode::Unsupported, "road rules: format '" + format + "'");
@@ -206,7 +214,7 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
         }
     }
     if (!read_junction_rules(rd, j, rules.junction) || !read_furniture_rules(rd, j, rules.furniture) || !read_tunnel_rules(rd, j, rules.tunnel) ||
-        !read_underpass_rules(rd, j, rules.underpass)) return fail();
+        !read_underpass_rules(rd, j, rules.underpass) || !read_reference_rules(rd, j, rules.reference)) return fail();
     const auto* sources = rd.field(j, "root", "sources");
     if (!sources || !rd.object(*sources, "sources")) return fail();
     for (auto it = sources->begin(); it != sources->end(); ++it)
