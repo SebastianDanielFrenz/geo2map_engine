@@ -58,6 +58,7 @@ add_executable(g2m_layer_tests
   test_rail_geom.cpp
   test_road_overpass.cpp
   test_junction_gradient.cpp
+  test_portal_continuity.cpp
   test_junction_dump.cpp
   test_junction_fillets.cpp
   alloc_counter.cpp

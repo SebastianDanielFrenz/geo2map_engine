@@ -152,6 +152,7 @@ std::string rail_geom_config_text() {
     const auto& rules = builtin_rail_rules_de();
     return "g2m.rail.geom/1 enc=1 owner=first-vertex-mm piece=cut-at-first-vertex-ge-max-length"
            " profile=ground:smoothed-triangular+grade-limit-pinned-ends structure:chain-linear-dem-anchors window=src.osm-3x3"
+           " portal-anchor=7a1"
            " rules=de:" + to_hex(std::span<const std::uint8_t>(rules.content_sha256.data(), rules.content_sha256.size()));
 }
 ContentHash RailGeomDeriver::config_hash() const { return Sha256::of(rail_geom_config_text()); }

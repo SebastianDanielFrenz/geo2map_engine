@@ -94,4 +94,39 @@ Result<std::vector<InputTileRef>> road_bridge_dependencies(const RoadGraph& tile
     std::sort(dem->begin(), dem->end()); dem->erase(std::unique(dem->begin(), dem->end()), dem->end());
     return dem;
 }
+Result<std::vector<InputTileRef>> road_portal_dependencies(const RoadGraph& tile_graph, const RoadGraph& context,
+    geo::UtmZone zone, const TileKey* exclude) {
+    const auto valid_tile = validate_road_graph(tile_graph); if (!valid_tile) return valid_tile.error();
+    const auto valid_context = validate_road_graph(context); if (!valid_context) return valid_context.error();
+    std::set<std::int64_t> tile_nodes;
+    for (const auto& way : tile_graph.ways) tile_nodes.insert(way.node_ids.begin(), way.node_ids.end());
+    // The tile nodes a tunnel way of the context touches: the portals (and tunnel-tunnel joins) the completion anchors.
+    std::set<std::int64_t> portals;
+    for (const auto& way : context.ways) {
+        const auto attributes = resolve_road_attributes(way);
+        if (!attributes || !attributes->tunnel) continue;
+        for (const auto id : way.node_ids) if (tile_nodes.count(id)) portals.insert(id);
+    }
+    if (portals.empty()) return std::vector<InputTileRef>{};
+    // The ground ways incident to a portal, in way-id order, as a canonical sub-graph: their DEM (65 m margin) and the
+    // roads.graph tiles of their nodes (their stretches' joins) are what the portal plane reads.
+    RoadGraph grounds; std::set<std::int64_t> used;
+    for (const auto& way : context.ways) {
+        const auto attributes = resolve_road_attributes(way);
+        if (!attributes || attributes->tunnel || attributes->bridge) continue;
+        if (std::none_of(way.node_ids.begin(), way.node_ids.end(), [&](auto id) { return portals.count(id) != 0; })) continue;
+        grounds.ways.push_back(way); used.insert(way.node_ids.begin(), way.node_ids.end());
+        for (std::size_t i = 1; i < way.node_ids.size(); ++i) {
+            if (way.node_ids[i - 1] == way.node_ids[i]) { ++grounds.repeated_ref_pairs; continue; }
+            grounds.edges.push_back({way.osm_id, static_cast<std::uint32_t>(i - 1), way.node_ids[i - 1], way.node_ids[i]});
+        }
+    }
+    if (grounds.ways.empty()) return std::vector<InputTileRef>{};
+    for (const auto& node : context.nodes) if (used.count(node.osm_id)) grounds.nodes.push_back(node);
+    auto dem = road_dem_dependencies(grounds, zone); if (!dem) return dem.error();
+    auto graph = road_context_dependencies(grounds, zone, exclude); if (!graph) return graph.error();
+    dem->insert(dem->end(), graph->begin(), graph->end());
+    std::sort(dem->begin(), dem->end()); dem->erase(std::unique(dem->begin(), dem->end()), dem->end());
+    return dem;
+}
 }

@@ -127,8 +127,10 @@ RailChain rail_chain(const RailWorld& world, const RailWay& way, const RailRules
 // The elev.base level-0 tiles needed to profile the pieces owned by `key`: the tiles within dependency_margin_m of
 // every owned piece segment and of both anchors of every owned structure piece. Sorted, unique; more than
 // max_tiles is LimitExceeded.
+// `portal_anchor` (7a-1): also the tiles within the margin of the joining ground way's first 9 m at every chain end and at
+// every ground piece end that meets a bridge or tunnel (what the portal approach reads).
 Result<std::vector<InputTileRef>> rail_dem_dependencies(const RailWorld& world, const TileKey& key, const RailRules& rules,
-    std::size_t max_tiles = 1024);
+    std::size_t max_tiles = 1024, bool portal_anchor = false);
 
 // The ground profile (1/256 m) of resampled vertices at arc positions `s_m` (metres, ascending) from the raw DEM
 // values: triangular smoothing of half-width smoothing_m (fading to the raw value over the same distance from both
@@ -138,7 +140,10 @@ std::vector<std::int32_t> rail_ground_profile(std::span<const double> s_m, std::
     std::int32_t smoothing_m, std::int32_t max_grade_permille);
 
 // Builds the tile: the owned pieces with their profiles. A needed DEM sample that is missing declines that piece.
-Result<RailGeomTile> build_rail_geom_tile(const RailWorld& world, const TileKey& key, const RailRules& rules, const RoadDemSampler& dem);
+// `portal_anchor` (7a-1, true when served): a chain end and the ground piece ending at the same node take the approach level
+// of the joining ground way instead of the DEM sample at the node (portal_approach.h); false = the previous behaviour.
+Result<RailGeomTile> build_rail_geom_tile(const RailWorld& world, const TileKey& key, const RailRules& rules, const RoadDemSampler& dem,
+    bool portal_anchor = false);
 
 LayerDesc rail_geom_desc();
 std::string rail_geom_config_text();
