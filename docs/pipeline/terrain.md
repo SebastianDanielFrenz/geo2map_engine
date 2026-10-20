@@ -53,7 +53,7 @@ flowchart TD
 
 ## Consumers
 
-1. `racing_game` `rg::WorldTerrain` (`core/src/world_terrain.cpp`) fetches `g2m.terrain.height` tiles, decodes them, optionally smooths (all levels), and at level 0 carves a road patch from `g2m.roads.geom`. The result feeds both render chunks and physics.
+1. `racing_game` `rg::WorldTerrain` (`core/src/world_terrain.cpp`) fetches `g2m.terrain.height` tiles, decodes them, optionally smooths (all levels), and at levels 0-2 (`carve_max_level`, default 2) carves a road patch from `g2m.roads.geom`. The result feeds both render chunks and physics. Step-by-step comparison with the served carve: [terrain_and_roads.md](terrain_and_roads.md) T4/T5.
 2. `g2m_ps_bridge` (`bridges/physics_sim`) exposes the same tiles to `physics_sim` as an `ITerrainSource` ([client_side.md](client_side.md)).
 
 ## Tests and goldens
