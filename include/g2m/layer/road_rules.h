@@ -85,6 +85,10 @@ struct FurnitureRules {
 // (served through RoadCompletionOptions::tunnel_chord_min_length_m, served_road_completion_options()); 0 = never.
 struct TunnelRules {
     std::int32_t straight_grade_min_length_m = 0;
+    // D65: a tunnel stretch at most cut_max_length_m long (0 = never) whose DEM rises between cut_hump_min_mm and
+    // cut_hump_max_mm above the straight chord of its portal heights is an open cut through an embankment (a road
+    // under a railway on a bank, tagged tunnel in OSM): its floor is the chord, and the terrain carve cuts the bank.
+    std::int32_t cut_max_length_m = 0, cut_hump_min_mm = 0, cut_hump_max_mm = 0;
     friend bool operator==(const TunnelRules&, const TunnelRules&) = default;
 };
 // Underpass decks (owner decision 2026-10-15, racing_game PR #5; design D53-D58): where a ground stretch crosses a
@@ -101,6 +105,7 @@ struct UnderpassRules {
     std::int32_t depth_tol_mm = 0;       // the depression ends where the DEM is within this of the rim chord
     std::int32_t lower_margin_mm = 0;    // added to the lower road's half width for the deck core
     std::int32_t end_clearance_mm = 0;   // a deck must end at least this far from both stretch ends
+    bool overpass = true;                // D64: mask the hump under an upper bridge (not in de.json: the tests' sabotage switch)
     friend bool operator==(const UnderpassRules&, const UnderpassRules&) = default;
 };
 // Constants the junction block is validated against (design 5.2, 5.3): the widest carve blend and the radius

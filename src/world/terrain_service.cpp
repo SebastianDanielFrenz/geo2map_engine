@@ -51,6 +51,7 @@ constexpr ProductKind kKindRibbons = 7;
 constexpr ProductKind kKindBuildings = 8;
 constexpr ProductKind kKindWarm = 9;
 constexpr ProductKind kKindTerrainClass = 10;
+constexpr ProductKind kKindRailGeom = 11;
 constexpr ProductKind kFirstUserKind = 100;
 
 // Type identity used by the scheduler and the cache. hash_code() is equal for equal types in one
@@ -239,6 +240,20 @@ struct TerrainService::Impl {
                    }};
     }
 
+    Job job_rail_geom(const TileKey& l2) {
+        return Job{{kKindRailGeom, l2.packed(), 0}, &typeid(RailGeomTile), [this, l2]() -> ErasedOutcome {
+                       const std::string_view layer = kRailGeomLayer;
+                       const Fetched f = fetch_container(layer, l2);
+                       if (f.status != Status::Ok) return status_outcome(f, layer, l2);
+                       const Result<TileBody> body = open_body(f, layer, l2);
+                       if (!body.ok()) return failed(std::string(layer) + " " + to_string(l2) + ": " + body.error().message);
+                       Result<RailGeomTile> tile = decode_rail_geom(body.value(), l2);
+                       if (!tile.ok()) return failed(std::string(layer) + " " + to_string(l2) + ": " + tile.error().message);
+                       auto p = std::make_shared<const RailGeomTile>(std::move(tile.value()));
+                       return detail::erase<RailGeomTile>(Outcome<RailGeomTile>::ready(std::move(p), f.container.size() * 4 + 4096));
+                   }};
+    }
+
     Job job_source_osm(const TileKey& l2) {
         return Job{{kKindSourceOsm, l2.packed(), 0}, &typeid(OsmTile), [this, l2]() -> ErasedOutcome {
                        const std::string_view layer = kSrcOsmLayer;
@@ -308,6 +323,9 @@ struct TerrainService::Impl {
 // ---------------------------------------------------------------------------------------------
 
 Outcome<HeightTile> ProductContext::height(const TileKey& key) { return svc_.impl_->join<HeightTile>(svc_.impl_->job_height(key)); }
+Outcome<RailGeomTile> ProductContext::rail_geom(const TileKey& l2) {
+    return svc_.impl_->join<RailGeomTile>(svc_.impl_->job_rail_geom(to_level2(l2)));
+}
 Outcome<RoadGeomTile> ProductContext::road_geom(const TileKey& l2) {
     return svc_.impl_->join<RoadGeomTile>(svc_.impl_->job_road_geom(to_level2(l2)));
 }
@@ -550,7 +568,7 @@ Result<std::unique_ptr<TerrainService>> TerrainService::open(const TerrainServic
     const bool roads = config.layers.roads || carved || classes;
     const bool geometry = config.layers.geometry || carved || classes;
     LocalReleaseParams params =
-        builtin_local_release_params(config.stores.source_scope, m.derivers, config.attribution, roads, geometry, carved, classes);
+        builtin_local_release_params(config.stores.source_scope, m.derivers, config.attribution, roads, geometry, carved, classes, config.layers.rail);
     params.world_seed = config.world_seed;
     for (const IDeriver* d : config.extra_derivers) params.derivers.push_back(d);
     auto manifest = make_local_release(*m.sources, params);
@@ -650,6 +668,11 @@ Ticket<TerrainClassTile> TerrainService::terrain_class(const TileKey& key, Prior
                                                         failed("g2m.terrain.class is not in the release (LayerOptIn::classes)"));
     return impl_->ticket<TerrainClassTile>(impl_->job_terrain_class(key), priority);
 }
+Ticket<RailGeomTile> TerrainService::rail_geom(const TileKey& l2, Priority priority) {
+    if (!has_layer(kRailGeomLayer))
+        return impl_->finished_ticket<RailGeomTile>({kKindRailGeom, to_level2(l2).packed(), 0}, failed("g2m.rail.geom is not in the release (LayerOptIn::rail)"));
+    return impl_->ticket<RailGeomTile>(impl_->job_rail_geom(to_level2(l2)), priority);
+}
 Ticket<RoadGeomTile> TerrainService::road_geom(const TileKey& l2, Priority priority) {
     return impl_->ticket<RoadGeomTile>(impl_->job_road_geom(to_level2(l2)), priority);
 }
@@ -715,6 +738,10 @@ std::shared_ptr<const HeightTile> TerrainService::peek_height(const TileKey& key
 std::shared_ptr<const TerrainClassTile> TerrainService::peek_terrain_class(const TileKey& key) const noexcept {
     return std::static_pointer_cast<const TerrainClassTile>(
         impl_->cache.peek({kKindTerrainClass, key.packed(), 0}, type_id(typeid(TerrainClassTile))));
+}
+std::shared_ptr<const RailGeomTile> TerrainService::peek_rail_geom(const TileKey& l2) const noexcept {
+    return std::static_pointer_cast<const RailGeomTile>(
+        impl_->cache.peek({kKindRailGeom, to_level2(l2).packed(), 0}, type_id(typeid(RailGeomTile))));
 }
 std::shared_ptr<const RoadGeomTile> TerrainService::peek_road_geom(const TileKey& l2) const noexcept {
     return std::static_pointer_cast<const RoadGeomTile>(

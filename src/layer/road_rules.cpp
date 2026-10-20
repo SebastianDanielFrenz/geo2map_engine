@@ -115,8 +115,12 @@ bool read_furniture_rules(Reader& rd, const json& root, FurnitureRules& out) {
 bool read_tunnel_rules(Reader& rd, const json& root, TunnelRules& out) {
     const auto* t = rd.field(root, "root", "tunnel");
     static constexpr const char* kPath = "tunnel";
-    return t && rd.keys(*t, kPath, {"straight_grade_min_length_m"}) &&
-           rd.integer(*t, kPath, "straight_grade_min_length_m", 0, 100000, out.straight_grade_min_length_m);
+    return t && rd.keys(*t, kPath, {"straight_grade_min_length_m", "cut_max_length_m", "cut_hump_min_mm", "cut_hump_max_mm"}) &&
+           rd.integer(*t, kPath, "straight_grade_min_length_m", 0, 100000, out.straight_grade_min_length_m) &&
+           rd.integer(*t, kPath, "cut_max_length_m", 0, 120, out.cut_max_length_m) &&
+           rd.integer(*t, kPath, "cut_hump_min_mm", 1, 100000, out.cut_hump_min_mm) &&
+           rd.integer(*t, kPath, "cut_hump_max_mm", 1, 100000, out.cut_hump_max_mm) &&
+           (out.cut_hump_min_mm <= out.cut_hump_max_mm || rd.fail("tunnel: cut_hump_min_mm exceeds cut_hump_max_mm"));
 }
 
 bool read_underpass_rules(Reader& rd, const json& root, UnderpassRules& out) {

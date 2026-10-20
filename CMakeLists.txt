@@ -259,6 +259,8 @@ if(G2M_BUILD_IMPORT)
   endif()
   # Street-level fidelity plan P0: OSM tag-coverage probe (tools/osm_tag_probe).
   add_subdirectory(tools/osm_tag_probe)
+  # Terrain migration phase 7a: structure classification census (tools/structure_census).
+  add_subdirectory(tools/structure_census)
 endif()
 
 if(G2M_BUILD_TESTS)

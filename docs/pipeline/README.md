@@ -33,7 +33,7 @@ flowchart TB
   SRC["<b>1. Raw sources</b> - files on S:<br/>DGM1 1 m heights - HVBG<br/>OSM Hessen extract - Geofabrik<br/>ESA WorldCover 10 m<br/><i>downloaded, not used yet:</i> GLO-30, LoD2, DOM1, DOP20, Basis-DLM, tree data"]
   IMP["<b>2. Import</b> - g2m_tiler import<br/>resolve region to level-2 tiles<br/>import-dem, import-osm, import-landcover"]
   RAW["<b>3. Raw layers</b> - level 2, 1024 m, source store<br/>g2m.src.elev.dgm1 / g2m.src.osm / g2m.src.landcover"]
-  BAKE["<b>4. Derived layers</b> - pure derivers, g2m_tiler bake<br/>g2m.elev.base L0 / g2m.terrain.height L0-L6<br/>g2m.roads.graph L2 / g2m.roads.geom L2<br/>g2m.terrain.carved L0-L6, g2m.terrain.class L0-L6 (opt-in; consumer helpers exist, the game has not switched)<br/><i>planned:</i> buildings, trees, markings"]
+  BAKE["<b>4. Derived layers</b> - pure derivers, g2m_tiler bake<br/>g2m.elev.base L0 / g2m.terrain.height L0-L6<br/>g2m.roads.graph L2 / g2m.roads.geom L2<br/>g2m.terrain.carved L0-L6, g2m.terrain.class L0-L6 (opt-in; consumer helpers exist, the game has not switched)<br/>g2m.rail.geom L2 (opt-in, railways)<br/><i>planned:</i> buildings, trees, markings"]
   SRV["<b>5. Server and cache</b> - in-process (the game), or HTTP sidecar g2m_server<br/>g2m::Server: cache, derive on miss, upstream<br/>tiles.sqlite3 + blob files, release id<br/><i>planned:</i> hosted server, CDN (G7)"]
   GAME["<b>6a. racing_game</b> WorldTerrain<br/>render chunks, road raster and grip,<br/>road carving at L0, NPC traffic"]
   PHYS["<b>6b. physics_sim</b><br/>g2m_ps_bridge G2mTerrainSource<br/>TileManager Jolt heightfield pool"]
@@ -107,10 +107,23 @@ Details: [terrain.md](terrain.md).
 | Code | `src/layer/derive_road_graph.cpp`, `road_graph.cpp`, `road_attributes.cpp`, `osm_roads.cpp`; `derive_road_geom.cpp`, `road_reference.cpp`, `road_profile.cpp`, `vertical_profile.cpp`, `road_dem_dependencies.cpp`, `road_dem_sampler.cpp`; `road_rules.cpp` with `data/road_rules/de.json` (embedded, loader only so far; P2 slice 1 added its `junction` and `furniture` blocks), `carve_params.cpp` with `data/carve/carve_default.json` and `landcover_classifier.cpp` with `data/classifiers/esa_worldcover_v200.json` (embedded, loaders only, no stage uses them yet), `road_surface.cpp` (P2 slice 2: `road_surface_height_m`, pure), `road_junction.cpp` (P2 slices 3-5: `build_node_junction`, `build_road_junctions` with clusters, `junction_height_m`, `adjust_features_for_junctions`, pure), `road_completion.cpp` (P2 slice 6), `road_furniture.cpp` (slice 7), the encoding-7 sections, ownership filter and validation in `road_geom_tile.cpp` (slice 8; encoding 8 since terrain migration phase 4, D47). Builtin wiring: `include/g2m/server/builtin_release.h` (`BuiltinTerrainDerivers::ordered(include_roads, include_geometry)`). |
 | Output | `roads.graph` v1, encoding 6 (nodes carry whitelisted tags; the tile also carries the turn restrictions whose via node or via way it holds, G4 slice 3; 5 and 4 still decode; [road_graph.md](../formats/road_graph.md)), level 2. `roads.geom` v1, encoding 8 ([road_geom.md](../formats/road_geom.md); street fidelity P2 slice 8, terrain migration phase 4), level 2: reference line, vertical profile, declined stretches with reasons, plus (street fidelity P1 slice 5) one lane-aware cross-section per profiled stretch (bands, anchor, ramps, offset correction, join records) and a feature section for vertical traffic-calming features (slice 7: carved bumps, humps, tables, dips; lateral kinds render only). Encoding 7 adds the junctions the tile owns (polygons in three ring layers, approaches with trims, raised tables), junction furniture (crossings, stop and give-way lines, signals) and the profile provenance of the completion tier, which the deriver now runs (completed bridge and ground stretches get profiles). Encoding 8 (D47) adds tunnel floors (provenance TunnelFloor: the DEM along the tunnel, or one straight grade between the portals for a stretch of at least de.json's `tunnel.straight_grade_min_length_m`, served 200 m since the owner's ruling, D52; never carved) and the game's accepted-bridge anchors; encoding 7 still decodes. Encoding 9 (D53-D58, the deriver writes it) adds section 8, the underpass decks: the span of a ground stretch over a lower road in a DEM cutting, where the profile follows the rim chord and the game builds a deck; outside it the road stays on the ground. Encoding 6 bodies still decode (no junctions, furniture, provenance), encoding 5 too (no cross-sections). |
 | Halo | `roads.graph` uses a 128 m halo and complete ways. An edge belongs to the tile that contains its midpoint (integer mm). `roads.geom` reads DEM tiles up to 65 m outside the road. |
-| Config hash | graph: `g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours node-tags=1 enc=6 restrictions=1 via-way=1`. geom: `g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=9 rules=de:<sha256 of de.json> join-bisector=1 context=nodes junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/200 completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05 corner-fillet=1 width-taper=5 tunnel-floor=5/0.29999999999999999/20/chord:200 bridge-anchor-reuse=1 bridge-walk-margin=205 underpass=1 crossing-context=1 underpass-tags=D61 underpass-join=D63/61000` with `enc=9` (`road_geom_config_text()`; the completion values come from `served_road_completion_options()`). The rules hash ties a release id to the exact `data/road_rules/de.json` bytes. |
+| Config hash | graph: `g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours node-tags=1 enc=6 restrictions=1 via-way=1`. geom: `g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=9 rules=de:<sha256 of de.json> join-bisector=1 context=nodes junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/200 completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05 corner-fillet=1 width-taper=5 tunnel-floor=5/0.29999999999999999/20/chord:200 tunnel-cut=80/1/8 bridge-anchor-reuse=1 bridge-walk-margin=205 underpass=1 crossing-context=1 underpass-tags=D61 underpass-join=D63/61000 overpass-mask=D64` with `enc=9` (`road_geom_config_text()`; the completion values come from `served_road_completion_options()`). The rules hash ties a release id to the exact `data/road_rules/de.json` bytes. |
 | Tests | `tests/layer/test_road_*.cpp`, `test_vertical_profile.cpp`; goldens `g2roads_golden.txt`, `g3xs_golden.txt` (served encoding-7 bodies and cross-section boundaries of the two committed OSM fixtures) and `g3j_golden.txt` (their junction, furniture and provenance sections), compared Windows = Linux; `test_road_geom_enc7.cpp` (T7 ownership invariance, T8 one rejection per encoding-7 validation rule); probe `tools/road_probe`. |
 | Consumers | `racing_game`: road surface patch (carving into the level-0 height tile), road visuals, bridge structures, NPC traffic and trucks. `g2m.terrain.carved` (section 2.4). |
 | Status | Slices A and B of G3 implemented. C has a tested foundation, acceptance open. D to F open. D is designed as street fidelity P2 ([design](../street_fidelity/p2_junction_design.md)); slices 1-7 are library functions (rules, road surface height, junction rings and clusters, junction heights and raised tables, the profile completion tier, junction furniture) and slice 8 serves them: `roads.geom` encoding 7 with junction, furniture and profile-provenance sections, the completion tier on. Slice 9 carves them into `terrain.carved` (section 2.4); slice 10 classifies them into `terrain.class`; the consumer switch is next. See [roads.md](roads.md) and [../g3_road_pipeline.md](../g3_road_pipeline.md). |
+
+### 2.3a Railways: `g2m.rail.geom`
+
+| | |
+|---|---|
+| Inputs | Stage 1: `g2m.src.osm` for the 3 x 3 level-2 neighbourhood. Stage 2 (`additional_inputs_for`): every `g2m.elev.base` level-0 tile within 4 m of a segment of an owned piece and of both chain anchors of every owned bridge or tunnel piece (at most 1024). |
+| Code | `src/layer/rail_geom_tile.cpp` (codec, validator, descriptor), `rail_geom_build.cpp` (attributes, pieces, chains, ground profile), `derive_rail_geom.cpp`; `rail_rules.cpp` with `data/rail_rules/de.json` (embedded). Builtin wiring: `BuiltinTerrainDerivers::ordered(..., include_rail)`, `bake --layers g2m.rail.geom`, `LayerOptIn{rail}` of `TerrainService`. |
+| Output | `g2m.rail.geom` v1, encoding 1, level 2 ([rail_geom.md](../formats/rail_geom.md)): pieces (<= 512 m) of OSM railway ways (`rail`, `light_rail`, `subway`; `tram` off, construction ways on): centreline in integer mm, height in 1/256 m from the line itself (bridge and tunnel chains linear between their two ground anchors, ground pieces smoothed and grade-limited with both ends pinned to the DEM), class, condition, bridge / tunnel / embankment / cutting / electrified flags, layer, tracks, gauge, service, usage. A piece belongs to the tile of its first vertex. A piece without usable DEM is declined (all z = 0). |
+| Halo | Complete OSM ways; the 3 x 3 window holds a piece and its chain walk. |
+| Config hash | `g2m.rail.geom/1 enc=1 owner=first-vertex-mm piece=cut-at-first-vertex-ge-max-length profile=ground:smoothed-triangular+grade-limit-pinned-ends structure:chain-linear-dem-anchors window=src.osm-3x3 rules=de:<sha256 of rail de.json>` (`rail_geom_config_text()`). |
+| Tests | `tests/layer/test_rail_geom.cpp` (recorded sabotages), `tests/world/test_terrain_service.cpp` (rail case), fuzz target `railGeom`, golden `g3rail_golden.txt` (Windows = Linux). |
+| Consumers | `racing_game` rail bridges (deck and parapets over roads), ballast and rails on the ground, tunnel portals later. |
+| Status | Served and opt-in; no existing release id changed. Numbers on the home region: [rail.md](rail.md). Not done: earthwork geometry, carving under bridges, level-crossing records, `rail.graph` topology, catenary, trains, tram. |
 
 ### 2.4 Carved terrain: `g2m.terrain.carved`
 
@@ -118,7 +131,7 @@ Details: [terrain.md](terrain.md).
 |---|---|
 | Inputs | Level 0: the 3 x 3 `g2m.elev.base` neighbourhood of the tile (absent = NoData; an absent centre is NotFound) and every `g2m.roads.geom` level-2 tile intersecting the tile grown by 192 m (one typically, at most four; absent = no roads). Levels 1-6: the 4 same-layer children. |
 | Code | `src/layer/terrain_carve.cpp`, `include/g2m/layer/terrain_carve.h` (`CarveTerrain`, `CarveModel`, `carve_terrain_tile`, `carve_road_geom_keys`, `TerrainCarvedDeriver`); parameters `data/carve/carve_default.json` via `carve_params.cpp`; surfaces from `road_surface.cpp` and `road_junction.cpp` (`junction_height_m`). Builtin wiring: `BuiltinTerrainDerivers::ordered(include_roads, include_geometry, include_carved)`. |
-| Output | `g2m.terrain.carved` v1, levels 0-6, body encoding 1 like `terrain.height` ([terrain_carved.md](../formats/terrain_carved.md)). Level 0 per cell (centre E + 0.5, N + 0.5): the DEM smoothed by the game's kernel as integers; junction cores (Shepard junction surface, D42: the blend mixes the approach bases, each approach's crown and verge relief fades out from its trim over 3-15 m and 1.5 m) beat approach cores, the lowest core wins; else the blend (3-15 m, widened to 1:1.5) of largest weight, ties to the lowest z; then the deck clearance clamp (0.55 m under bridges, ramped over 4 m from each end); `round_half_even(z * 256)`. Bridges and tunnels are never carved, `OnStructure` junctions neither. Levels 1-6: mean-of-4 half-even of the carved level below. |
+| Output | `g2m.terrain.carved` v1, levels 0-6, body encoding 1 like `terrain.height` ([terrain_carved.md](../formats/terrain_carved.md)). Level 0 per cell (centre E + 0.5, N + 0.5): the DEM smoothed by the game's kernel as integers; junction cores (Shepard junction surface, D42: the blend mixes the approach bases, each approach's crown and verge relief fades out from its trim over 3-15 m and 1.5 m) beat approach cores, the lowest core wins; else the blend (3-15 m, widened to 1:1.5) of largest weight, ties to the lowest z; then the deck clearance clamp (0.55 m under bridges, ramped over 4 m from each end); `round_half_even(z * 256)`. Bridges and tunnels are never carved, `OnStructure` junctions neither; one exception (D65): a short straight tunnel floor (a chord of at most `tunnel.cut_max_length_m` under a bank, see roads.geom) is carved as an open cut with the ordinary approach core and blend. Levels 1-6: mean-of-4 half-even of the carved level below. |
 | Config hash | `g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 carve=<sha256 of carve_default.json>; L1-L6 mean-of-4 half-even` (`terrain_carved_config_text()`). |
 | Halo | No shared samples: every cell is a function of its world position, so neighbouring tiles agree at their edge (tested across L0 and L2 seams). DEM reads (smoothing, blend widths) stay inside the 3 x 3 window; a junction blend knot whose DEM point falls outside it uses the class width and is counted (0 on the fixtures). |
 | Cost | 0.2-0.45 s per level-0 tile on 1 worker on the fixtures (about 0.1 s of it serial: smoothing and model build), against a copy for `terrain.height` L0; numbers in the design's slice 9 record. |
@@ -171,6 +184,7 @@ flowchart TD
   H1["g2m.terrain.height L1 to L6"]
   RG["g2m.roads.graph - L2"]
   RM["g2m.roads.geom - L2"]
+  RL["g2m.rail.geom - L2 - opt-in"]
   TC["g2m.terrain.class - L0 to L6 - P2 slice 10"]
   CARVE["g2m.terrain.carved L0 - smoothed and carved"]
   CARVE1["g2m.terrain.carved L1 to L6"]
@@ -182,6 +196,8 @@ flowchart TD
   H0 -->|"4 children of the level below"| H1
   OSM -->|"own tile + 8 neighbours, 128 m halo"| RG
   RG -->|"same key"| RM
+  OSM -->|"own tile + 8 neighbours, 128 m halo"| RL
+  EB -->|"L0 tiles under owned pieces and chain anchors, margin 4 m"| RL
   EB -->|"every L0 tile near a road, margin 65 m"| RM
   LC -.->|"planned: L2 ancestor"| TC
   RM -->|"L2 tiles within 192 m, 1 to 4"| CARVE
@@ -194,7 +210,7 @@ flowchart TD
 
   classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
   classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
-  class OSM,DEM,LC,EB,H0,H1,RG,RM,CARVE,CARVE1 done;
+  class OSM,DEM,LC,EB,H0,H1,RG,RM,RL,CARVE,CARVE1 done;
   class TC,BLD,TRE plan;
 ```
 
@@ -204,6 +220,7 @@ Tile-level rules worth remembering:
 - The terrain pyramid needs all four children even for a tile at the data edge. A missing child counts as NoData, never as an error.
 - `roads.geom` is the only built-in layer whose input list depends on the data (`additional_inputs_for`), in two discovery stages (D35): stage 1 names the DEM tiles under the complete ways and the `roads.graph` tiles holding every way incident to their nodes; stage 2, once those are resolved, names the DEM along every bridge incident to those nodes (65 m margin) and the `roads.graph` tiles of its nodes, so the far end of a bridge span is always an input, and (D48) the elev.base and `roads.graph` tiles of a 205 m square around every node of those bridges, which bound the 200 m abutment walk. Stage 1 also names (D57) the `roads.graph` tiles every segment of a tile way passes through, so every road crossing a tile way without a shared node (an underpass) is complete in the crossing graph, and (D63) the `roads.graph` tiles of a 61 m square around the end nodes of every tile way, which bound the way-boundary support of a covered crossing. Other derivers use one stage.
 - A `terrain.carved` L0 tile (and a `terrain.class` L0 tile, which also reads the land cover level-2 tiles holding its 257 x 257 nodes) reads its own and its 8 neighbouring `elev.base` tiles and every `roads.geom` tile within 192 m (one typically, at most four). Each junction is stored only in the `roads.geom` tile holding its smallest node id; the 192 m radius is what makes that sufficient ([design section 5](../street_fidelity/p2_junction_design.md#5-tile-invariance)).
+- `rail.geom` has two discovery stages like `roads.geom`: stage 1 the 3 x 3 `src.osm` tiles, stage 2 (`additional_inputs_for`) the `elev.base` level-0 tiles near the pieces the tile owns and near both ends of their bridge or tunnel chains. A missing DEM tile declines the piece, it does not fail the tile.
 - A tile in the 1 km halo of the region may have no DGM1 coverage: 85 such tiles were skipped at import (`import_report_home-2026-09r1.json`).
 
 ---
@@ -395,22 +412,27 @@ g2m_tiler bake --store STORE_DIR --scope SCOPE --derived DERIVED_DIR `
     --layers g2m.elev.base,g2m.terrain.height [--levels 0-6] [--jobs N] [--pin]
 ```
 
-`--store` must be a finished, `--pin`ned scope. The result does not depend on `--jobs`. Without `bake`, a consumer derives tiles on demand through `g2m::Server` into its own derived store (`racing_game` does this for the home region, store `S:\claude_code\geo2map_cache\home-r1\baked`). Levels a layer does not have are skipped (`roads.*` exist only at level 2). Naming `g2m.roads.graph` in `--layers` adds the road graph deriver to the release; naming `g2m.roads.geom` adds both; naming `g2m.terrain.carved` adds the carved deriver and both road derivers; naming `g2m.terrain.class` adds the class deriver and everything carved needs (`src/import/bake.cpp`: `include_roads` / `include_geometry` / `include_carved` / `include_classes`). Adding them changes the release id; terrain-only bakes keep the old one.
+`--store` must be a finished, `--pin`ned scope. The result does not depend on `--jobs`. Without `bake`, a consumer derives tiles on demand through `g2m::Server` into its own derived store (`racing_game` does this for the home region, store `S:\claude_code\geo2map_cache\home-r1\baked`). Levels a layer does not have are skipped (`roads.*` exist only at level 2). Naming `g2m.roads.graph` in `--layers` adds the road graph deriver to the release; naming `g2m.roads.geom` adds both; naming `g2m.terrain.carved` adds the carved deriver and both road derivers; naming `g2m.terrain.class` adds the class deriver and everything carved needs; naming `g2m.rail.geom` adds only the rail deriver (it needs `elev.base` and `src.osm`, not the road layers) (`src/import/bake.cpp`: `include_roads` / `include_geometry` / `include_carved` / `include_classes` / `include_rail`). Adding them changes the release id; terrain-only bakes keep the old one.
 
 ### 7.4 Probes
 
 ```powershell
 g2m_osm_tag_probe --pbf F --region REGIONS.json#NAME --out-md F --out-json F
 g2m_road_probe STORE_DIR SCOPE utm32n/2/455/5421 out.csv [--exceptions] [--profiles]
+g2m_rail_census STORE_DIR SCOPE ZONE EMIN EMAX NMIN NMAX [CSV] [--spot E N] [--baked DERIVED_DIR RID]
+g2m_osm_near STORE SCOPE ZONE E N RADIUS [--nodes]          # OSM ways (tags) and, with --nodes, nodes within RADIUS m of a UTM point
+g2m_spot_dump STORE SCOPE SCRATCH_DIR ZONE E N RADIUS [--way ID] [--step M] [--census HALF_M [--csv F] [--baseline]]
 ```
 
-Both are under `G2M_BUILD_APPS`. See `tools/osm_tag_probe` and `tools/road_probe/README.md`. The probes never write to the tile cache.
+All are under `G2M_BUILD_APPS`. See `tools/osm_tag_probe`, `tools/road_probe/README.md`, `tools/osm_near`, `tools/rail_census/main.cpp` (railway census: ways, bridges, tunnels, rail-bridge-over-road crossings; numbers in [rail.md](rail.md)) and `tools/spot_dump` (the served roads.geom entries at a spot, profile / DEM / carved height along a way, and the declined-entry census of a box; `--baseline` switches D64/D65 off for a before/after). The probes never write to the tile cache (spot_dump derives into its own SCRATCH_DIR).
 
 ### 7.5 Use it from the game
 
 `racing_game` reads `data/world/world_config.json`: source store `${RG_G2M_HOME}` (default `S:\claude_code\geo2map_cache\home-r1`), scope `home-2026-09r1`, derived store `${RG_G2M_HOME}/baked`. Nothing in that repo bakes it. See `racing_game/CLAUDE.md` section "World config".
 
 ### 7.6 Where the release id changes
+
+The rail layer is opt-in like the carved one: a release without `g2m.rail.geom` keeps its id (tested against the manifest built without the flag). A release with it has another id, and editing `data/rail_rules/de.json` changes it too (the file hash is in the config hash).
 
 Any change to a deriver's config text, a layer version, an encoding version, a classifier or a source tile changes the release id. That is by design: a new id means new derived tiles. Changing only docs or tests does not.
 
@@ -481,8 +503,8 @@ These are listed, not resolved. Each needs an owner decision or a check.
 | Topic | Document |
 |---|---|
 | This overview | `docs/pipeline/README.md` |
-| Detail pages | [raw_layers.md](raw_layers.md), [terrain.md](terrain.md), [roads.md](roads.md), [client_side.md](client_side.md) |
-| Byte formats | [../formats/README.md](../formats/README.md): [tile_container](../formats/tile_container.md), [src_elev](../formats/src_elev.md), [src_landcover](../formats/src_landcover.md), [src_osm](../formats/src_osm.md), [pack](../formats/pack.md), [release_manifest](../formats/release_manifest.md), [regions](../formats/regions.md), [protocol](../formats/protocol.md), [cache_db](../formats/cache_db.md), [road_graph](../formats/road_graph.md), [road_geom](../formats/road_geom.md) |
+| Detail pages | [raw_layers.md](raw_layers.md), [terrain.md](terrain.md), [roads.md](roads.md), [rail.md](rail.md), [client_side.md](client_side.md) |
+| Byte formats | [../formats/README.md](../formats/README.md): [tile_container](../formats/tile_container.md), [src_elev](../formats/src_elev.md), [src_landcover](../formats/src_landcover.md), [src_osm](../formats/src_osm.md), [pack](../formats/pack.md), [release_manifest](../formats/release_manifest.md), [regions](../formats/regions.md), [protocol](../formats/protocol.md), [cache_db](../formats/cache_db.md), [road_graph](../formats/road_graph.md), [road_geom](../formats/road_geom.md), [rail_geom](../formats/rail_geom.md) |
 | G3 road pipeline | [../g3_road_pipeline.md](../g3_road_pipeline.md), [../g3_profile_foundation.md](../g3_profile_foundation.md), [../g3_reference_lines.md](../g3_reference_lines.md) |
 | Street fidelity | [../street_fidelity/plan.md](../street_fidelity/plan.md), [../street_fidelity/p1_cross_section_design.md](../street_fidelity/p1_cross_section_design.md), [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md), [../osm_tag_coverage_home.md](../osm_tag_coverage_home.md) |
 | Design plan | `PLAN.md` (this repo), `racing_game/PLAN.md` section 12 (milestones) |

@@ -1199,6 +1199,45 @@ texts: roads.geom `enc=9 ... underpass=1 crossing-context=1 underpass-tags=D61 u
 tile invariance + negative control, encoding 9 round trip/validation, carve no-slot + sabotage, `[walls]` steep walls + sabotage, `[d63]` way-boundary support + controls + invariance, `[d61]` tag rules on the scene and on the owner's five fixture crossings with tag-stripped controls; hidden `[.][diag][tags]` OSM tags at those crossings, hidden `[.][diag][d61]` decks/covered spans of both fixtures on the golden DEM, `[.][diag]` WGS84 crossing list and `[.][diag]` example-4
 CSV), `tests/world/test_road_meshes.cpp` (D56 deck; D61: a tunnel lower road gets no served deck), scene `tests/support/underpass_scene.h`.
 
+Owner report 2026-10-19 (two Frankfurt-west sites, decisions D64/D65, branch claude/rail-bridge-underpass). D64 (road under an upper bridge): DGM1 is bare earth, a bridge deck is
+removed and its gap interpolated, so a ground road under a `bridge=yes` way with a higher `layer` and no shared node sees a hump in the DEM (site 2: 108.2 -> 114.4 -> 108.2 m over
+39 m); the strict profile followed it and the junction planes at the way's end nodes took the hump's wall, so the way was declined (no ribbon, no carve: "the tunnel ends in a wall").
+`RoadUnderpassFinder::overpass_spans` finds the bridges over the stretch (`crossings_of(..., over=true)`), fits the NEGATED window with `fit_crossing` (a hump is a cutting of the
+negated DEM), and returns `covered` spans (mask only, no deck); `overpass_end_plane` turns a span reaching a stretch end into a `RoadJunctionPlane` of the rim chord; used by
+`build_road_profile`'s end anchor and the completion tier's `plane_at` (step 3, the one that matters for the real spot). `UnderpassRules::overpass` (true; not in de.json) is the tests'
+switch. D65 (short tunnel under a bank, site 1: a 46 m `tunnel=yes` road under a railway embankment, the DEM floor climbed the ridge at 30 %): completion step 2a takes the portal
+chord for a tunnel stretch under `tunnel_chord_min_length_m` when it is at most `tunnel.cut_max_length_m` (80 m) long and the DEM rises `cut_hump_min_mm`..`cut_hump_max_mm` (1..8 m)
+over the chord (`RoadCompletionStats::tunnel_cut`); `terrain_carve.cpp` `is_tunnel_cut` carves exactly those floors (length bound and floor straight to 1 cm) as an open cut, every
+other tunnel stays uncarved (`CarveOptions::tunnel_cut` sabotage); a cut candidate that a ground road crosses in plan (A66 carriageways over a service tunnel; "lowest core wins" would slot the road above) stays uncarved too (`crossed_by_ground_road`, `CarveOptions::tunnel_cut_crossing_check` sabotage). Provenance stays `TunnelFloor`, so encoding 9 is unchanged. Config texts: roads.geom `... chord:200 tunnel-cut=80/1/8 ...
+underpass-join=D63/61000 overpass-mask=D64`, carved `... underpass-walls=steep/1 tunnel-cut=D65/80 carve=...` (release ids change). Rail ways are NOT in roads.graph: the railway
+over the road is not modelled in geo2map at all (the racing_game side must source it). Tests `tests/layer/test_road_overpass.cpp` (`[overpass][d64]`, `[d65]`: synthetic scenes, controls,
+recorded sabotages `UnderpassRules.overpass = false`, `tunnel_cut_max_length_m = 0`, `CarveOptions.tunnel_cut = false`), pins `test_road_geom_xs.cpp`, `test_terrain_carve.cpp`,
+`test_road_rules.cpp` (de.json hash is of the LF bytes), goldens g3c/g3d (one hoechst_a66 tile). Tools `g2m_osm_near`, `g2m_spot_dump` (docs/pipeline/README.md 7.4).
+
+## Railways R1/R2 (2026-10-20, decision G2M-026)
+
+`g2m.rail.geom` v1, an OPT-IN level-2 baked layer (body encoding `LayerEncoding::RailGeom` = 1 in its own id space):
+every OSM railway way as pieces (cut at the first vertex at or past `piece.max_length_m` 512 m, owned by the tile that
+holds the first vertex, the roads.geom junction rule) with class (rail, light_rail, subway; tram class id 3 reserved but
+disabled in the rules), condition (in service / construction), flags (bridge, tunnel, embankment, cutting, declined,
+electrified), layer, tracks, service, usage, gauge and a z profile in 1/256 m taken from the line itself: bridge and
+tunnel pieces are linear between the two ground anchors of the chain of connected same-structure ways (budget 3000 m,
+16 ways), so a deck never follows the DEM into a cutting; ground pieces are resampled at 20 m, triangular-smoothed
+(40 m), grade limited (40 permille rail, 60 light_rail/subway) with both ends pinned to the raw DEM. A missing DEM tile
+declines only the pieces that need it (flag 16, all z = 0). Does NOT touch roads.geom encoding 9, so carved/class tiles
+and every existing release id are unchanged; only a release that opts in (`--layers g2m.rail.geom`, `LayerOptIn::rail`,
+`include_rail` as the trailing `builtin_release` parameter) gets a new id. Files: `include/g2m/layer/rail_rules.h` /
+`src/layer/rail_rules.cpp` (strict loader of `data/rail_rules/de.json`, embedded, its SHA-256 in the config hash),
+`include/g2m/layer/rail_geom_tile.h` (public API), `src/layer/rail_geom_tile.cpp` (codec, validator, descriptor, config
+text), `rail_geom_build.cpp` (attributes, piece plan, chain, profile, DEM dependencies), `derive_rail_geom.cpp`
+(`RailGeomDeriver`: 3x3 `src.osm` window, stage-2 DEM tiles incl. the chain anchors). `TerrainService`: typed ticket
+(job kind 11), `peek_rail_geom`, `ProductContext::rail_geom`. Tool `g2m_rail_census` (`tools/rail_census/main.cpp`,
+read-only census of ways, bridges, crossings with roads, baked tiles). Tests `tests/layer/test_rail_geom.cpp`
+(`[rail]`, every property with a recorded sabotage), `tests/world/test_terrain_service.cpp` (rail case), fuzz target
+`railGeom`, golden `g3rail` (`tests/golden/golden_g3rail.cpp`, `testdata/golden/g3rail_golden.txt`, Windows = Linux).
+Docs `docs/formats/rail_geom.md`, `docs/pipeline/rail.md` (decisions, home-region census). Not in v1: embankment/
+cutting geometry, carving under a rail bridge, level crossing records, rail.graph, catenary, trains, tram.
+
 ## G4 routing, slice 1 (2026-10-14)
 
 Design, owner questions and the slice plan: `docs/routing_design.md`. `g2m_route` (`include/g2m/route/`, `src/route/`)
