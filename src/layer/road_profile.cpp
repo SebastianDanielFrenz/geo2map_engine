@@ -181,6 +181,8 @@ Result<RoadProfile> build_road_profile(const RoadReferenceBuilder& builder,
         // D63: a covered crossing at a way boundary gives both stretches the node's common rim-chord plane, before any
         // endpoint grade check (the DEM's junction plane there is the cutting's own wall).
         if (limits.underpass) if (auto join = limits.underpass->join(ni->osm_id)) return Anchor{join->plane, false, false};
+        // D64: an end inside the hump of an upper bridge's embankment takes the rim chord, not the hump's wall.
+        if (limits.underpass) if (auto over = limits.underpass->overpass_end_plane(id, stretch, *reference, index == stretch.start_ref)) return Anchor{*over, false, false};
         return surface_anchor(builder, dem, zone, ni->osm_id, limits.reference);
     };
     const auto first = endpoint(stretch.start_ref); if (!first) return first.error();
