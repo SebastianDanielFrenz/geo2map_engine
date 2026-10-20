@@ -2,6 +2,7 @@
 
 This is the one entry point. Start here if you have never seen the code.
 It shows the whole path with diagrams, then links to the detail pages.
+Illustrated companion for terrain and roads (cross-sections, which repo runs each step, the physics seam): [terrain_and_roads.html](terrain_and_roads.html), text twin for agents [terrain_and_roads.md](terrain_and_roads.md). This README stays the single central pipeline doc.
 
 - Status date: 2026-10-05. Verified against the code of `geo2map_engine` master at that date.
 - Scope: `geo2map_engine` (this repo) and how its two consumers use it: `racing_game` (render + game) and `physics_sim` (terrain tiles for the physics heightfield). Both consumers are separate repos and are only described here.
@@ -482,6 +483,8 @@ These are listed, not resolved. Each needs an owner decision or a check.
 |---|---|
 | This overview | `docs/pipeline/README.md` |
 | Detail pages | [raw_layers.md](raw_layers.md), [terrain.md](terrain.md), [roads.md](roads.md), [client_side.md](client_side.md) |
+| Terrain and roads, illustrated (cross-sections, owner per step, physics seam) | [terrain_and_roads.html](terrain_and_roads.html), text twin [terrain_and_roads.md](terrain_and_roads.md) |
+| Terrain migration plan (racing_game -> geo2map) | [../terrain_migration_plan.md](../terrain_migration_plan.md) |
 | Byte formats | [../formats/README.md](../formats/README.md): [tile_container](../formats/tile_container.md), [src_elev](../formats/src_elev.md), [src_landcover](../formats/src_landcover.md), [src_osm](../formats/src_osm.md), [pack](../formats/pack.md), [release_manifest](../formats/release_manifest.md), [regions](../formats/regions.md), [protocol](../formats/protocol.md), [cache_db](../formats/cache_db.md), [road_graph](../formats/road_graph.md), [road_geom](../formats/road_geom.md) |
 | G3 road pipeline | [../g3_road_pipeline.md](../g3_road_pipeline.md), [../g3_profile_foundation.md](../g3_profile_foundation.md), [../g3_reference_lines.md](../g3_reference_lines.md) |
 | Street fidelity | [../street_fidelity/plan.md](../street_fidelity/plan.md), [../street_fidelity/p1_cross_section_design.md](../street_fidelity/p1_cross_section_design.md), [../street_fidelity/p2_junction_design.md](../street_fidelity/p2_junction_design.md), [../osm_tag_coverage_home.md](../osm_tag_coverage_home.md) |

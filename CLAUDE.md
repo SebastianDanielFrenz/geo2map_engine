@@ -7,7 +7,9 @@ This file only maps what exists and how to build, test and run it.
   for the milestones).
 - **Standing rule:** any change that adds or changes a pipeline stage, layer,
   encoding, data source or consumer updates `docs/pipeline/` in the same
-  commit. Start reading there: `docs/pipeline/README.md`.
+  commit. Start reading there: `docs/pipeline/README.md`. Its illustrated
+  companion for terrain and roads is `docs/pipeline/terrain_and_roads.html`
+  (text twin `terrain_and_roads.md`, the one to grep).
 - Milestone state: **G0 done**. G0 covers the library skeleton, deterministic
   math, geodesy, tile keys, rasters, hashes and golden infrastructure.
   **G1a done**: the layer model, the tile formats, releases, the SQLite tile
@@ -362,7 +364,9 @@ geo2map_engine/
                                       release_manifest, regions, protocol, cache_db
   docs/pipeline/                      THE human entry point: README.md (overview + layer-dependency + runtime-sequence + roadmap
                                       Mermaid diagrams, per-stage tables, data sources, runbook, glossary, open questions) and
-                                      raw_layers.md, terrain.md, roads.md, client_side.md
+                                      raw_layers.md, terrain.md, roads.md, client_side.md; terrain_and_roads.html (illustrated
+                                      terrain + road steps, cross-sections, owner repo per step, physics seam) + its text twin
+                                      terrain_and_roads.md
   docs/street_fidelity/               plan.md (street-level fidelity sources/architecture/phases P0-P8), p1_cross_section_design.md
                                       (P1 design); moved from out/ (out/ keeps one-line stubs)
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)

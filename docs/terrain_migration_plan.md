@@ -1,6 +1,6 @@
 # Terrain migration plan: racing_game -> geo2map
 
-Status (2026-10-15): phases 0-2 done (game re-fit dropped; geo2map 6be9d3f phase 1, 6b6c621 phase 2, 8987291 msvc fix; racing_game switched to g2m::world::TerrainService). Phase 3a done (`StructureSet` / `RoadRibbonTile` builders in g2m_world, byte-pinned against the game; racing_game builds decks and ribbons through them). Phase 3b done (`ViewStreamer`, `RingStreamer`, `BuildingSet` in g2m_world, pinned against the game's C++ and its GDScript stream policy; racing_game deleted its own streamer and building code and colours chunks by class id). Phase 4 done in code (D47: roads.geom encoding 8, tunnel floors as provenance `TunnelFloor`, accepted-bridge anchors; fixture roadcmp: 0 game-only entries; the real-store probe is still to be run by the owner after warming the stores). Phase 5 done in code (D48: 200 m abutment walk, 205 m stage-2 walk squares; release id bump #2); the game's completion stays until the probe shows zero game-only entries. Phase 6 done in code (D49-D51: G-1 rejected roads.geom input = absent with a header marker, opt-in `g2m.terrain.class` L0-L6 + golden g3c, phys/bridge class mode with Snapshot prefetch, G-6 underpass census; the game's release id is unchanged; open: render ClassWindow from terrain.class, the home-region G-6 run). Phase 7 is next. Owner answers to section 5 are at the end of this file. Originally written 2026-10-12 in geo2map out/ (gitignored); the files listed under Sources that live in out/ folders exist only on the original machine.
+Status (2026-10-20): phases 0-2 done (game re-fit dropped; geo2map 6be9d3f phase 1, 6b6c621 phase 2, 8987291 msvc fix; racing_game switched to g2m::world::TerrainService). Phase 3a done (`StructureSet` / `RoadRibbonTile` builders in g2m_world, byte-pinned against the game; racing_game builds decks and ribbons through them). Phase 3b done (`ViewStreamer`, `RingStreamer`, `BuildingSet` in g2m_world, pinned against the game's C++ and its GDScript stream policy; racing_game deleted its own streamer and building code and colours chunks by class id). Phase 4 done in code (D47: roads.geom encoding 8, tunnel floors as provenance `TunnelFloor`, accepted-bridge anchors; fixture roadcmp: 0 game-only entries; the real-store probe is still to be run by the owner after warming the stores). Phase 5 done in code (D48: 200 m abutment walk, 205 m stage-2 walk squares; release id bump #2); the game's completion stays until the probe shows zero game-only entries. Phase 6 done in code (D49-D51: G-1 rejected roads.geom input = absent with a header marker, opt-in `g2m.terrain.class` L0-L6 + golden g3c, phys/bridge class mode with Snapshot prefetch, G-6 underpass census; the game's release id is unchanged; open: render ClassWindow from terrain.class, the home-region G-6 run). Phase 7 is next. 2026-10-20: section 6 re-inventories the game (38 pieces: 23 move, 15 stay), adds phases 9-14 (physics seam adapter in g2m_ps_bridge, deletion of the game's completion copy, road visual tile, served route classes, rail, building tessellation), corrects phase 7 (surface_kinds.h stays; tunnels need owner decision Q6) and recommends that D42 junction surfaces replace the game's tie-in (#46). Diagrams: pipeline/terrain_and_roads.html. Owner answers to section 5 follow section 5. Originally written 2026-10-12 in geo2map out/ (gitignored); the files listed under Sources that live in out/ folders exist only on the original machine.
 
 Owner decision, 2026-10-12, verbatim: "move the ENTIRE terrain logic into geo2map. It is needed for future projects."
 
@@ -399,7 +399,8 @@ This covers G-1, G-2, G-5 and slice 10.
   - `LayerOptIn{carved = true, classes = true}`.
   - Physics `G2mTerrainSource` reads carved heights and class surfaces through `SurfaceIdTable`.
   - Render reads carved L0-L6.
-  - **Delete:** `RoadSurfacePatch` (road_surface.*), terrain_smoothing.*, the carve branch of `fetch_and_decode`, `road_verge_drop_m`/`terrain_smoothing` config keys (moved into the release config if kept), `geometry_mutex_` leftovers, surface_kinds.h.
+  - **Delete:** `RoadSurfacePatch` (road_surface.*), terrain_smoothing.*, the carve branch of `fetch_and_decode`, `road_verge_drop_m`/`terrain_smoothing` config keys (moved into the release config if kept), `geometry_mutex_` leftovers. (surface_kinds.h stays: class mode needs it, see 6.4.)
+  - **Before starting:** the tunnel decision (6.4, Q6). The junction tie-in (#46) goes with RoadSurfacePatch (6.5).
 - **geo2map:** release config carries the game's verge/smoothing values if they differ from defaults (Q3).
 - **Verification:**
   - geo2map `test_render_vs_jolt` with carved tiles.
@@ -460,3 +461,268 @@ Phases 1-3 and 6 are independent of each other once phase 2's ticket type exists
 - Q4 tunnel roofs: geo2map serves them.
 - Q5 ITerrainSource adapter: stays in geo2map's opt-in physics_sim bridge (G2M-001, already there); no question to the owner needed.
 - Phase 0 (game regression) started 2026-10-12.
+
+
+---
+
+## 6. Re-inventory (2026-10-20) and phases 9-14
+
+This section re-counts what racing_game still does with terrain and roads at codex/powertrain-swaps 326f2df. It adds the open game PRs #46, #47, #51 and #52 and maps every piece to a target. It is written against geo2map main 407380b. Diagrams and per-stage anchors are in [pipeline/terrain_and_roads.html](pipeline/terrain_and_roads.html), with its text twin [pipeline/terrain_and_roads.md](pipeline/terrain_and_roads.md). Paths and line numbers below are racing_game's unless prefixed `g2m:`. Sections 1-5 above describe the state before phases 1-6 and are kept as history.
+
+Owner rule for every target: logic is engine-neutral and adapters are thin. G2M-001 still holds: geo2map core never depends on physics_sim, and only `bridges/physics_sim` sees ps types.
+
+### 6.1 Inventory: 38 pieces, 23 move, 15 stay
+
+The "Phase" column gives the phase that moves or deletes the piece. Phases 7 and 8 are the existing ones above. Phases 9-14 are new (6.6).
+
+| # | Piece | Anchors | What it does | Deps | Target | Phase |
+|---|---|---|---|---|---|---|
+| 1 | Carve chain in `produce_height` | world_terrain.cpp:229-281 | Raw height, then `smooth_terrain`, then `join_road_surface` of the L2 ancestor, then `patch->apply` for L0-L2 (`carve_max_level_` 2). L0 fails loudly. | none | served `g2m.terrain.carved` | 7 |
+| 2 | `RoadSurfacePatch` | road_surface.cpp (228 lines; +53 in #46) | The game carve (pipeline doc T5). It carves tunnel stretches (line 46). | cfg verge, separation | served carve | 7 |
+| 3 | Junction tie-in (#46, RACE-023) | #46 road_surface.cpp | A side road takes the wider road's crowned surface, at grade only. | none | Replaced by D42 `junction_height_m` in the served carve; not ported (6.5) | 7 |
+| 4 | Terrain smoothing | terrain_smoothing.cpp (61 lines) | Gaussian 2 m / 0.35 / 1 pass, using libm | cfg | served integer kernel | 7 |
+| 5 | Carved L1/L2 heal | world_terrain.cpp:637-670 | Replaces Fallback (smoothed, uncarved) L1/L2 tiles once the road surface exists | none | Not needed: the served pyramid is carved at every level | 7 |
+| 6 | `RoadSurfaceMap` | road_classes.h (41 lines) | LandClass -> surface name | cfg | `SurfaceIdTable` (`g2m_world`) | 7 |
+| 7 | `complete_road_profiles` + `abutment()` | road_structures.cpp:21-161 | The game's completion copy. It only touches entries the server left without a profile (line 129). | none | served D47/D48 (exists) | 10 |
+| 8 | 20 m retry | world_terrain.cpp:369-381 | Re-runs completion for "bounded solver" / "endpoint curvature" failures at 20 m spacing and 16384 iterations | none | served `completion-retry=20/16384` (exists) | 10 |
+| 9 | `append_route_surface_mesh` | route_surface_mesh.cpp:150 | Unpaved roads and sidewalk/cycle bands as 1 m strips, trimmed out of junctions | none | `g2m_world`, new `route_surfaces.h` | 11 |
+| 10 | `append_standalone_path_mesh` | route_surface_mesh.cpp:294 | OSM foot, cycle and path ways that are not in the road graph | none | `g2m_world` `route_surfaces.h` | 11 |
+| 11 | Road visual tile assembly | world_terrain.cpp:467-559 (`road_visual_tile_shared` without its 256 MiB LRU) | Picks the ground sampler (bilinear over the carved tile), then calls ribbons, route surfaces, paths and layers | none | `g2m_world` `build_road_visual_tile` plus a TerrainService product | 11 |
+| 12 | `resolve_surface_layers` (#51, RACE-027) | #51 surface_layers.h/.cpp (36 + 223 lines) | No-overlap layering by rank; decal lift 25 mm | none | `g2m_world` (next to the ribbon builder) | 11 |
+| 13 | `stamp_route_surface_classes` | route_surface_mesh.cpp:376, world_terrain.cpp:841 | Projects route strips into the L0 class tile (0.45 m gate; priority paved 3 > walkway 2 > other 1) | none | First a `g2m_world` post-step (phase 11), then the `terrain.class` deriver (phase 12) | 11, 12 |
+| 14 | `build_rail_tile_mesh` (#52, RACE-028) | #52 rail_meshes.cpp | Rail deck slab, ballast, parapets, rails | none | `g2m_world` `rail_meshes.h`; colours through a hook | 13 |
+| 15 | `build_rail_deck_meshes` + `rail_decks_near` | #52 rail_meshes.cpp, world_terrain.cpp (+111) | Rail bridge collision decks as `RoadDeck`, only for spans with at least 5 m clearance | none | `g2m_world` (a RailDeckSet product of TerrainService) | 13 |
+| 16 | `DeckInstaller`, `make_deck_mesh_shape` | deck_installer.h/.cpp (152 + 219 lines) | Off-thread `World::create_shape`, then `create_body` in DeckKey order; budget, wait, legacy path | **ps**, g2m `RoadDeck` | `g2m_ps_bridge` | 9 |
+| 17 | Deck selection | session.cpp:1089-1129 (41 lines) | Required radius = physics radius + 255 m, prefetch radius + 600 m; stable sort by key; surface per land class | ps, cfg | `g2m_ps_bridge` `select_decks` | 9 |
+| 18 | Surface binding | session.cpp:193-207, :430-475 | road_surfaces names -> SurfaceTable ids (< 255); SurfaceKind -> name -> id; LandClass -> paved/unpaved/off_road | ps, cfg | `g2m_ps_bridge` `bind_*_surfaces` (the names stay game data) | 9 |
+| 19 | Physics terrain stack | session.cpp:91-161 (`Session::Terrain`) | Grid, resident set, loader, streamer and source in destruction order; three surface modes | ps | `g2m_ps_bridge` `PhysicsTerrain` | 9 |
+| 20 | Start-up gate and priming | session.cpp:401-572, :808-847 | Retries failed tiles, reads the gate status, primes for ceil(square/fills)+1 ticks, checks resident/starved/miss counts | ps | `g2m_ps_bridge` step-driven helpers (the game keeps the loop) | 9 |
+| 21 | `HeightTileSharedFetch`, `make_terrain_mode` | terrain_mode.h/.cpp (125 + 89 lines) | `IHeightTileFetch` over the facade cache, plus the road segments of the L2 parent | none | `g2m_world` adapter over TerrainService | 8 |
+| 22 | Roof and wall tessellation | game/scripts/building_stream.gd:120-227 | Building walls, and roofs with holes, in GDScript | Godot | `g2m_world` `BuildingMesh` | 14 |
+| 23 | `WorldTerrain` facade | world_terrain.cpp (866 lines), .h (355) | Product kinds rg.height.carved / rg.road.surface, decks, caches | none | Removed; callers hold `TerrainService` | 8 |
+| 24 | `WorldTerrain::open` config mapping | world_terrain.cpp:111-204 | World config -> TerrainService options | cfg | **stays** (glue; shrinks in phase 8) | - |
+| 25 | `surface_kinds.h` | 47 lines | SurfaceKind -> the game's surface names | cfg | **stays** (game data; correction to phase 7, see 6.4) | - |
+| 26 | `terrain_colours` | 129 lines | Class-id colour table plus height ramp | none | **stays** (the game's look, through the colour hook) | - |
+| 27 | Deck render colours | godot_ext rg_terrain_view.cpp:711-727 | 0x4c4c52 / 0x5c4729 per land class; 2 decks per frame | Godot | **stays**; the table moves into terrain_colours (S cleanup with phase 8) | - |
+| 28 | `lod_settings` | 246 lines | Settings UI -> LodParams | cfg | **stays** | - |
+| 29 | `render_focus` | 54 lines | Camera focus policy | none | **stays** | - |
+| 30 | `terrain_stream` | 258 lines | Upload budget, coverage-ahead and bed-check diagnostics | none | **stays** (render policy) | - |
+| 31 | `road_ahead` | 137 lines | Camera road follower | none | **stays** | - |
+| 32 | `route_check` | 778 lines | Drive-route checker | none | **stays** | - |
+| 33 | `flat_ground`, `synthetic_terrain` | 35 + 52 lines | Flat mode; upload benchmark | ps | **stay** | - |
+| 34 | Interest points, progress, cancel, tracing | session.cpp | Player, parked-car and followed points; StartupProgress; RG_STREAM_TRACE | ps | **stays** (game policy) | - |
+| 35 | Godot upload | rg_terrain_view.cpp (1023 lines), terrain_surface_pack.cpp (86), rg_ring_streamer.cpp (91) | RenderingServer arrays, heal tick | Godot | **stays** (glue) | - |
+| 36 | GDScript streams | road_stream.gd (153 lines), the streaming part of building_stream.gd, rail_stream.gd (#52, 120) | Node handling; the tile policy is already geo2map's RingStreamer | Godot | **stays** | - |
+| 37 | `surface_materials.gd` | 191 lines | Texture arrays, shaders | Godot | **stays** | - |
+| 38 | Rail look and opt-in | data/world/rail.json, `rail_served` | Colours, draw switches, the layer opt-in | cfg | **stays** (data) | - |
+
+Commits that landed after 2026-10-15 and are covered above:
+- route_surface_mesh (e1977d2, d6e5525, 8040d4b);
+- grip from shared terrain classes (b9e34d9);
+- render class windows (8e79821);
+- D59 underpass walls in the game carve (cc4a424);
+- grade separation (945455a);
+- terrain heal and re-carve (484474d, becf2b4);
+- carved L1/L2 (592b469);
+- German junction markings (794cb0f, in the g2m_world ribbons);
+- LOD settings (2e14c2e).
+
+### 6.2 How the in-flight work fits
+
+- **g2m#20, D64/D65 (rail-bridge-underpass).**
+  - It changes the roads.geom config text (`overpass-mask=D64`, `tunnel-cut=80/1/8`) and the carved config text. Every release with roads therefore changes id when the game bumps its geo2map pin.
+  - D64 reaches the game at once through the served profiles: fewer ways are declined.
+  - D65 changes nothing in the game until phase 7, because the game carve already cuts every tunnel.
+  - Land it before phase 7. It is part of the served carve that phase 7 switches to.
+- **g2m#21 (turn arrows; reference bow, G2M-024).**
+  - It changes roads.geom bytes (the goldens were regenerated), so the release id changes.
+  - The arrows are client-side (`g2m_world`) and change no id.
+  - Batch its pin bump with g2m#20.
+- **g2m#22, rail layer (G2M-026).** Opt-in: the id changes only for releases that enable it. It is a prerequisite for game #52 and phase 13.
+- **g2m#19.** PLAN only: junction surfaces replace the tie-in, plus the railways roadmap.
+- **Drape branch `claude/ribbon-drape-taper`** (d436eb1 committed, G2M-025; the merge-lane taper is uncommitted).
+  - It is client-side and changes no id, but it changes ribbon vertices. It must land before phase 11 records its pins.
+  - It does not make #51 redundant. The drape fixes ribbon-vs-terrain gaps; #51 fixes layer-vs-layer overlap, and coplanar layers draped identically still depth-fight. Re-measure #51's 25 mm decal lift after the drape lands.
+  - The taper changes `road_cross_section_join.cpp`, so roads.geom and the id change when it ships.
+- **Game #46, tie-in.** Interim until phase 7; see 6.5.
+- **Game #51, layers.** Lands in the game first; phase 11 moves it, pinned.
+- **Game #52, rail.** Lands in the game first, together with the g2m#22 pin bump; phase 13 moves it, pinned. On the #52 branch the rail decks already ride the road-deck path (`session.cpp:1104-1106`), so phase 9's installer covers them unchanged.
+
+Recommended pin batching: move the game's geo2map pin once, to a geo2map that has #20 and #21 (plus #22 if rail ships), in the same release as phase 7's own bump. That costs one cold store instead of three.
+
+### 6.3 Seam adapter recommendation (owner request 2026-10-20)
+
+Measured seam (pipeline doc section 5), in lines:
+
+| Part | Lines |
+|---|---|
+| `deck_installer` | 371 |
+| `Session::Terrain` | 71 |
+| `resolve_grip_surface` | 15 |
+| `setup_terrain` | 172 |
+| `gate_check` | 40 |
+| `sync_road_decks` | 41 |
+| `terrain_mode` | 214 |
+| `surface_kinds.h` | 47 |
+| #52 `rail_decks_near` | about 60 |
+| **Game side, total** | **about 984** |
+| geo2map bridge today (S1) | 363 |
+
+About 525 of the game-side lines are logic that any game running geo2map with physics_sim needs: deck install, deck selection, surface binding, gate and priming checks, stack composition. The remaining 460 or so are game glue: progress atomics, tracing, env overrides, error text, cancel. `DeckInstaller` already depends only on g2m `RoadDeck` and ps.
+
+**Proposed decision: (a).** Grow `g2m_ps_bridge` (`bridges/physics_sim`) into the reusable adapter. It has no Godot and no racing_game types, and geo2map core stays independent of physics_sim (G2M-001).
+
+Option (b) is rejected. Every game would rewrite about 525 lines of deterministic install order and start-up checks. Getting them wrong is a physics-determinism bug: install order moves BodyIds and the state hash.
+
+API sketch (namespace `g2m::ps_bridge`, all in the opt-in target):
+
+- **Surface binding.**
+  - `struct SurfaceNames { std::string paved, unpaved, off_road; std::function<std::string(SurfaceKind)> kind_name; };`
+  - `Result<ClassSurfaceConfig> bind_class_surfaces(const ps::io::SurfaceTable&, const SurfaceNames&);`
+  - `Result<RoadSurfaceConfig> bind_road_surfaces(const ps::io::SurfaceTable&, const SurfaceNames&);`
+  - Both keep the < 255 check and the "not in the surface table" errors.
+- **`class PhysicsTerrain`.** It owns the grid, resident set, loader, streamer and source in destruction order.
+  - `install(ps::World&, radius_m, fills, prefetch_margin, prefetch_max, pool_factor)`
+  - `GateStatus update(ps::World&, std::span<const InterestPoint>)`: the streamer update plus `set_terrain_interest_point`
+  - `retry_failed()`
+  - `int prime_ticks(radius_m, fills) const`
+  - `Result<void> check_primed(const ps::World&) const`
+  - No blocking loop: the game keeps sleeping, timeouts (StartupWatch), cancel and progress.
+- **Decks.**
+  - `struct DeckKey`, `struct DeckCandidate`, `class DeckInstaller`, moved as they are: `Options{workers, before_build}`, `update`, `update_legacy`, `wait_until_installed`, `stats`, `bodies`.
+  - `ps::MeshShape make_deck_mesh_shape(const g2m::world::RoadDeck&, ps::SurfaceId);`
+  - `std::vector<DeckCandidate> select_decks(std::span<const std::shared_ptr<const RoadDeck>>, double e, double n, double required_radius_m, double prefetch_radius_m, ps::SurfaceId paved, ps::SurfaceId unpaved, bool legacy_radius);`
+
+This lands as phase 9.
+
+### 6.4 Corrections and an open point for phase 7
+
+- **surface_kinds.h stays.** Phase 7's delete list names it, but class mode needs it: `session.cpp:441-457` builds the `SurfaceIdTable` through `rg::surface_name_for_kind`. The names are the game's surface-table data (O14). Phase 9 passes them in through `SurfaceNames::kind_name`.
+- **Tunnels.** The two carves treat tunnels in opposite ways.
+  - The game carve cuts every tunnel stretch into the terrain. `road_surface.cpp:46` admits tunnel entries as carve segments. Lines 19, 102, 149 and 156 only exclude them from the deck clearance cut, the bed points, footprint protection and grade separation. So today a long tunnel is an open trench in both physics and render. I measured this from the code; I have not seen it in a drive.
+  - The served carve never carves tunnels, except D65 cuts of at most 80 m.
+  - The physics heightfield is never holed: `make_terrain_config` sets `suppress_terrain_under_static_geometry = false`.
+  - So after phase 7, a long tunnel's floor deck would lie under the uncut hill. Phase 7 needs an owner decision first (Q6 below).
+  - Recommendation, interim: serve a physics-only tunnel cut that matches the game's current behaviour, as a flagged carve option.
+  - Recommendation, long term: holes in the physics heightfield over tunnel footprints, taken from a new class role (this needs ps hole support through `kHeightfieldNoCollision`), plus the served roof and portal meshes (the Q4 answer).
+- **Grade-separation parity.** The game carve uses RoadSeparation (2.5 / 3 / 60 m). The served carve resolves overlapping cores with "lowest core wins" plus approach decks. Whether the two are equivalent is unverified. Phase 7's verification adds a parity probe at the 945455a sites.
+
+### 6.5 Junction surfaces replace the tie-in
+
+**Recommendation: yes.** As part of the phase 7 carve switch, D42 junction surfaces (served carve, `junction_height_m`, `g2m:src/layer/road_junction.cpp:1386`) replace #46's tie-in. The tie-in is not ported. Reasons:
+- It lives inside `RoadSurfacePatch`, which phase 7 deletes with no fallback (G2M-017).
+- D42 gives one surface for every arm, including the third road at one node that #46 misses (UTM 467919.5 / 5550447.5, #47 PLAN).
+- Porting it would add a second junction rule to the served carve.
+
+Phase 7 parity checks on served carved L0:
+- the Unterliederbach exit onto the B8 (the #46 case);
+- the three-road node above.
+
+Both must show no hump across the wider carriageway. The tolerance has not been measured yet; I propose the bound from #46's own test. Whether driveways and parking aisles produce junction records depends on the class policy (unverified), so census them before phase 7.
+
+Merge #46 only if phase 7 is more than a few days away (owner question Q7).
+
+### 6.6 New phases
+
+Each phase can land alone. Pins follow phases 3a/3b: before the game deletes anything, a geo2map test reproduces the game's output byte for byte on fixture tiles, from bytes recorded with the game code.
+
+#### Phase 9: physics seam adapter in g2m_ps_bridge (M, no id change)
+
+- **geo2map:** `bridges/physics_sim` gains `deck_installer.{h,cpp}`, `surface_binding.{h,cpp}` and `physics_terrain.{h,cpp}` (6.3). The bridge pin (`physics_sim.pin`) must equal the game's physics_sim pin.
+- **Game deletes:**
+  - `deck_installer.{h,cpp}` (371 lines);
+  - `resolve_grip_surface` and the surface LUT blocks (about 60);
+  - the body of `Session::Terrain`, which becomes `g2m::ps_bridge::PhysicsTerrain`;
+  - the deck selection loop in `sync_road_decks` (about 30).
+  - It keeps interest points, progress, tracing, cancel and StartupWatch.
+- **Parity:**
+  - For a recorded deck set (corridor fixture roads.geom tiles), the sequence of (DeckKey, BodyId, `debug_body_shape_digest`) is the same from the game installer and the bridge installer.
+  - `World::state_hash` after a scripted 30 s drive over a bridge is the same before and after, at 1 and 10 workers.
+  - The class and road surface tables are equal entry by entry.
+- **Risks:**
+  - A pin skew between the bridge and the game breaks the build.
+  - The installer's worker threads move into a library, so its TSan coverage has to move with it: run the bridge tests under linux-tsan.
+  - The `bodies()` accessor used by the stuck-cause probe (`session.cpp:2011`) must survive.
+
+#### Phase 10: delete the game's completion copy (S, no id change)
+
+- **Precondition:** the real-store roadcmp probe (phase 4/5 "as built") shows zero game-only entries on the corridor and Hessen stores.
+- **Game deletes:**
+  - `complete_road_profiles` and `abutment()` (road_structures.cpp:21-161);
+  - the 20 m retry (world_terrain.cpp:369-381);
+  - the `RoadDemSampler` / `road_dem_dependencies` fetch in `produce_road_surface`.
+  - road_structures.cpp then holds only the aliases.
+- **Parity:** the deck digests and the game-carved L0 tiles are byte-equal on the fixture tiles with and without the copy. If they differ, the probe was wrong: do not delete.
+- **Risks:** entries that only the game completes would lose their decks and carve (dropped bridges). The probe guards against this.
+- Can land before phase 7.
+
+#### Phase 11: road visual tile into g2m_world (M, no id change)
+
+- **geo2map:**
+  - `g2m_world/route_surfaces.{h,cpp}` (pieces 9 and 10, plus 13 as a post-step);
+  - `surface_layers` (piece 12);
+  - `build_road_visual_tile(geometry, osm, ground, options)` and a TerrainService product with its own LRU (piece 11).
+  - Port with the game's libm calls first and pin. Switch to det math in a separate commit, with the deltas measured.
+- **Game deletes:**
+  - `route_surface_mesh.{h,cpp}` (463 lines plus the header);
+  - `surface_layers.{h,cpp}` (259, after #51 has merged);
+  - the assembly body of `road_visual_tile_shared`;
+  - the stamp call in `terrain_class_tile` (world_terrain.cpp:790-848).
+- **Parity:** byte pins of `RoadRibbonTile` positions, normals, flags and indices on the fixture tiles, built by the game code at the commit before deletion; and the class tile bytes after stamping.
+- **Risks:**
+  - The drape branch changes ribbon bytes, so record the pins after it lands.
+  - #51 is unmerged.
+  - kWalkway and the other flags are consumer tags read by the game shader, so their values must not change.
+
+#### Phase 12: route classes served (M, id bump for class-mode releases)
+
+- **geo2map:** the `terrain.class` deriver stamps route strips and standalone paths at L0, from `g2m.src.osm` plus roads.geom. Its config text changes, so the id bumps for releases that enable classes.
+- **Game deletes:** the post-step call from phase 11.
+- **Parity:** served class L0 equals the phase 11 post-step output on the fixture tiles.
+- **Risks:** the class deriver gains a dependency on src.osm, which adds cold-derive cost. Batch the bump with phase 7's if possible. G2M-010 holds either way, because grip and render read the same class tile.
+
+#### Phase 13: rail meshes and rail decks into g2m_world (M, no id change beyond #52's own opt-in)
+
+- **geo2map:**
+  - `g2m_world/rail_meshes.{h,cpp}` (`build_rail_tile_mesh`, `build_rail_deck_meshes`). Geometry numbers become options; colours go through a hook, like the terrain colours.
+  - TerrainService `rail_decks_near` returns `RoadDeck`s for the phase 9 installer.
+- **Game deletes:**
+  - `rail_meshes.{h,cpp}` (566 lines);
+  - `rail_decks_near` and its tile cache in world_terrain (about 100).
+  - It keeps the `rail.json` values as options and colours.
+- **Parity:** byte pins of the #52 test fixtures (the test_rail_meshes.cpp cases) and of the deck meshes, recorded with the game code.
+- **Risks:** #52 and g2m#22 are both unmerged; this phase waits for both. The clearance test needs a ground function: use `TerrainService::surface_height_exact`, as #52 does.
+
+#### Phase 14: building roof and wall tessellation into g2m_world (S, no id change)
+
+- **geo2map:** a `g2m_world` `BuildingMesh` that builds walls, and roofs with holes, from `BuildingSet` records.
+- **Game deletes:** `_tessellate` and `_roof_with_holes` in building_stream.gd (about 110 lines). The script then only uploads arrays.
+- **Parity:** a headless Godot run dumps the GDScript output arrays once on fixture tiles; those dumps are pinned. The run is done by the owner, or by an agent with an isolated user dir.
+- **Risks:** capturing the pin needs Godot. GDScript floats and C++ doubles differ numerically, so the pins need a stated tolerance or a float-exact port.
+- **Open point:** buildings stand on the raw DEM (world_terrain.cpp:567), while roads stand on the carved ground. Decide whether that is wanted before pinning (Q8).
+
+#### Phase order and costs
+
+| Phase | Size | Release id | Depends on |
+|---|---|---|---|
+| 9 seam adapter | M | none | - |
+| 10 completion copy | S | none | real-store probe |
+| 7 carve switch (existing) | L | bump #3 (batched with the g2m#20/#21 pin) | Q6 tunnel decision |
+| 11 visual tile | M | none | drape branch, #51 |
+| 12 served route classes | M | bump for class-mode releases (batch with 7) | 11 |
+| 13 rail | M | none beyond #52's opt-in | #52, g2m#22, 9 |
+| 14 buildings | S | none | Godot pin capture |
+| 8 facade removal (existing) | S | none | 7, 11, 13 |
+
+Phases 9, 10 and 14 are independent of each other and of the rest. Phase 8 comes last: once phases 7, 11 and 13 have landed, the facade holds only caches and config mapping.
+
+### 6.7 Owner questions
+
+- **Q6 (tunnels after the carve switch).** Three options:
+  - (a) The served carve keeps cutting tunnels for physics, as the game does now. Simple, but the result is an open trench.
+  - (b) Holes in the physics heightfield over tunnel footprints, plus served portal and roof meshes. Needs physics_sim hole support driven by class data.
+  - (c) Phase 7 waits for (b).
+  - Recommended: (a), flagged as interim, then (b).
+- **Q7 (#46).** Merge the interim tie-in now, or wait for phase 7? Recommended: merge only if phase 7 is more than a few days away.
+- **Q8 (building ground).** Should buildings stand on the carved ground, like roads, or on the raw DEM, as today?
+- **Q9 (phase 12).** Serve the route classes (an id bump), or keep the client post-step from phase 11 for good?
