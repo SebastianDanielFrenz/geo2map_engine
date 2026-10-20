@@ -1209,7 +1209,7 @@ switch. D65 (short tunnel under a bank, site 1: a 46 m `tunnel=yes` road under a
 chord for a tunnel stretch under `tunnel_chord_min_length_m` when it is at most `tunnel.cut_max_length_m` (80 m) long and the DEM rises `cut_hump_min_mm`..`cut_hump_max_mm` (1..8 m)
 over the chord (`RoadCompletionStats::tunnel_cut`); `terrain_carve.cpp` `is_tunnel_cut` carves exactly those floors (length bound and floor straight to 1 cm) as an open cut, every
 other tunnel stays uncarved (`CarveOptions::tunnel_cut` sabotage); a cut candidate that a ground road crosses in plan (A66 carriageways over a service tunnel; "lowest core wins" would slot the road above) stays uncarved too (`crossed_by_ground_road`, `CarveOptions::tunnel_cut_crossing_check` sabotage). Provenance stays `TunnelFloor`, so encoding 9 is unchanged. Config texts: roads.geom `... chord:200 tunnel-cut=80/1/8 ...
-underpass-join=D63/61000 overpass-mask=D64`, carved `... underpass-walls=steep/1 tunnel-cut=D65/80 carve=...` (release ids change). Rail ways are NOT in roads.graph: the railway
+underpass-join=D63/61000 overpass-mask=D64`, carved `... underpass-walls=steep/1 tunnel-cut=D65/80 carve=...` (release ids change; `/80+hump` since 7a-2). Rail ways are NOT in roads.graph: the railway
 over the road is not modelled in geo2map at all (the racing_game side must source it). Tests `tests/layer/test_road_overpass.cpp` (`[overpass][d64]`, `[d65]`: synthetic scenes, controls,
 recorded sabotages `UnderpassRules.overpass = false`, `tunnel_cut_max_length_m = 0`, `CarveOptions.tunnel_cut = false`), pins `test_road_geom_xs.cpp`, `test_terrain_carve.cpp`,
 `test_road_rules.cpp` (de.json hash is of the LF bytes), goldens g3c/g3d (one hoechst_a66 tile). Tools `g2m_osm_near`, `g2m_spot_dump` (docs/pipeline/README.md 7.4).
@@ -1245,6 +1245,45 @@ stretch that cannot reach the moved plane is refitted to the UNMOVED raw plane i
 lists the decline text per declined portal node; test `unreachable_dz`). Stat `portal_clamped` counts moved nodes; the DEM floor `portal_tunnel_unfit`
 stays as a counted last resort. Test `test_road_completion.cpp` "portal reach (7a-1)" (5 m stub between 3.6 m of terrain rise: both mouths step 0,
 floor rise 1.348 of 1.5 m); a second part covers the dead-end stub. Recorded sabotages C (`kPortalReach` 1e9 = no clamp) and D (an unjoined far end not moved: the stub keeps its DEM height) fail it.Known pre-existing failure on the base: `test_road_rules.cpp` "The tunnel block" (its mutation string predates D65's three extra keys).
+
+## Design floor and component solve 7a-2, first half (2026-10-20, branch claude/design-floor, stacked on claude/portal-continuity)
+
+docs/structure_classification.md sections 3, 4.5, 9. Replaces the D47/D52/D65 tunnel floors in `road_completion.cpp` step 2a by one
+floor per connected tunnel COMPONENT. Library: `include/g2m/layer/structure_floor.h`, `src/layer/structure_floor.cpp`
+(`network_design_floor(FloorNetwork, NetworkFloorParams) -> NetworkFloor`, pure, no libm): per 1 m station the upper bound is
+u = min(chord, ground - needed) (ground = minimum DEM at the centre and at +-width/2, `structure_clearance_m` + `structure_roof_m`
+= needed; the ground term is skipped within needed/G of a portal), the floor is the greatest G-Lipschitz profile below u raised to the
+portal cones (anchors from 7a-1 stay exact, G = `structure_max_grade`), the network chord is the minimum over adjacent portal pairs.
+`structure_classify` (census rule) now lives in `src/layer/structure_classify.*` and is linked by `tools/structure_census`.
+`road_completion.cpp`: `component_for(stretch)` joins tunnel stretches at shared nodes by BFS in canonical (way id, start ref) order;
+a portal is a node with a non-tunnel edge or a single tunnel end (anchor = `portal_raw`, else a free anchor at the DEM sample), interior
+nodes carry no anchor; `FloorComponent` is memoised per component (a function of the component, never of the tile). Each entry is fitted
+by `fit_vertical_profile` on the floor samples with fixed end heights; end grade = ground road at a portal, mean of the two floor slopes
+at a degree-2 interior junction (C1), own-side slope otherwise; a straight floor is fitted as the exact chord. Where the anchors are not
+reachable under G the 7a-1 reach rule stays the handler with `tunnel_max_grade` replaced by G (`pairs_beyond_grade`,
+`pairs_shifted`, `pairs_still_beyond_grade`, `anchor_misses`; stats `floor_*`, `FloorComponentReport`). A strict-accepted ground end beside
+a shifted portal stays stepped (provenance validator) and is counted (`ground_portal_unreachable`). Dependencies:
+`road_component_dependencies` (`road_dem_dependencies.cpp`, one round) and `component_dependencies` in `derive_road_geom.cpp` iterate as
+the context grows (graph tiles of the component, DEM along every floor station) inside the discovery stages (`discovery_stages` 24 for
+roads.geom, `kMaxDiscoveryStages` 32); `complete=false` until the needed graph tiles are present; derive requires the recomputed set to
+equal `request.inputs`. Options: `RoadCompletionOptions::tunnel_design_floor` (struct default false = D47/D52/D65 path kept, true in
+`served_road_completion_options()`); config token ` tunnel-design-floor=7a2/<clearance>/<roof>/<max_grade>/reach:0.9 component-walk=1`
+(only when on). Release ids: roads.geom changes through this token and through the de.json `structure` block sha (batched bump #3); rail.geom
+only through the de.json sha (rail floor at 4 % and served runs are the second half). de.json `structure` block: see docs/structure_classification.md
+sections 3.2 and 3.3 (`eec3ec54...b813` is the pinned sha). Carving of design floors, served runs (roads.geom enc 11, rail.geom enc 2) and the Above-input
+problem are NOT in this half. Tests: `tests/unit/test_structure_floor.cpp` (`[structure][floor]`, 18 cases, sabotages S5-S7),
+`tests/layer/test_road_completion.cpp` Y component (shared-node equality, recorded sabotage "no component walk": 14 failures), four-tile invariance,
+golden pin 0x3028837f4a976ec2; `test_portal_continuity` prints "[portal 7a-2 ...]" (components, unsolved, pairs beyond grade, anchor moves, fit deviation).
+D65 under the design floor (7a-2, measured on the home store): the design floor of a short tunnel stretch is its chord by construction, and the carve recognises
+an open cut by a floor straight within 1 cm and at most `tunnel.cut_max_length_m` long, so left alone 1329 stretches were carved as cuts (7a-1: 378). The completion
+therefore takes the exact chord only for D65's hump rule (ground over the chord rising by `cut_hump_min/max_mm`, on the per-station ground the floor was solved against;
+`FloorComponent::ground`) and gives every other short stretch the portal grade itself (no `kPortalGradeSlack`), and `terrain_carve.cpp` `tunnel_cut_hump_ok`
+(`CarveOptions::tunnel_cut_hump_check`, tolerance `kTunnelCutHumpToleranceM` 0.25, cell DEM at 1 m stations; config token `+hump` in the terrain.carved text) refuses a
+straight floor without the hump. Census now: 186 carved as cuts, 54 left uncarved because a ground road crosses. `tunnel_entry_is_carved(..., const CutGroundAt*)` and
+`g2m_spot_dump --census --csv` (`carved=`, `carved_without_hump_check=`) measure it. Phase 7a-3 replaces this test. Test `test_road_overpass.cpp` "tunnel cut (7a-2)" (sabotage: hump check off trenches a 15 m hill).
+Fixture helper `tests/support/road_fixture.h` `road_geom_inputs(..., components=true)` runs the component walk. Goldens g3xs/g3j/g3d and the road mesh pins
+(`tests/world/road_mesh_pins.inc`, re-recorded from `g2m::world` with the hidden `[.][regen]` test) moved with the tunnel floors. Cost:
+`g2m_structure_census --component-cost` (City-Tunnel: 37 chains, 19474 stations, 16 portals, 4 passes, 7.38 ms; all 1210 components 15.5 ms).
 
 ## Railways R1/R2 (2026-10-20, decision G2M-026)
 
