@@ -11,8 +11,9 @@
 
   Windows legs (Ninja, from a VS 2022 Build Tools environment entered via
   vcvars64.bat): debug, release, asan (clang-cl), msvc-release (cl).
-  WSL legs (clang + lld, build dir ~/build/geo2map_engine/<preset>, never
-  under /mnt/s): linux-release, linux-asan-ubsan, linux-tsan.
+  WSL legs (clang + lld, build dir ~/build/<checkout dir name>/<preset>, e.g.
+  ~/build/geo2map_engine/<preset> for the main checkout, never under /mnt/s):
+  linux-release, linux-asan-ubsan, linux-tsan.
 
   Per leg: cmake configure, build, ctest (every test), then
   g2m_golden_dump for each golden set (g0, g1). The golden compare fails
@@ -46,7 +47,13 @@ param(
 $repoRoot = Split-Path -Parent $PSScriptRoot
 # Windows PowerShell 5.1's redirection operators write UTF-16 by default.
 $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'
-$wslRoot = '/mnt/s/claude_code/geo2map_engine'
+# This checkout's WSL path, derived from $repoRoot so every worktree runs its
+# WSL legs against itself: S:\claude_code\geo2map_portal -> /mnt/s/claude_code/geo2map_portal.
+# Hand conversion (the same as Invoke-Wsl's log path), no extra wsl call.
+$wslRoot = '/mnt/' + $repoRoot.Substring(0, 1).ToLower() + ($repoRoot.Substring(2) -replace '\\', '/')
+# Per-checkout WSL build dir, shared with no other worktree (CMakePresets.json
+# binaryDir uses ${sourceDirName}): ~/build/<checkout dir name>/<preset>.
+$wslBuildRoot = '$HOME/build/' + (Split-Path -Leaf $repoRoot)
 $logDir = Join-Path $repoRoot 'out\ci_logs'
 $goldenDir = Join-Path $repoRoot 'out\ci_golden'
 New-Item -ItemType Directory -Force $logDir, $goldenDir | Out-Null
@@ -318,7 +325,7 @@ function Invoke-WslLeg([string]$Preset) {
         $out = Join-Path $goldenDir "$Preset.$set.txt"
         if (Test-Path $out) { Remove-Item -LiteralPath $out }
         $outWsl = "$wslRoot/out/ci_golden/$Preset.$set.txt"
-        $script:rc = Invoke-Wsl "`$HOME/build/geo2map_engine/$Preset/tests/golden/g2m_golden_dump $set '$outWsl'" $log
+        $script:rc = Invoke-Wsl "$wslBuildRoot/$Preset/tests/golden/g2m_golden_dump $set '$outWsl'" $log
         $ok = ($script:rc -eq 0) -and (Test-Path $out)
         Add-Result $Preset "golden-$set" $ok 'dump written'
         if ($ok) { $script:GoldenDumps.Add([pscustomobject]@{ Leg = $Preset; Set = $set; Path = $out }) }
