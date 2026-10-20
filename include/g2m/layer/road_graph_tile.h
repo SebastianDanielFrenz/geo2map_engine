@@ -13,6 +13,9 @@ inline constexpr std::string_view kRoadGraphLayer = "g2m.roads.graph";
 inline constexpr std::uint16_t kRoadGraphEncodingLegacy = 4;
 inline constexpr std::uint16_t kRoadGraphEncodingTags = 5;
 inline constexpr std::uint16_t kRoadGraphEncoding = 6;
+// kRoadGraphMaxViaWays is part of the wire format (encode and decode reject more) and equals the
+// router's own via-way limit (route/routing_graph.cpp kMaxViaWays): a longer rule would be ignored
+// by the router anyway.
 inline constexpr std::size_t kRoadGraphMaxRestrictions = 200000, kRoadGraphMaxViaWays = 16;
 inline constexpr std::uint32_t kRoadGraphHaloM = 128;
 struct RoadGraphTile {
@@ -40,6 +43,15 @@ Result<void> validate_road_graph(const RoadGraph& graph);
 // `restrictions` is the world (or region) rule list; the tile keeps the ones it holds (see RoadGraphTile).
 Result<RoadGraphTile> select_road_graph_tile(const RoadGraph& graph, const TileKey& key,
     std::span<const TurnRestriction> restrictions = {});
+// A rule with more than kRoadGraphMaxViaWays via ways cannot be stored (select_road_graph_tile and
+// the codec reject it, by design: the limit is the format's). The deriver therefore removes such
+// rules from the list before selecting, so one odd relation never fails a tile, and reports the
+// count: DeriveResult::diagnostics "restrictions_dropped_over_via_ways" (rules, after the
+// no_entry/no_exit expansion) and "relations_dropped_over_via_ways" (distinct relations).
+struct DroppedRestrictions {
+    std::size_t rules = 0, relations = 0;
+};
+DroppedRestrictions drop_overlong_restrictions(std::vector<TurnRestriction>& restrictions);
 // Stretch context (street fidelity P1 slice 1). A tile graph stops at its halo,
 // so a node of a complete way far outside the tile can miss its other incident
 // ways. Every way incident to a node N touches the level-2 tile that contains
