@@ -302,8 +302,23 @@ geo2map_engine/
                                       fill_miss_count(). static_assert(ps::SurfaceId == uint16_t) guards the
                                       LUT's value type. The uniform (flat SurfaceId) constructor and its
                                       fill_tile path are unchanged
-    src/                               version.cpp, g2m_terrain_source.cpp
-    tests/                             g2m_bridge_tests (bridge-release leg only): test_smoke.cpp (links
+      deck_installer.h                DeckKey/DeckCandidate/DeckInstaller (terrain migration plan 6.3/6.6 phase 9),
+                                      moved unchanged from racing_game's rg::DeckInstaller: off-thread shape build
+                                      (ps::World::create_shape), install on the sim thread in strict (way_id, start,
+                                      end) order, so BodyIds follow install order only. Options{workers, before_build},
+                                      update / update_legacy / wait_until_installed / stats / bodies kept. Plus
+                                      make_deck_mesh_shape and select_decks (the game's sync_road_decks selection loop:
+                                      bbox distance, required vs prefetch, key order, class surface). Needs a pin with
+                                      World::create_shape (the committed physics_sim.pin predates it)
+      surface_binding.h               SurfaceNames, bind_class_surfaces, bind_road_surfaces: the game's
+                                      resolve_grip_surface and class/road LUT blocks, messages and the <255 check verbatim
+      physics_terrain.h               PhysicsTerrain: PhysicsTileGrid + ResidentHeightSet + HeightTileLoader +
+                                      PhysicsTerrainStreamer + G2mTerrainSource with the game's destruction order;
+                                      install / update (non-blocking gate + interest points, vanished ids released) /
+                                      retry_failed / prime_ticks / check_primed. No blocking loop, progress, tracing
+                                      or cancel (those stay in the game)
+    src/                               version.cpp, g2m_terrain_source.cpp, deck_installer.cpp, surface_binding.cpp, physics_terrain.cpp
+    tests/                             g2m_bridge_tests (bridge-release leg only): [ps_bridge] (phase 9): test_ps_bridge_decks.cpp (install sequence of the corridor deck set, pinned to what racing_game's own deck_installer.cpp produces, 1 vs 10 workers), test_ps_bridge_surfaces.cpp (LUTs vs the game's, fixtures/game_surfaces.json), test_ps_bridge_terrain.cpp (PhysicsTerrain smoke); test_smoke.cpp (links
                                       against ps_core/Jolt and g2m_phys), test_g2m_terrain_source.cpp
                                       (contract: samples even/tile_size 255/key_offset+origin round-trip/
                                       fill_tile never resizes; fill_tile zero-alloc under
