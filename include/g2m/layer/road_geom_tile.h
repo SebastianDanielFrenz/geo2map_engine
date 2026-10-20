@@ -131,6 +131,10 @@ struct RoadCompletionStats {
     // 7a-1 portal planes, once per node: from an accepted ground profile / from the approach level / the junction plane
     // of tunnel stretches meeting without a ground way.
     std::size_t portal_ground = 0, portal_approach = 0, portal_joint = 0;
+    std::size_t portal_clamped = 0;          // portal nodes the ground gave way at (the tunnel could not climb to the ground anchor), once per node
+    std::size_t portal_free_end = 0;         // unjoined tunnel ends moved to the nearest height the floor can reach from the anchored end
+    std::size_t ground_portal_unreachable = 0; // ground stretches that could not reach a moved portal plane and keep the unmoved one (a step of the shift remains)
+    std::size_t ground_portal_refit = 0;     // retry-accepted ground stretches re-fitted to such a moved portal plane
     std::size_t portal_tunnel_ends = 0;      // tunnel floor ends anchored on a portal plane
     std::size_t portal_tunnel_straight = 0;  // ... on the straight floor between the portal heights (the portal grades left no cubic)
     std::size_t portal_tunnel_unfit = 0;     // tunnel floors whose portal planes left no floor (kept on the DEM)

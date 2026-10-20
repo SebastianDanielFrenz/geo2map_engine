@@ -157,8 +157,8 @@ int main(int argc, char** argv) {
         if (!k0 || !k1) return 1;
         static const char* kProvN[] = {"strict", "retry", "bridge-completed", "ground-completed", "tunnel-floor"};
         // 7a-1: what ends at each node, across the census tiles (a node is listed once per entry end).
-        struct EndAt { std::int64_t way; int prov; bool tunnel, bridge; double z, grade; };
-        struct NodeEnds { double east = 0, north = 0; std::vector<EndAt> ends; int declined_ground = 0; };
+        struct EndAt { std::int64_t way; int prov; bool tunnel, bridge; double z, grade, length, max_grade; };
+        struct NodeEnds { double east = 0, north = 0; std::vector<EndAt> ends; int declined_ground = 0; std::vector<std::string> declined_msgs; };
         std::map<std::int64_t, NodeEnds> node_ends;
         std::set<std::tuple<std::int64_t, std::uint32_t, int>> seen_ends, seen_declined;
         for (std::int32_t ty = k0->y; ty <= k1->y; ++ty) for (std::int32_t tx = k0->x; tx <= k1->x; ++tx) {
@@ -198,13 +198,17 @@ int main(int argc, char** argv) {
                             // The grade is reported rising away from the node (the end grade at side 1, the negated start grade at side 0).
                             auto& n = node_ends[ends[side]]; const auto pos = position_of(ends[side]);
                             n.east = pos.x / 1000.0; n.north = pos.y / 1000.0;
-                            n.ends.push_back({e.way_id, prov, p.attributes.tunnel, p.attributes.bridge, z->height_m, side ? -z->grade : z->grade});
+                            n.ends.push_back({e.way_id, prov, p.attributes.tunnel, p.attributes.bridge, z->height_m, side ? -z->grade : z->grade, p.reference.length_m, p.attributes.max_grade_per_mille / 1000.0});
                         }
                     } else {
                         bool tunnel = false, bridge = false;
                         for (const auto& [k, v] : way->tags) { if (k == "tunnel" && v != "no") tunnel = true; if (k == "bridge" && v != "no") bridge = true; }
                         if (tunnel || bridge) continue;
-                        for (int side = 0; side < 2; ++side) if (seen_declined.insert({e.way_id, e.stretch.start_ref, side}).second) ++node_ends[ends[side]].declined_ground;
+                        for (int side = 0; side < 2; ++side) if (seen_declined.insert({e.way_id, e.stretch.start_ref, side}).second) {
+                            auto& nd = node_ends[ends[side]]; ++nd.declined_ground;
+                            const auto pos = position_of(ends[side]); nd.east = pos.x / 1000.0; nd.north = pos.y / 1000.0;
+                            nd.declined_msgs.push_back("way " + std::to_string(e.way_id) + ": " + (e.decline ? e.decline->message : std::string("?")));
+                        }
                     }
                 }
             }
@@ -263,7 +267,8 @@ int main(int argc, char** argv) {
         for (const auto& [k, v] : by_message) std::cout << "  " << v << "  " << k << '\n';
         if (!portals_path.empty()) {
             std::ofstream out(portals_path);
-            out << "node,east,north,tunnel_ways,floor_z,floor_grade,ground_ways,ground_z,ground_grade,dz,dgrade,declined_ground\n";
+            out << "node,east,north,tunnel_ways,floor_z,floor_grade,ground_ways,ground_z,ground_grade,dz,dgrade,declined_ground,ground_prov,tunnel_len,ground_len,decline\n";
+            std::size_t unreachable = 0, unreachable_strict = 0;
             std::size_t portals = 0, with_ground = 0, step_001 = 0, step_05 = 0, declined_at_portal = 0, tunnel_tunnel = 0, tt_bad = 0, grade_bad = 0;
             double worst = 0, worst_grade = 0;
             for (const auto& [id, n] : node_ends) {
@@ -286,11 +291,18 @@ int main(int argc, char** argv) {
                 }
                 if (tun.size() > 1 && dz > 0.01) ++tt_bad;
                 out << id << ',' << n.east << ',' << n.north << ',' << tun.size() << ',' << tun[0]->z << ',' << tun[0]->grade << ',' << gro.size() << ','
-                    << (gro.empty() ? 0.0 : gro[0]->z) << ',' << (gro.empty() ? 0.0 : gro[0]->grade) << ',' << dz << ',' << dg << ',' << n.declined_ground << '\n';
+                    << (gro.empty() ? 0.0 : gro[0]->z) << ',' << (gro.empty() ? 0.0 : gro[0]->grade) << ',' << dz << ',' << dg << ',' << n.declined_ground << ',' << (gro.empty() ? "-" : kProvN[gro[0]->prov]) << ',' << tun[0]->length << ',' << (gro.empty() ? 0.0 : gro[0]->length) << ',';
+                for (std::size_t k = 0; k < n.declined_msgs.size(); ++k) out << (k ? " | " : "") << n.declined_msgs[k];
+                out << '\n';
+                if (!gro.empty() && dz > 0.01 && tun.size() == 1) {
+                    ++unreachable; if (gro[0]->prov < 2) ++unreachable_strict;
+                    std::cout << "  unreachable node " << id << " at " << n.east << ' ' << n.north << ": dz " << dz << " m, tunnel stub " << tun[0]->length << " m (floor bound 0.30), ground " << kProvN[gro[0]->prov]
+                              << ' ' << gro[0]->length << " m (class bound " << std::max(0.12, gro[0]->max_grade) << ", end grade " << gro[0]->grade << "), floor z " << tun[0]->z << ", ground z " << gro[0]->z << '\n';
+                }
             }
             std::cout << "portals " << portals << " with_ground_profile " << with_ground << " tunnel_tunnel " << tunnel_tunnel << " (step > 0.01 m: " << tt_bad
                       << ") step>0.01m " << step_001 << " step>0.5m " << step_05 << " grade>0.02 " << grade_bad << " worst_dz " << worst << " worst_dgrade " << worst_grade
-                      << " declined_ground_at_portals " << declined_at_portal << '\n';
+                      << " declined_ground_at_portals " << declined_at_portal << " unreachable(dz>0.01, one tunnel) " << unreachable << " of which strict/retry ground " << unreachable_strict << '\n';
         }
         return 0;
     }

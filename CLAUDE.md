@@ -1236,7 +1236,15 @@ approach segments. Option `RoadCompletionOptions::tunnel_portal_anchor` (struct 
 fixtures flat/tilted, 4812754 NW mouth, carved axis, rail; recorded sabotages A portal anchor back to the node's DEM sample, B no refit of
 the declined stretch to the tunnel plane); goldens g3c/g3d (hoechst_a66) re-recorded; `test_terrain_carve.cpp` T12 and `test_junction_gradient.cpp`
 D42 each allow the one hoechst_a66 1820/21684 tilted case that appears because a formerly declined stretch now completes. `g2m_spot_dump --portals`
-is the census. Known pre-existing failure on the base: `test_road_rules.cpp` "The tunnel block" (its mutation string predates D65's three extra keys).
+is the census. Reach rule (review of ffd575d): `portal_shift(node)` in `road_completion.cpp` - where a tunnel stretch's two raw portal heights differ by more than
+`kPortalReach` 0.9 x `tunnel_max_grade` x its reference length, each end moves toward the other by half the excess (pure per node, largest shift
+wins at a node on several stretches; an end nothing joins is FREE: step 2a moves its floor end to the nearest height within kPortalReach of the anchored end - stat portal_free_end - and nothing shifts or refits; the first attempt shifted the joined node instead and pushed five short ground stubs back into a decline); `portal_plane` returns the moved plane, which anchors the floor in step 2a and which step 3 refits the joining
+ground stretches to (declined ones, and retry-accepted ones - `refit`, stat `ground_portal_refit`, provenance becomes GroundCompleted and keeps its
+strict decline code). A strict-accepted ground profile is never re-fitted (format: non-strict provenance needs a strict decline code); a ground
+stretch that cannot reach the moved plane is refitted to the UNMOVED raw plane instead (stat `ground_portal_unreachable`; the floor stays on the moved plane, so a step remains and is reported - both show as census steps) ("unreachable" lines of `g2m_spot_dump --portals`, which also
+lists the decline text per declined portal node; test `unreachable_dz`). Stat `portal_clamped` counts moved nodes; the DEM floor `portal_tunnel_unfit`
+stays as a counted last resort. Test `test_road_completion.cpp` "portal reach (7a-1)" (5 m stub between 3.6 m of terrain rise: both mouths step 0,
+floor rise 1.348 of 1.5 m); a second part covers the dead-end stub. Recorded sabotages C (`kPortalReach` 1e9 = no clamp) and D (an unjoined far end not moved: the stub keeps its DEM height) fail it.Known pre-existing failure on the base: `test_road_rules.cpp` "The tunnel block" (its mutation string predates D65's three extra keys).
 
 ## Railways R1/R2 (2026-10-20, decision G2M-026)
 

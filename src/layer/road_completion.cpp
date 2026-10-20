@@ -144,6 +144,8 @@ bool boundary_infeasible(const std::string& message) {
 // 7a-1: how far (in grade) a straight portal-to-portal floor may leave the ground road's grade at a portal. The
 // continuity requirement is 0.02; the margin keeps the stored (quantised, projected) grades inside it.
 constexpr double kPortalGradeSlack = 0.015;
+// Share of tunnel_max_grade a tunnel floor is asked to climb between two anchored portals (the rest is the curvature's room).
+constexpr double kPortalReach = 0.9;
 double project(const RoadJunctionPlane& plane, double heading) {
     return plane.grade_x * det::cos(heading) + plane.grade_y * det::sin(heading);
 }
@@ -180,6 +182,7 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
     };
     ReferenceFitLimits reference = limits.reference; reference.allow_curvature_exceptions = true;
     const auto mark = [&](std::size_t i, ProfileProvenance kind) {
+        if (!entries[i].decline) { origins[i].provenance = kind; return; }   // a retry-accepted stretch re-fitted to a moved portal plane keeps its strict decline code
         origins[i] = {kind, static_cast<std::uint16_t>(entries[i].decline->code)};
         entries[i].decline.reset();
     };
@@ -316,7 +319,7 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
     // only the plane is known (rule 3) a tunnel end takes the plane's projection on its own heading.
     struct PortalAnchor { RoadJunctionPlane plane; std::optional<double> away; };
     std::map<std::int64_t, std::optional<PortalAnchor>> portal_cache;
-    const auto portal_plane = [&](std::int64_t node) -> std::optional<PortalAnchor> {
+    const auto portal_raw = [&](std::int64_t node) -> std::optional<PortalAnchor> {
         const auto cached = portal_cache.find(node); if (cached != portal_cache.end()) return cached->second;
         std::vector<const RoadGraphEdge*> ground; int tunnel_edges = 0;
         walk.for_each_edge(node, [&](const RoadGraphEdge& edge) {
@@ -365,6 +368,55 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         return portal_cache[node] = result;
     };
 
+    // 7a-1 reachability (review of ffd575d): a tunnel stretch whose two raw portal heights differ by more than its floor can climb
+    // (kPortalReach of tunnel_max_grade over the stretch's reference length) cannot meet both. Neither the DEM floor nor a step is
+    // allowed: the ground gives way. Each end moves toward the other by half the excess, the tunnel floor is fitted to the moved
+    // heights, and the ground stretches joining there are re-fitted to the moved plane (step 3, the declined-stretch refit). A pure
+    // function of the node: the tunnel stretches incident to it (graph), their reference lengths and the raw anchors of both ends.
+    // A node on several tunnel stretches takes the largest shift.
+    std::map<std::pair<std::int64_t, std::uint32_t>, std::optional<double>> tunnel_length_cache;
+    const auto tunnel_length = [&](std::int64_t way_id, const RoadStretch& stretch) -> std::optional<double> {
+        const auto key = std::make_pair(way_id, stretch.start_ref);
+        const auto cached = tunnel_length_cache.find(key); if (cached != tunnel_length_cache.end()) return cached->second;
+        std::optional<double> length;
+        if (auto ref = builder.fit_stretch(way_id, stretch, reference); ref && ref->length_m >= 0.5) length = ref->length_m;
+        return tunnel_length_cache[key] = length;
+    };
+    std::map<std::int64_t, double> shift_cache;
+    const auto portal_shift = [&](std::int64_t node) -> double {
+        const auto cached = shift_cache.find(node); if (cached != shift_cache.end()) return cached->second;
+        double best = 0;
+        const auto here = options.tunnel_portal_anchor && options.tunnel_floors ? portal_raw(node) : std::nullopt;
+        if (here) {
+            std::vector<std::int64_t> ways;
+            walk.for_each_edge(node, [&](const RoadGraphEdge& edge) { const auto* a = walk.attributes(edge.way_id); if (a && a->tunnel) ways.push_back(edge.way_id); });
+            std::sort(ways.begin(), ways.end()); ways.erase(std::unique(ways.begin(), ways.end()), ways.end());
+            for (const auto way_id : ways) {
+                const auto* w = way_of(way_id); const auto stretches = builder.stretches(way_id); if (!w || !stretches) continue;
+                for (const auto stretch : *stretches) {
+                    const auto first = w->node_ids[stretch.start_ref], last = w->node_ids[stretch.end_ref];
+                    if (first == last || (first != node && last != node)) continue;
+                    // An end nothing joins (no raw anchor) is free: step 2a moves its floor end instead, so nothing shifts here.
+                    const auto far = portal_raw(first == node ? last : first); const auto length = tunnel_length(way_id, stretch);
+                    if (!far || !length) continue;
+                    const double difference = (far->plane.height - here->plane.height) / 256.0, reach = kPortalReach * options.tunnel_max_grade * *length;
+                    if (std::fabs(difference) <= reach) continue;
+                    const double shift = (difference < 0 ? -1.0 : 1.0) * (std::fabs(difference) - reach) / 2.0;
+                    if (std::fabs(shift) > std::fabs(best)) best = shift;
+                }
+            }
+        }
+        return shift_cache[node] = best;
+    };
+    std::map<std::int64_t, std::optional<PortalAnchor>> portal_moved_cache;
+    const auto portal_plane = [&](std::int64_t node) -> std::optional<PortalAnchor> {
+        auto raw = portal_raw(node); if (!raw) return raw;
+        const double shift = portal_shift(node); if (shift == 0) return raw;
+        const auto cached = portal_moved_cache.find(node); if (cached != portal_moved_cache.end()) return cached->second;
+        raw->plane.height += static_cast<std::int32_t>(std::llround(shift * 256.0)); ++stats->portal_clamped;
+        return portal_moved_cache[node] = raw;
+    };
+
     // Step 2a (D47, the game's tunnel step): tunnel floors. The DEM along the tunnel's own reference is the floor (the
     // lower road's ground; the roof is supplied by the road above, so a floor is never carved into the terrain). A
     // tunnel at least tunnel_chord_min_length_m long takes the straight chord between its two portal samples instead
@@ -399,11 +451,18 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
             // The offsets are measured on the DEM samples before either is applied; the ramp never exceeds the length, so one
             // end's correction has faded out at the other end and both end heights come out exact.
             const double ramp = std::min(std::max(options.ground_ramp_m, 1.0), ref->length_m);
-            const double offset_a = pa ? pa->plane.height / 256.0 - samples.front().height_m : 0, offset_b = pb ? pb->plane.height / 256.0 - samples.back().height_m : 0;
+            double offset_a = pa ? pa->plane.height / 256.0 - samples.front().height_m : 0, offset_b = pb ? pb->plane.height / 256.0 - samples.back().height_m : 0;
+            // An end nothing joins is free (review of ffd575d): it keeps the DEM sample unless that is out of the floor's reach of the
+            // anchored end, then it moves to the nearest reachable height - nothing there to be continuous with.
+            const double reach = kPortalReach * g * ref->length_m;
+            bool free_a = false, free_b = false;
+            if (pb && !pa) { const double h = pb->plane.height / 256.0, target = std::clamp(samples.front().height_m, h - reach, h + reach); free_a = target != samples.front().height_m; offset_a = target - samples.front().height_m; }
+            if (pa && !pb) { const double h = pa->plane.height / 256.0, target = std::clamp(samples.back().height_m, h - reach, h + reach); free_b = target != samples.back().height_m; offset_b = target - samples.back().height_m; }
+            if (free_a || free_b) ++stats->portal_free_end;
             for (auto& sample : samples) {
                 const double da = sample.station_m, db = ref->length_m - sample.station_m;
-                if (pa && da < ramp) sample.height_m += offset_a * (1.0 - da / ramp);
-                if (pb && db < ramp) sample.height_m += offset_b * (1.0 - db / ramp);
+                if ((pa || free_a) && da < ramp) sample.height_m += offset_a * (1.0 - da / ramp);
+                if ((pb || free_b) && db < ramp) sample.height_m += offset_b * (1.0 - db / ramp);
             }
             if (pa) { pa_grade = std::clamp(pa->away ? -*pa->away : project(pa->plane, ref->at(0)->heading), -g, g); ++stats->portal_tunnel_ends; }
             if (pb) { pb_grade = std::clamp(pb->away ? *pb->away : project(pb->plane, ref->at(ref->length_m)->heading), -g, g); ++stats->portal_tunnel_ends; }
@@ -488,23 +547,27 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
     }
 
     // Step 3: still-declined ground stretches, re-fitted at relaxed limits, 40 m samples and 32 m ramps from the
-    // bridge abutment planes at their ends (the DEM plane at the node where no bridge ends).
+    // bridge abutment planes at their ends (the DEM plane at the node where no bridge ends). 7a-1: a retry-accepted ground stretch ending
+    // at a portal the ground gave way at (portal_shift) is re-fitted to the moved plane as well.
     for (std::size_t i = 0; i < entries.size(); ++i) {
-        auto& entry = entries[i]; if (entry.profile || !entry.decline) continue;
+        auto& entry = entries[i];
+        const bool refit = options.tunnel_portal_anchor && entry.profile && !entry.decline && origins[i].provenance == ProfileProvenance::Retry;
+        if ((entry.profile || !entry.decline) && !refit) continue;
         const auto* w = way_of(entry.way_id); if (!w) continue;
         const auto* attrs = walk.attributes(entry.way_id); if (!attrs || attrs->bridge || attrs->tunnel) continue;
         const auto first_id = w->node_ids[entry.stretch.start_ref], last_id = w->node_ids[entry.stretch.end_ref];
+        if (refit && portal_shift(first_id) == 0 && portal_shift(last_id) == 0) continue;
         ++stats->ground_candidates;
         const auto fail = [&] { ++stats->ground_failed; };
         auto ref = builder.fit_stretch(entry.way_id, entry.stretch, reference); if (!ref || ref->length_m < 0.5) { fail(); continue; }
         struct GroundFit { VerticalProfile vertical; bool bridge_first, bridge_last; };
-        bool use_portal = false, waive_mismatch = false;
+        bool use_portal = false, waive_mismatch = false, raw_portal = false;
         // The portal plane at a node a tunnel floor ends on (touches_tunnel), else nothing.
         const auto tunnel_portal = [&](std::int64_t id) -> std::optional<RoadJunctionPlane> {
             bool tunnel = false;
             walk.for_each_edge(id, [&](const RoadGraphEdge& edge) { const auto* a = walk.attributes(edge.way_id); if (a && a->tunnel) tunnel = true; });
             if (!tunnel) return std::nullopt;
-            const auto anchor = portal_plane(id); if (!anchor) return std::nullopt;
+            const auto anchor = raw_portal ? portal_raw(id) : portal_plane(id); if (!anchor) return std::nullopt;
             return anchor->plane;
         };
         use_portal = options.tunnel_portal_anchor && (tunnel_portal(first_id) || tunnel_portal(last_id));
@@ -578,13 +641,24 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
             waive_mismatch = false;
             if (result) ++stats->ground_tunnel_chord;
         }
+        if (!result && use_portal && (portal_shift(first_id) != 0 || portal_shift(last_id) != 0)) {
+            // The ground stretch cannot reach the moved plane within its own class bound (a stub too short to climb the shift): it keeps
+            // the unmoved portal plane of the first 7a-1 build and a step of the shift remains, reported by the census as unreachable.
+            raw_portal = true;
+            result = try_fit(end_plane(first_id, entry.way_id, entry.stretch.start_ref, true), end_plane(last_id, entry.way_id, entry.stretch.start_ref, true));
+            if (!result && options.bridge_anchor_reuse) result = try_fit(anchor_of(first_id), anchor_of(last_id));
+            raw_portal = false;
+            if (result) ++stats->ground_portal_unreachable;
+        }
         if (!result && use_portal) {
             // The tunnel portal plane left no cubic: the DEM planes of the previous release, counted.
             use_portal = false; ++stats->ground_tunnel_unfit;
             result = try_fit(end_plane(first_id, entry.way_id, entry.stretch.start_ref, true), end_plane(last_id, entry.way_id, entry.stretch.start_ref, true));
             if (!result && options.bridge_anchor_reuse) result = try_fit(anchor_of(first_id), anchor_of(last_id));
         } else if (result && use_portal && (tunnel_portal(first_id) || tunnel_portal(last_id))) ++stats->ground_tunnel_anchored;
+        if (!result && refit) continue;   // the accepted profile stays (its portal is reported unreachable by the census)
         if (!result) { fail(); continue; }
+        if (refit) ++stats->ground_portal_refit;
         const bool bridge_first = result->bridge_first, bridge_last = result->bridge_last;
         RoadProfile p; p.stretch = entry.stretch; p.attributes = *attrs; p.reference = std::move(*ref); p.vertical = std::move(result->vertical);
         p.start_anchor_inferred = bridge_first; p.end_anchor_inferred = bridge_last;

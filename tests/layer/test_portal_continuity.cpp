@@ -140,7 +140,7 @@ Scan scan(const RoadGraph& world, const DemFn& dem, const RoadCompletionOptions&
     return out;
 }
 
-struct Verdict { std::size_t portals = 0, with_floor = 0, dz_bad = 0, grade_bad = 0, declined = 0, unreachable = 0, cut_grade = 0; double worst_dz = 0, worst_grade = 0; std::string detail; };
+struct Verdict { std::size_t portals = 0, with_floor = 0, dz_bad = 0, grade_bad = 0, declined = 0, unreachable = 0, unreachable_dz = 0, cut_grade = 0; double worst_dz = 0, worst_grade = 0; std::string detail; };
 Verdict judge(const Scan& s, const char* label) {
     Verdict v;
     for (const auto& [id, n] : s.nodes) {
@@ -155,7 +155,13 @@ Verdict judge(const Scan& s, const char* label) {
         for (const auto* t : floors) for (const auto* o : profiled) {
             if (o == t) continue;
             const double dz = std::fabs(t->z - o->z); v.worst_dz = std::max(v.worst_dz, dz);
-            if (dz > kDzTol) { ++v.dz_bad; v.detail += std::string("  dz ") + std::to_string(dz) + " at node " + std::to_string(id) + " (tunnel way " + std::to_string(t->way) + " vs way " + std::to_string(o->way) + ")\n"; }
+            if (dz > kDzTol) {
+                // Neither side could meet the other: the tunnel floor at the reach of its grade bound and the ground stretch at its class
+                // bound (the review of ffd575d: such a node is reported apart, with its numbers, never absorbed).
+                ++v.dz_bad; ++v.unreachable_dz;
+                v.detail += std::string("  unreachable: dz ") + std::to_string(dz) + " at node " + std::to_string(id) + " (tunnel way " + std::to_string(t->way) + " stub " + std::to_string(t->length) +
+                    " m, floor bound 0.30, floor z " + std::to_string(t->z) + " vs way " + std::to_string(o->way) + " length " + std::to_string(o->length) + " m, z " + std::to_string(o->z) + ")\n";
+            }
             // The grade continues through a node that joins exactly two roads (rising away from the node on both sides: the sum is 0).
             if (profiled.size() == 2) {
                 const double dg = std::fabs(t->away + o->away); v.worst_grade = std::max(v.worst_grade, dg);
@@ -164,8 +170,8 @@ Verdict judge(const Scan& s, const char* label) {
         }
         ++v.with_floor;
     }
-    std::printf("[portal %s] %zu portal nodes, %zu tunnel floors; worst dz %.4f m (%zu over %.2f), worst dgrade %.4f (%zu over %.2f), declined ground stretches at portals %zu (%zu between end planes the class grade cannot join), straight tunnels over the grade tolerance %zu\n%s",
-        label, v.portals, s.floors, v.worst_dz, v.dz_bad, kDzTol, v.worst_grade, v.grade_bad, kGradeTol, v.declined, v.unreachable, v.cut_grade, v.detail.c_str());
+    std::printf("[portal %s] %zu portal nodes, %zu tunnel floors; worst dz %.4f m (%zu over %.2f), worst dgrade %.4f (%zu over %.2f), declined ground stretches at portals %zu (%zu between end planes the class grade cannot join), straight tunnels over the grade tolerance %zu, unreachable steps %zu\n%s",
+        label, v.portals, s.floors, v.worst_dz, v.dz_bad, kDzTol, v.worst_grade, v.grade_bad, kGradeTol, v.declined, v.unreachable, v.cut_grade, v.unreachable_dz, v.detail.c_str());
     return v;
 }
 
@@ -298,6 +304,7 @@ TEST_CASE("portal continuity (7a-1): tunnel floors meet the ground road at every
             const Verdict v = judge(s, label.c_str());
             CHECK(s.floors > 0);
             CHECK(v.dz_bad == 0);
+            CHECK(v.unreachable_dz == 0);
             CHECK(v.declined == v.unreachable);
             // The flat DEM: every join continues the ground road's grade. The tilted bumpy DEM (2 m bumps over 23 m, ground roads
             // at grades up to 0.4 against tunnels of 8-50 m) gives joins no floor within the curvature bound can follow: reported.
