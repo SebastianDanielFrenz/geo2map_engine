@@ -24,6 +24,7 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/road_profile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_completion.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/portal_approach.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/structure_classify.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_reference.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/vertical_profile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_dem_sampler.cpp

@@ -22,7 +22,7 @@
 // higher layer that shares no node with it. At the crossing, the DEM along the lower road is compared with the chord of
 // the DEM 30 m before and after: the hump is the largest excess within the bridge footprint (DGM1 interpolates over the
 // removed deck; D64 masks it for road bridges only).
-#include "structure_classify.h"
+#include "g2m/layer/structure_classify.h"
 
 #include "g2m/core/geo/utm.h"
 #include "g2m/core/geom/project.h"
