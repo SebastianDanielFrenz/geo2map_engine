@@ -35,3 +35,10 @@ target_link_libraries(g2m_road_census PRIVATE g2m_world g2m_server g2m_warnings 
 # Railways R1/R2 census over an existing immutable source store (docs/formats/rail_geom.md).
 add_executable(g2m_rail_census ../../tools/rail_census/main.cpp)
 target_link_libraries(g2m_rail_census PRIVATE g2m_server g2m_warnings g2m_options)
+
+# Terrain-above-ribbon census (vault G2M-025): drapes the tile ribbons both ways and probes them against the terrain mesh.
+add_executable(g2m_ribbon_census ../../tools/ribbon_census/main.cpp)
+target_link_libraries(g2m_ribbon_census PRIVATE g2m_server g2m_world g2m_warnings g2m_options)
+# Cross-section dump of OSM ways and a lane-change census (vault G2M-025).
+add_executable(g2m_xs_probe ../../tools/xs_probe/main.cpp)
+target_link_libraries(g2m_xs_probe PRIVATE g2m_server g2m_warnings g2m_options)

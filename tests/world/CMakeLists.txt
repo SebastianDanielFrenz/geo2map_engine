@@ -13,13 +13,15 @@ add_executable(g2m_world_tests
   test_terrain_service.cpp
   test_road_meshes.cpp
   test_road_arrows.cpp
+  test_ribbon_drape.cpp
   test_buildings.cpp
   test_view_streamer.cpp
   test_ring_streamer.cpp
 )
 target_link_libraries(g2m_world_tests PRIVATE g2m_world g2m_layers g2m_server g2m_decode g2m_test_catch_main g2m_warnings g2m_options)
 # test_road_meshes.cpp reads the committed OSM fixtures and the shared road fixtures of tests/support.
-target_include_directories(g2m_world_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+# test_ribbon_drape.cpp tests the internal LatticeDrape (src/world/lattice_drape.h).
+target_include_directories(g2m_world_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/src)
 target_compile_definitions(g2m_world_tests PRIVATE G2M_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 include(Catch)
