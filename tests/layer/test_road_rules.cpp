@@ -202,16 +202,17 @@ TEST_CASE("The junction and furniture blocks are strict", "[layer][road_rules][j
 
 TEST_CASE("The tunnel block: the straight-grade threshold of long tunnels (owner ruling 2026-10-15)", "[layer][road_rules][tunnel]") {
     CHECK(builtin_road_rules_de().tunnel.straight_grade_min_length_m == 200);
-    const std::string from = "\"tunnel\": { \"straight_grade_min_length_m\": 200 }";
-    CHECK_FALSE(load_text(mutated(from, "\"tunnelx\": { \"straight_grade_min_length_m\": 200 }")));          // the block is required
-    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { }")));                                                 // and its key
-    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 200, \"bogus\": 1 }")));
-    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": -1 }")));
-    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 100001 }")));
-    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 200.5 }")));         // integer metres
-    const auto never = load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 0 }"));       // 0 = never
+    // Only the key/value pair is mutated, so the block's other keys (cut_*) may change without touching this test.
+    const std::string key = "\"straight_grade_min_length_m\": 200";
+    CHECK_FALSE(load_text(mutated("\"tunnel\": {", "\"tunnelx\": {")));                                       // the block is required
+    CHECK_FALSE(load_text(mutated(key + ", ", "")));                                                         // and its key
+    CHECK_FALSE(load_text(mutated(key, key + ", \"bogus\": 1")));
+    CHECK_FALSE(load_text(mutated(key, "\"straight_grade_min_length_m\": -1")));
+    CHECK_FALSE(load_text(mutated(key, "\"straight_grade_min_length_m\": 100001")));
+    CHECK_FALSE(load_text(mutated(key, "\"straight_grade_min_length_m\": 200.5")));                          // integer metres
+    const auto never = load_text(mutated(key, "\"straight_grade_min_length_m\": 0"));                        // 0 = never
     REQUIRE(never); CHECK(never->tunnel.straight_grade_min_length_m == 0);
-    const auto other = load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 350 }"));
+    const auto other = load_text(mutated(key, "\"straight_grade_min_length_m\": 350"));
     REQUIRE(other); CHECK(other->tunnel.straight_grade_min_length_m == 350);
     CHECK(other->junction == builtin_road_rules_de().junction);
 }
