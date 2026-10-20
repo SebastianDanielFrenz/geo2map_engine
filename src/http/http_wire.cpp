@@ -379,11 +379,11 @@ Response decode_response(const Request& request, const Message& message, const D
     };
     const V v{message, m, content_type};
     std::optional<std::string> err;
-    if (auto* r = std::get_if<ManifestResponse>(&out)) err = v(*r);
-    else if (auto* r = std::get_if<ReleaseManifestResponse>(&out)) err = v(*r, std::get<ReleaseManifestRequest>(request));
-    else if (auto* r = std::get_if<TileResponse>(&out)) err = v(*r, std::get<TileRequest>(request));
-    else if (auto* r = std::get_if<PackResponse>(&out)) err = v(*r, std::get<PackRequest>(request));
-    else if (auto* r = std::get_if<HashesResponse>(&out)) err = v(*r, std::get<HashesRequest>(request));
+    if (auto* manifest_r = std::get_if<ManifestResponse>(&out)) err = v(*manifest_r);
+    else if (auto* release_r = std::get_if<ReleaseManifestResponse>(&out)) err = v(*release_r, std::get<ReleaseManifestRequest>(request));
+    else if (auto* tile_r = std::get_if<TileResponse>(&out)) err = v(*tile_r, std::get<TileRequest>(request));
+    else if (auto* pack_r = std::get_if<PackResponse>(&out)) err = v(*pack_r, std::get<PackRequest>(request));
+    else if (auto* hashes_r = std::get_if<HashesResponse>(&out)) err = v(*hashes_r, std::get<HashesRequest>(request));
     if (err) return internal_error(request, std::move(*err));
     return out;
 }
