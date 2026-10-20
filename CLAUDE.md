@@ -925,7 +925,7 @@ fill_tile_from reads only the captured view. prefetch_inputs_current compares
 lookup state plus height and road pointer identities for the tile's complete
 L0 footprint; unrelated residency changes do not invalidate a build.
 make_terrain_config accepts optional prefetch margin and ticket cap (zero/off
-by default). Bridge physics pin is b90a531.
+by default). Bridge physics pin is b833db4 (physics_sim master; was b90a531, which predates World::create_shape).
 
 Snapshot tests cover replacement/eviction lifetime, owner purge, concurrent
 read/fill against live mutation, relevant height/road invalidation, zero
