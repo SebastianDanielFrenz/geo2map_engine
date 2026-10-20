@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Structure Classification Figures</title>
+<style>
+:root {
+  --bg: #fbfaf7; --fg: #1d1d1b; --muted: #6b6a66; --card: #ffffff; --line: #d9d6cf;
+  --terrain: #b9a17a; --terrain-fill: #e8dcc4; --cut: #f3eee4; --struct: #6f7f8f; --struct-fill: #cfd6dd;
+  --road: #2d2d2d; --deck: #8a5a2b; --rail: #8b1e3f; --accent: #1f6fb2; --bad: #c0392b; --good: #2e8b57;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --fg: #ecebe7; --muted: #a3a29d; --card: #1f1f1d; --line: #3a3936;
+    --terrain: #a08a63; --terrain-fill: #4a4030; --cut: #2a2722; --struct: #9aa9b8; --struct-fill: #3b4652;
+    --road: #e0e0e0; --deck: #c58a50; --rail: #e0608a; --accent: #5aa6e6; --bad: #ef6b5b; --good: #5fc48a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161615; --fg: #ecebe7; --muted: #a3a29d; --card: #1f1f1d; --line: #3a3936;
+  --terrain: #a08a63; --terrain-fill: #4a4030; --cut: #2a2722; --struct: #9aa9b8; --struct-fill: #3b4652;
+  --road: #e0e0e0; --deck: #c58a50; --rail: #e0608a; --accent: #5aa6e6; --bad: #ef6b5b; --good: #5fc48a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; }
+h2 { font-size: 1.15rem; margin: 32px 0 8px; }
+p, li { color: var(--fg); }
+.sub { color: var(--muted); margin: 0 0 16px; }
+figure { margin: 12px 0 20px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+figcaption { color: var(--muted); font-size: 0.9rem; margin-top: 6px; }
+svg { width: 100%; height: auto; display: block; }
+svg text { fill: var(--fg); font: 12px system-ui, sans-serif; }
+svg .m { fill: var(--muted); }
+.terrain { fill: var(--terrain-fill); stroke: var(--terrain); stroke-width: 1.5; }
+.cut { fill: var(--cut); stroke: none; }
+.struct { fill: var(--struct-fill); stroke: var(--struct); stroke-width: 1.5; }
+.road { stroke: var(--road); stroke-width: 3; fill: none; }
+.deck { fill: var(--deck); stroke: none; }
+.rail { stroke: var(--rail); stroke-width: 3; fill: none; }
+.dash { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+.bad { stroke: var(--bad); stroke-width: 2.5; fill: none; }
+.good { stroke: var(--good); stroke-width: 2.5; fill: none; }
+.dim { stroke: var(--muted); stroke-width: 1; fill: none; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.grid figure { margin: 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>Structure classification figures</h1>
+<p class="sub">Companion to <code>docs/structure_classification.md</code> (terrain migration phase 7a). Schematic, not to scale except where a dimension is given.</p>
+
+<h2>1. Long section: runs along one tunnel chain</h2>
+<figure>
+<svg viewBox="0 0 900 260" role="img" aria-label="Long section with slab hood, tube, implied deck and portal">
+  <!-- terrain -->
+  <path class="terrain" d="M0,150 L90,150 L150,60 L420,40 L520,70 L560,120 L600,118 L640,118 L680,80 L820,70 L900,72 L900,260 L0,260 Z"/>
+  <!-- cut for open runs -->
+  <path class="cut" d="M60,150 L150,150 L150,186 L60,186 Z"/>
+  <path class="cut" d="M560,118 L650,118 L650,186 L560,186 Z"/>
+  <!-- tube -->
+  <rect class="struct" x="150" y="150" width="410" height="40"/>
+  <rect class="struct" x="650" y="150" width="200" height="40"/>
+  <!-- slab roofs / implied deck -->
+  <rect class="deck" x="60" y="146" width="90" height="5"/>
+  <rect class="deck" x="560" y="113" width="90" height="6"/>
+  <path class="road" d="M520,112 L700,112"/>
+  <!-- floor -->
+  <path class="road" d="M0,186 L900,186"/>
+  <path class="dash" d="M60,186 C200,186 260,186 300,186"/>
+  <!-- labels -->
+  <text x="62" y="140">Slab (hood)</text>
+  <text x="300" y="175">Tube (box or bored)</text>
+  <text x="560" y="104">ImpliedDeck: ground road above</text>
+  <text x="690" y="175">Tube</text>
+  <text x="140" y="214" class="m">portal</text><path class="dim" d="M150,192 L150,204"/>
+  <text x="540" y="214" class="m">portal</text><path class="dim" d="M560,192 L560,204"/>
+  <text x="630" y="214" class="m">portal</text><path class="dim" d="M650,192 L650,204"/>
+  <text x="10" y="245" class="m">design floor = road surface; cover = ground - floor; needed = clearance + roof</text>
+</svg>
+<figcaption>One chain, class <b>mixed</b>: it has tube runs and open runs. Every run has a roof. Portals sit at the tube ends facing an open run or a chain end.</figcaption>
+</figure>
+
+<h2>2. Run kinds (cross sections)</h2>
+<div class="grid">
+<figure>
+<svg viewBox="0 0 300 200" role="img" aria-label="Tube under real cover">
+  <path class="terrain" d="M0,30 L300,20 L300,200 L0,200 Z"/>
+  <rect class="struct" x="90" y="110" width="120" height="70"/>
+  <rect class="cut" x="100" y="120" width="100" height="52"/>
+  <path class="road" d="M100,172 L200,172"/>
+  <path class="dim" d="M240,30 L240,110"/><text x="245" y="75">cover</text>
+  <text x="105" y="150">clearance</text>
+</svg>
+<figcaption><b>Tube</b>: cover at least clearance + roof. The hill stays; no carve, no holes away from portals.</figcaption>
+</figure>
+<figure>
+<svg viewBox="0 0 300 200" role="img" aria-label="Deck run under a mapped bridge">
+  <path class="terrain" d="M0,90 L70,90 L100,172 L200,172 L230,90 L300,90 L300,200 L0,200 Z"/>
+  <rect class="deck" x="60" y="80" width="180" height="10"/>
+  <path class="rail" d="M60,76 L240,76"/>
+  <rect class="struct" x="92" y="90" width="8" height="82"/>
+  <rect class="struct" x="200" y="90" width="8" height="82"/>
+  <path class="road" d="M100,172 L200,172"/>
+  <text x="70" y="66">mapped bridge = roof</text>
+</svg>
+<figcaption><b>Deck</b>: a mapped rail or road bridge above. The DEM there is an interpolated gap, never cover. Box opening; the bridge deck is the roof; steep box sides only inside the deck footprint.</figcaption>
+</figure>
+<figure>
+<svg viewBox="0 0 300 200" role="img" aria-label="Implied deck under a ground way on an embankment">
+  <path class="terrain" d="M0,170 L60,170 L100,90 L200,90 L240,170 L300,170 L300,200 L0,200 Z"/>
+  <path class="cut" d="M100,92 L200,92 L200,172 L100,172 Z"/>
+  <rect class="deck" x="90" y="88" width="120" height="8"/>
+  <path class="rail" d="M95,84 L205,84"/>
+  <rect class="struct" x="96" y="96" width="6" height="76"/>
+  <rect class="struct" x="198" y="96" width="6" height="76"/>
+  <path class="road" d="M0,172 L300,172"/>
+  <text x="60" y="72">ground rail on bank, no bridge tag</text>
+</svg>
+<figcaption><b>ImpliedDeck</b>: a ground way above with too little cover (Unterliederbach, A66 service tunnel). geo2map serves an implied deck for the upper way; the bank under it is cut to a box opening.</figcaption>
+</figure>
+<figure>
+<svg viewBox="0 0 300 200" role="img" aria-label="Slab run">
+  <path class="terrain" d="M0,150 L90,140 L100,172 L200,172 L210,140 L300,150 L300,200 L0,200 Z"/>
+  <rect class="deck" x="95" y="118" width="110" height="8"/>
+  <rect class="struct" x="96" y="126" width="6" height="46"/>
+  <rect class="struct" x="198" y="126" width="6" height="46"/>
+  <path class="road" d="M100,172 L200,172"/>
+  <text x="95" y="108">served roof slab (or the building)</text>
+</svg>
+<figcaption><b>Slab</b>: no cover and nothing above. Open cut with a served 0.5 m roof slab; for a building passage the building is the roof.</figcaption>
+</figure>
+</div>
+
+<h2>3. Tube shapes</h2>
+<div class="grid">
+<figure>
+<svg viewBox="0 0 320 240" role="img" aria-label="Box tube cross section">
+  <path class="terrain" d="M0,30 L320,30 L320,240 L0,240 Z"/>
+  <rect class="struct" x="60" y="70" width="200" height="140"/>
+  <rect class="cut" x="76" y="90" width="168" height="110"/>
+  <path class="road" d="M76,200 L244,200"/>
+  <path class="dash" d="M100,200 L100,104 L220,104 L220,200"/>
+  <path class="dim" d="M76,222 L244,222"/><text x="105" y="236">W + 2 x 1.0 m</text>
+  <path class="dim" d="M280,90 L280,200"/><text x="284" y="150">H</text>
+  <text x="64" y="64">roof 1.0 m</text>
+  <text x="104" y="120" class="m">clearance box</text>
+  <text x="2" y="150">wall 0.8 m</text>
+</svg>
+<figcaption><b>Box</b> (cut-and-cover, underpass, every tube under 300 m or with under 15 m natural cover). Collision: floor, both walls, roof underside.</figcaption>
+</figure>
+<figure>
+<svg viewBox="0 0 320 240" role="img" aria-label="Bored tube cross section">
+  <path class="terrain" d="M0,10 L320,10 L320,240 L0,240 Z"/>
+  <circle class="struct" cx="160" cy="130" r="96"/>
+  <circle class="cut" cx="160" cy="130" r="84"/>
+  <rect class="struct" x="74" y="172" width="172" height="44"/>
+  <path class="road" d="M86,172 L234,172"/>
+  <path class="dash" d="M100,172 L100,88 L220,88 L220,172"/>
+  <path class="dim" d="M160,130 L220,88"/><text x="190" y="104">R</text>
+  <text x="104" y="104" class="m">clearance box</text>
+  <text x="20" y="232" class="m">R = sqrt((W/2 + 1 m)^2 + (H/2)^2); 32 segments, literal table</text>
+</svg>
+<figcaption><b>Bored</b> (at least 300 m and at least 15 m natural cover): a circle through the clearance rectangle's corners, flat invert. Road 2 lanes R 5.3 m, rail 2 tracks R 5.6 m. Collision: floor and every arc segment.</figcaption>
+</figure>
+<figure>
+<svg viewBox="0 0 320 240" role="img" aria-label="Box opening under a deck">
+  <path class="terrain" d="M0,90 L50,90 L80,200 L240,200 L270,90 L320,90 L320,240 L0,240 Z"/>
+  <rect class="deck" x="40" y="72" width="240" height="14"/>
+  <path class="rail" d="M40,68 L280,68"/>
+  <rect class="struct" x="72" y="86" width="12" height="114"/>
+  <rect class="struct" x="236" y="86" width="12" height="114"/>
+  <path class="road" d="M84,200 L236,200"/>
+  <text x="44" y="60">deck = top of the opening (0.5 m)</text>
+  <text x="96" y="150" class="m">box opening</text>
+  <text x="2" y="232" class="m">graded slope outside the deck footprint, no walls</text>
+</svg>
+<figcaption><b>Box opening under a deck</b> (Deck, ImpliedDeck): no tube roof; the upper way's deck closes the box. The sides are the D59 steep walls inside the deck footprint.</figcaption>
+</figure>
+</div>
+
+<h2>4. Portals per shape (elevation, looking into the tube)</h2>
+<div class="grid">
+<figure>
+<svg viewBox="0 0 320 200" role="img" aria-label="Box portal">
+  <path class="terrain" d="M0,40 L320,40 L320,200 L0,200 Z"/>
+  <path class="cut" d="M30,190 L110,60 L210,60 L290,190 Z"/>
+  <rect class="struct" x="100" y="56" width="120" height="134"/>
+  <rect class="cut" x="116" y="96" width="88" height="94"/>
+  <path class="struct" d="M100,60 L40,190 L52,190 L106,74 Z"/>
+  <path class="struct" d="M220,60 L280,190 L268,190 L214,74 Z"/>
+  <path class="road" d="M30,190 L290,190"/>
+  <text x="120" y="84">headwall</text><text x="10" y="120">wing wall</text>
+</svg>
+<figcaption>Box: headwall up to the terrain line, wing walls at 45 degrees in plan down the cut slopes.</figcaption>
+</figure>
+<figure>
+<svg viewBox="0 0 320 200" role="img" aria-label="Bored portal">
+  <path class="terrain" d="M0,20 L320,20 L320,200 L0,200 Z"/>
+  <path class="cut" d="M30,190 L100,40 L220,40 L290,190 Z"/>
+  <rect class="struct" x="90" y="36" width="140" height="154"/>
+  <path class="cut" d="M110,190 L110,130 A50,50 0 0 1 210,130 L210,190 Z"/>
+  <path class="struct" d="M90,40 L40,190 L52,190 L96,54 Z"/>
+  <path class="struct" d="M230,40 L280,190 L268,190 L224,54 Z"/>
+  <path class="road" d="M30,190 L290,190"/>
+  <text x="124" y="64">headwall</text>
+</svg>
+<figcaption>Bored: headwall with the circular opening; where a box hood leads in, the face closes the gap between the hood rectangle and the circle.</figcaption>
+</figure>
+<figure>
+<svg viewBox="0 0 320 200" role="img" aria-label="Deck portal">
+  <path class="terrain" d="M0,70 L320,70 L320,200 L0,200 Z"/>
+  <path class="cut" d="M30,190 L80,86 L240,86 L290,190 Z"/>
+  <rect class="deck" x="40" y="66" width="240" height="20"/>
+  <rect class="struct" x="80" y="86" width="12" height="104"/>
+  <rect class="struct" x="228" y="86" width="12" height="104"/>
+  <path class="road" d="M30,190 L290,190"/>
+  <text x="96" y="80">deck fascia is the face</text>
+</svg>
+<figcaption>Box opening: no headwall; the deck's fascia is the face, the box sides end at the deck end planes.</figcaption>
+</figure>
+</div>
+
+<h2>5. Design floor vs portal chord</h2>
+<figure>
+<svg viewBox="0 0 900 230" role="img" aria-label="Design floor in a flat city and in a hill">
+  <path class="terrain" d="M0,60 L440,60 L440,230 L0,230 Z"/>
+  <path class="dash" d="M20,60 L420,60"/>
+  <path class="good" d="M20,60 L110,124 L330,124 L420,60"/>
+  <text x="24" y="50">flat city: chord = surface, natural cover 0</text>
+  <text x="140" y="146">design floor dives at max grade to needed depth</text>
+  <text x="140" y="164" class="m">(City-Tunnel Frankfurt: natural 2.4 m, design 7-12 m)</text>
+  <path class="terrain" d="M460,200 L520,200 L580,40 L800,40 L860,200 L900,200 L900,230 L460,230 Z"/>
+  <path class="good" d="M520,200 L860,200"/>
+  <text x="600" y="120">hill: design floor = chord</text>
+  <text x="560" y="140" class="m">no depth bound within needed/grade of a portal: no sag</text>
+</svg>
+<figcaption>Cover is measured against the design floor. Against the portal chord no tunnel in the region has real cover; against the DEM-following floor (D47) cover is about 0 by construction.</figcaption>
+</figure>
+
+<h2>6. Portal continuity (acceptance case 4812754 NW mouth)</h2>
+<figure>
+<svg viewBox="0 0 900 260" role="img" aria-label="Portal step today and continuous profile after the fix">
+  <text x="10" y="20">Today (served at 5d43dd7)</text>
+  <path class="terrain" d="M10,170 L300,170 L330,60 L440,60 L440,230 L10,230 Z"/>
+  <path class="road" d="M10,170 L250,170"/>
+  <path class="bad" d="M250,170 L270,170 L285,130 L440,130"/>
+  <circle cx="285" cy="130" r="4" fill="var(--bad)"/>
+  <text x="20" y="160">ground road 98.68 m</text>
+  <text x="150" y="200" class="m">last 6.5 m stretch declined</text>
+  <text x="292" y="122">portal anchor = DEM at node 99.52 m</text>
+  <text x="270" y="250" class="m">step 0.84 m over about 2 m</text>
+  <text x="470" y="20">After 7a-1: ground side owns the join</text>
+  <path class="terrain" d="M470,170 L760,170 L790,60 L890,60 L890,230 L470,230 Z"/>
+  <path class="road" d="M470,170 L745,170"/>
+  <path class="good" d="M745,170 L890,170"/>
+  <circle cx="745" cy="170" r="4" fill="var(--good)"/>
+  <text x="560" y="160">ground profile end 98.68 m</text>
+  <text x="752" y="196">tunnel floor anchored here</text>
+  <text x="560" y="250" class="m">|dz| &lt;= 0.01 m, |dgrade| &lt;= 0.02, no declined stretch, carved step &lt;= 0.10 m/m</text>
+</svg>
+<figcaption>Cause: <code>road_completion.cpp</code> step 2a anchors the tunnel floor on one DEM sample at the portal node, which is the bank face. The ground stretch outside cannot climb 0.84 m within its grade bound and is declined. The same holds with D64/D65 off.</figcaption>
+</figure>
+</main>
+</body>
+</html>
