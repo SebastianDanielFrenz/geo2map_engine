@@ -53,7 +53,7 @@ Level 0, per cell with centre (E + 0.5, N + 0.5) in zone metres:
    the nearer bridge end. It only lowers.
 6. `round_half_even(z · 256)`.
 
-Bridges and tunnels are never carved. Neither is the span of a roads.geom encoding-9 underpass deck (D58): the ground
+Bridges and tunnels are never carved, except a D65 open cut (a tunnel entry at most `tunnel.cut_max_length_m` long whose floor is straight within 1 cm AND under ground that rises 1-8 m over the chord, the hump check of 7a-2; config token `tunnel-cut=D65/80+hump`). Neither is the span of a roads.geom encoding-9 underpass deck (D58): the ground
 stretch is carved only outside its decks, and each deck is a bridge line of its own (deck clamp from the deck's ends), so
 the lower road keeps its cutting under it; no ground blend reaches more than 1 m past a deck's end planes either (D59, steep walls).
 Parameters (kernel, strength, blend widths per class, deck clearance) come from

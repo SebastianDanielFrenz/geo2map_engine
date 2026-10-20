@@ -3,6 +3,7 @@
 #include "g2m/layer/road_attributes.h"
 #include "g2m/layer/terrain_layers.h"
 #include <algorithm>
+#include <map>
 #include <set>
 namespace g2m {
 Result<std::vector<InputTileRef>> road_dem_dependencies(const RoadGraph& graph,
@@ -128,5 +129,48 @@ Result<std::vector<InputTileRef>> road_portal_dependencies(const RoadGraph& tile
     dem->insert(dem->end(), graph->begin(), graph->end());
     std::sort(dem->begin(), dem->end()); dem->erase(std::unique(dem->begin(), dem->end()), dem->end());
     return dem;
+}
+Result<std::vector<InputTileRef>> road_component_dependencies(const RoadGraph& tile_graph, const RoadGraph& context,
+    geo::UtmZone zone, const TileKey* exclude) {
+    const auto valid_tile = validate_road_graph(tile_graph); if (!valid_tile) return valid_tile.error();
+    const auto valid_context = validate_road_graph(context); if (!valid_context) return valid_context.error();
+    std::set<std::int64_t> tile_nodes;
+    for (const auto& way : tile_graph.ways) tile_nodes.insert(way.node_ids.begin(), way.node_ids.end());
+    // The tunnel ways of the context by index (ascending way id), and the tunnel ways at each node.
+    std::vector<std::size_t> tunnels;
+    std::map<std::int64_t, std::vector<std::size_t>> at_node;
+    for (std::size_t i = 0; i < context.ways.size(); ++i) {
+        const auto attributes = resolve_road_attributes(context.ways[i]);
+        if (!attributes || !attributes->tunnel) continue;
+        tunnels.push_back(i);
+        for (const auto id : context.ways[i].node_ids) at_node[id].push_back(i);
+    }
+    std::set<std::size_t> closure; std::vector<std::size_t> stack;
+    for (const auto i : tunnels)
+        if (std::any_of(context.ways[i].node_ids.begin(), context.ways[i].node_ids.end(), [&](auto id) { return tile_nodes.count(id) != 0; }))
+            if (closure.insert(i).second) stack.push_back(i);
+    if (closure.empty()) return std::vector<InputTileRef>{};
+    while (!stack.empty()) {
+        const auto i = stack.back(); stack.pop_back();
+        for (const auto id : context.ways[i].node_ids)
+            for (const auto j : at_node[id]) if (closure.insert(j).second) stack.push_back(j);
+    }
+    RoadGraph component; std::set<std::int64_t> used;
+    for (const auto i : closure) {   // ascending way index = ascending way id
+        const auto& way = context.ways[i];
+        component.ways.push_back(way); used.insert(way.node_ids.begin(), way.node_ids.end());
+        for (std::size_t k = 1; k < way.node_ids.size(); ++k) {
+            if (way.node_ids[k - 1] == way.node_ids[k]) { ++component.repeated_ref_pairs; continue; }
+            component.edges.push_back({way.osm_id, static_cast<std::uint32_t>(k - 1), way.node_ids[k - 1], way.node_ids[k]});
+        }
+    }
+    for (const auto& node : context.nodes) if (used.count(node.osm_id)) component.nodes.push_back(node);
+    auto refs = road_dem_dependencies(component, zone); if (!refs) return refs.error();
+    auto graph = road_context_dependencies(component, zone, exclude); if (!graph) return graph.error();
+    auto portals = road_portal_dependencies(component, context, zone, exclude); if (!portals) return portals.error();
+    refs->insert(refs->end(), graph->begin(), graph->end());
+    refs->insert(refs->end(), portals->begin(), portals->end());
+    std::sort(refs->begin(), refs->end()); refs->erase(std::unique(refs->begin(), refs->end()), refs->end());
+    return refs;
 }
 }

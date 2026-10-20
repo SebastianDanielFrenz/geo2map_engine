@@ -239,6 +239,10 @@ Hard errors (design 9.2), each with its own rejection test
   tunnel stretch is TunnelFloor and a TunnelFloor profile is on a tunnel; it is
   certified at 30 % grade and a 20 m vertical radius (the outer bounds of the
   tunnel options).
+  Phase 7a-2 (first half) changes no byte layout: with the design floor on, a TunnelFloor profile is the
+  component design floor of `structure_floor.h` (grade at most the de.json `structure.max_grade_per_mille`
+  except where the 7a-1 reach handler has to give way), still encoded as before. The served runs
+  (encoding 11) are the second half and not yet written.
 
 ## Cross-section validation
 

@@ -1,10 +1,13 @@
 #include "g2m/layer/road_completion.h"
 #include "g2m/layer/road_underpass.h"
 #include "g2m/layer/portal_approach.h"
+#include "g2m/layer/structure_floor.h"
 #include "g2m/core/det_math.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <deque>
+#include <limits>
 #include <map>
 #include <set>
 namespace g2m {
@@ -173,7 +176,10 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         !(options.tunnel_min_radius_m >= kRoadCompletionMinTunnelRadiusM && options.tunnel_min_radius_m <= 1e6) ||
         !(options.tunnel_chord_min_length_m >= 0 && options.tunnel_chord_min_length_m <= 1e6) ||
         !(options.tunnel_cut_max_length_m >= 0 && options.tunnel_cut_max_length_m <= 1e6) ||
-        !(options.tunnel_cut_hump_min_m >= 0 && options.tunnel_cut_hump_min_m <= options.tunnel_cut_hump_max_m && options.tunnel_cut_hump_max_m <= 1e6))
+        !(options.tunnel_cut_hump_min_m >= 0 && options.tunnel_cut_hump_min_m <= options.tunnel_cut_hump_max_m && options.tunnel_cut_hump_max_m <= 1e6) ||
+        (options.tunnel_design_floor && !(options.tunnel_floors && options.tunnel_portal_anchor &&
+            options.structure_clearance_m >= 1 && options.structure_clearance_m <= 20 && options.structure_roof_m >= 0 && options.structure_roof_m <= 10 &&
+            options.structure_max_grade > 0 && options.structure_max_grade <= kRoadCompletionMaxTunnelGrade)))
         return make_error(ErrorCode::InvalidArgument, "road completion: options");
     const auto& graph = builder.graph();
     const auto way_of = [&](std::int64_t id) {
@@ -382,9 +388,144 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         if (auto ref = builder.fit_stretch(way_id, stretch, reference); ref && ref->length_m >= 0.5) length = ref->length_m;
         return tunnel_length_cache[key] = length;
     };
+    // 7a-2 (docs/structure_classification.md sections 3.2 and 5): the design floor of a connected tunnel component. The
+    // component is the set of tunnel stretches joined at shared end nodes; its floor (structure_floor.h) is one function of
+    // the component - the stretches in (way id, start ref) order, the portals (nodes where a non-tunnel edge joins, or a tunnel
+    // end nothing continues), the anchors of the joining ground roads (portal_raw; an unjoined end is free and anchored on the
+    // DEM sample at its node), the bare earth under every 1 m station - so every tile that reads any stretch of it solves the
+    // same problem (road_component_dependencies puts all of it into the context) and gets the same bytes. Solved once per call.
+    struct FloorComponent {
+        bool ok = false;
+        std::vector<RoadStretch> stretches; std::vector<std::int64_t> ways;            // canonical (way id, start ref) order
+        std::vector<std::vector<double>> ground; std::vector<int> from, to; std::vector<double> length; std::vector<RoadReferenceLine> refs;
+        std::vector<std::int64_t> nodes; std::map<std::int64_t, int> node_index;
+        std::vector<int> tunnel_ends; std::vector<char> portal; std::vector<std::optional<PortalAnchor>> anchor;
+        structure::NetworkFloor floor;
+        std::map<std::int64_t, double> shift;                                          // anchored portal node -> the reach handler's move
+        std::map<std::pair<std::int64_t, std::uint32_t>, std::size_t> index;
+    };
+    std::deque<FloorComponent> floor_components;
+    std::map<std::pair<std::int64_t, std::uint32_t>, FloorComponent*> floor_of;
+    const auto tunnel_ways_at = [&](std::int64_t node) {
+        std::vector<std::int64_t> ways;
+        walk.for_each_edge(node, [&](const RoadGraphEdge& edge) { const auto* a = walk.attributes(edge.way_id); if (a && a->tunnel) ways.push_back(edge.way_id); });
+        std::sort(ways.begin(), ways.end()); ways.erase(std::unique(ways.begin(), ways.end()), ways.end());
+        return ways;
+    };
+    const auto component_for = [&](std::int64_t way_id, const RoadStretch& first) -> FloorComponent* {
+        const auto key0 = std::make_pair(way_id, first.start_ref);
+        if (const auto it = floor_of.find(key0); it != floor_of.end()) return it->second;
+        std::map<std::pair<std::int64_t, std::uint32_t>, RoadStretch> found{{key0, first}};
+        std::vector<std::pair<std::int64_t, std::uint32_t>> work{key0};
+        bool readable = true;
+        while (!work.empty()) {
+            const auto key = work.back(); work.pop_back();
+            const auto* w = way_of(key.first); if (!w) { readable = false; continue; }
+            const RoadStretch s = found.at(key);
+            for (const auto id : {w->node_ids[s.start_ref], w->node_ids[s.end_ref]})
+                for (const auto other : tunnel_ways_at(id)) {
+                    const auto* ow = way_of(other); const auto st = builder.stretches(other); if (!ow || !st) { readable = false; continue; }
+                    for (const auto& c : *st) {
+                        if (ow->node_ids[c.start_ref] != id && ow->node_ids[c.end_ref] != id) continue;
+                        if (found.emplace(std::make_pair(other, c.start_ref), c).second) work.push_back({other, c.start_ref});
+                    }
+                }
+            if (found.size() > 4096) { readable = false; break; }
+        }
+        auto& c = floor_components.emplace_back(); c.ok = readable;
+        for (const auto& [key, s] : found) { c.index[key] = c.ways.size(); c.ways.push_back(key.first); c.stretches.push_back(s); floor_of[key] = &c; }
+        const auto node_of = [&](std::int64_t id) {
+            const auto it = c.node_index.find(id); if (it != c.node_index.end()) return it->second;
+            const int i = static_cast<int>(c.nodes.size()); c.nodes.push_back(id); c.node_index[id] = i; return i;
+        };
+        for (std::size_t i = 0; i < c.stretches.size(); ++i) {
+            const auto* w = way_of(c.ways[i]);
+            if (!w) { c.ok = false; c.from.push_back(0); c.to.push_back(0); continue; }
+            c.from.push_back(node_of(w->node_ids[c.stretches[i].start_ref])); c.to.push_back(node_of(w->node_ids[c.stretches[i].end_ref]));
+        }
+        c.tunnel_ends.assign(c.nodes.size(), 0); c.portal.assign(c.nodes.size(), 0); c.anchor.assign(c.nodes.size(), std::nullopt);
+        for (std::size_t i = 0; i < c.stretches.size(); ++i) { ++c.tunnel_ends[static_cast<std::size_t>(c.from[i])]; ++c.tunnel_ends[static_cast<std::size_t>(c.to[i])]; }
+        ++stats->floor_components; stats->floor_stretches += c.stretches.size();
+        RoadCompletionStats::FloorComponentReport report; report.first_way = c.ways.front(); report.first_start_ref = c.stretches.front().start_ref;
+        report.stretches = c.stretches.size();
+        structure::FloorNetwork net; net.node_count = static_cast<int>(c.nodes.size());
+        if (c.ok) {
+            for (std::size_t i = 0; i < c.stretches.size() && c.ok; ++i) {
+                auto ref = builder.fit_stretch(c.ways[i], c.stretches[i], reference);
+                if (!ref || !(ref->length_m >= 0.5)) { c.ok = false; break; }
+                const auto* a = walk.attributes(c.ways[i]); const double half = a ? static_cast<double>(a->width_mm) / 2000.0 : 0.0;
+                structure::FloorStretch fs; fs.from = c.from[i]; fs.to = c.to[i]; fs.length_m = ref->length_m;
+                const std::size_t count = structure::station_count(ref->length_m);
+                fs.ground.assign(count, std::numeric_limits<double>::quiet_NaN());
+                for (std::size_t k = 0; k < count; ++k) {
+                    const auto pose = ref->at(structure::station_m(ref->length_m, k)); if (!pose) continue;
+                    const double nx = -det::sin(pose->heading) * half, ny = det::cos(pose->heading) * half;
+                    double low = std::numeric_limits<double>::infinity(); bool all = true;
+                    for (const double side : {0.0, 1.0, -1.0}) {
+                        const auto h = dem.sample(zone, {std::llround((pose->x + side * nx) * 1000), std::llround((pose->y + side * ny) * 1000)});
+                        if (!h) { all = false; break; }
+                        low = std::min(low, *h / 256.0);
+                    }
+                    if (all) fs.ground[k] = low;
+                }
+                c.ground.push_back(fs.ground); c.length.push_back(ref->length_m); c.refs.push_back(std::move(*ref)); net.stretches.push_back(std::move(fs));
+                report.length_m += c.length.back(); report.stations += count;
+            }
+        }
+        std::vector<std::size_t> portal_nodes;   // node index per net.portals entry
+        for (std::size_t n = 0; c.ok && n < c.nodes.size(); ++n) {
+            int nontunnel = 0;
+            walk.for_each_edge(c.nodes[n], [&](const RoadGraphEdge& edge) { const auto* a = walk.attributes(edge.way_id); if (a && !a->tunnel) ++nontunnel; });
+            if (nontunnel == 0 && c.tunnel_ends[n] != 1) continue;
+            c.portal[n] = 1;
+            if (nontunnel > 0) c.anchor[n] = portal_raw(c.nodes[n]);
+            double z = 0;
+            if (c.anchor[n]) z = c.anchor[n]->plane.height / 256.0;
+            else { const auto h = dem.sample(zone, walk.position(c.nodes[n])); if (!h) { c.ok = false; break; } z = *h / 256.0; }
+            net.portals.push_back({static_cast<int>(n), z, !c.anchor[n]}); portal_nodes.push_back(n);
+            if (!c.anchor[n]) ++report.free_portals;
+        }
+        report.portals = net.portals.size();
+        if (c.ok) {
+            structure::NetworkFloorParams params; params.max_grade = options.structure_max_grade;
+            params.needed = options.structure_clearance_m + options.structure_roof_m; params.reach_factor = kPortalReach; params.quantum_m = 1.0 / 256.0;
+            c.floor = structure::network_design_floor(net, params);
+            c.ok = c.floor.ok;
+            report.pairs = c.floor.pairs; report.pairs_shifted = c.floor.pairs_shifted; report.pairs_beyond_grade = c.floor.pairs_beyond_grade;
+            report.pairs_still_beyond_grade = c.floor.pairs_still_beyond_grade; report.passes = c.floor.passes;
+            stats->floor_pairs += c.floor.pairs; stats->floor_pairs_shifted += c.floor.pairs_shifted; stats->floor_pairs_beyond_grade += c.floor.pairs_beyond_grade;
+            stats->floor_pairs_still_beyond_grade += c.floor.pairs_still_beyond_grade; stats->floor_anchor_misses += c.floor.anchor_misses;
+            if (!c.floor.converged) ++stats->floor_not_converged;
+            for (std::size_t p = 0; c.ok && p < portal_nodes.size(); ++p) {
+                const double move = c.floor.portal_shift_m[p];
+                report.max_shift_m = std::max(report.max_shift_m, std::fabs(move)); stats->floor_max_shift_m = std::max(stats->floor_max_shift_m, std::fabs(move));
+                if (c.anchor[portal_nodes[p]]) c.shift[c.nodes[portal_nodes[p]]] = move;
+            }
+        }
+        if (!c.ok) ++stats->floor_unsolved;
+        stats->floor_stations += report.stations; stats->floor_portals += report.portals; stats->floor_free_portals += report.free_portals;
+        report.ok = c.ok; stats->floor_reports.push_back(report);
+        return &c;
+    };
+    // The component a node of the tunnel network belongs to (nullptr: no tunnel stretch ends there).
+    const auto component_at = [&](std::int64_t node) -> FloorComponent* {
+        for (const auto way_id : tunnel_ways_at(node)) {
+            const auto* w = way_of(way_id); const auto stretches = builder.stretches(way_id); if (!w || !stretches) continue;
+            for (const auto& s : *stretches)
+                if (w->node_ids[s.start_ref] == node || w->node_ids[s.end_ref] == node) return component_for(way_id, s);
+        }
+        return nullptr;
+    };
+
     std::map<std::int64_t, double> shift_cache;
     const auto portal_shift = [&](std::int64_t node) -> double {
         const auto cached = shift_cache.find(node); if (cached != shift_cache.end()) return cached->second;
+        if (options.tunnel_design_floor) {   // 7a-2: the move of the component solve (zero for a node no component anchors at)
+            double move = 0;
+            if (options.tunnel_portal_anchor && options.tunnel_floors)
+                if (const auto* c = component_at(node); c && c->ok) { const auto it = c->shift.find(node); if (it != c->shift.end()) move = it->second; }
+            return shift_cache[node] = move;
+        }
         double best = 0;
         const auto here = options.tunnel_portal_anchor && options.tunnel_floors ? portal_raw(node) : std::nullopt;
         if (here) {
@@ -416,6 +557,122 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
         raw->plane.height += static_cast<std::int32_t>(std::llround(shift * 256.0)); ++stats->portal_clamped;
         return portal_moved_cache[node] = raw;
     };
+    // Step 2a, 7a-2: every declined tunnel entry takes its stretch of the component's design floor. The samples are the floor
+    // at tunnel_spacing_m along the reference with both ends fixed at the floor's end values (a shared node therefore has one
+    // height in every stretch and every tile); end grades: at a portal the joining ground road's (a tunnel end continues that
+    // road, clamped to the structure grade), at a junction of exactly two tunnel stretch ends the mean of the two floor slopes
+    // (the grade is continuous through it), else the floor's own slope. A fit the curvature bound refuses falls back to the
+    // floor's own end slopes, then to the straight line between the end heights (counted).
+    for (std::size_t i = 0; options.tunnel_design_floor && options.tunnel_floors && i < entries.size(); ++i) {
+        auto& entry = entries[i]; if (entry.profile || !entry.decline) continue;
+        const auto* attrs = walk.attributes(entry.way_id); if (!attrs || !attrs->tunnel) continue;
+        ++stats->tunnel_candidates; ++stats->floor_entries;
+        const auto fail = [&] { ++stats->tunnel_failed; ++stats->floor_entry_failed; };
+        auto* comp = component_for(entry.way_id, entry.stretch);
+        if (!comp || !comp->ok) { fail(); continue; }
+        const std::size_t idx = comp->index.at({entry.way_id, entry.stretch.start_ref});
+        const auto& floor = comp->floor.floor[idx];
+        const double length = comp->length[idx], g = options.structure_max_grade;
+        const int count = std::max(1, static_cast<int>(std::ceil(length / options.tunnel_spacing_m)));
+        if (count > 2047) { fail(); continue; }
+        const auto at_station = [&](double station) {
+            const std::size_t k = std::min(static_cast<std::size_t>(station), floor.size() - 2);
+            const double s0 = structure::station_m(length, k), s1 = structure::station_m(length, k + 1);
+            return floor[k] + (floor[k + 1] - floor[k]) * ((station - s0) / (s1 - s0));
+        };
+        std::vector<VerticalSample> samples;
+        for (int k = 0; k <= count; ++k) {
+            const double station = k == count ? length : length * k / count;
+            samples.push_back({station, k == 0 ? floor.front() : k == count ? floor.back() : at_station(station)});
+        }
+        // The slope leaving a stretch end into its stretch (positive uphill leaving the node).
+        const auto leaving = [&](std::size_t s, bool at_start) {
+            const auto& f = comp->floor.floor[s]; const double len = comp->length[s]; const std::size_t n = f.size();
+            if (at_start) return (f[1] - f[0]) / (structure::station_m(len, 1) - structure::station_m(len, 0));
+            return (f[n - 2] - f[n - 1]) / (structure::station_m(len, n - 1) - structure::station_m(len, n - 2));
+        };
+        const auto own_grade = [&](bool at_start) { const double o = leaving(idx, at_start); return std::clamp(at_start ? o : -o, -g, g); };
+        const auto end_grade = [&](bool at_start) {
+            const int node = at_start ? comp->from[idx] : comp->to[idx];
+            const std::size_t n = static_cast<std::size_t>(node);
+            if (comp->portal[n]) {
+                if (const auto& anchor = comp->anchor[n]) {
+                    const auto pose = comp->refs[idx].at(at_start ? 0 : length);
+                    const double along = anchor->away ? (at_start ? -*anchor->away : *anchor->away) : (pose ? project(anchor->plane, pose->heading) : 0.0);
+                    return std::clamp(along, -g, g);
+                }
+                return own_grade(at_start);
+            }
+            if (comp->tunnel_ends[n] != 2) return own_grade(at_start);
+            std::vector<std::pair<std::size_t, bool>> ends;   // (stretch, at start), stretch order, start end first
+            for (std::size_t s = 0; s < comp->stretches.size(); ++s) {
+                if (comp->from[s] == node) ends.emplace_back(s, true);
+                if (comp->to[s] == node) ends.emplace_back(s, false);
+            }
+            const double common = (leaving(ends[0].first, ends[0].second) - leaving(ends[1].first, ends[1].second)) / 2.0;
+            const double target = ends[0] == std::make_pair(idx, at_start) ? common : -common;   // slope leaving the node into this stretch
+            return std::clamp(at_start ? target : -target, -g, g);
+        };
+        const double designed_start = end_grade(true), designed_end = end_grade(false);
+        VerticalFitLimits fit; fit.max_grade = g; fit.min_radius_m = options.tunnel_min_radius_m; fit.max_iterations = 16384;
+        const auto solve = [&](const std::vector<VerticalSample>& heights, double start_grade, double end_grade_value) -> std::optional<VerticalProfile> {
+            fit.start_grade = start_grade; fit.end_grade = end_grade_value;
+            auto v = fit_vertical_profile(heights, fit); if (!v) return std::nullopt; return std::move(*v);
+        };
+        // A floor that is one straight line between its end heights (the chord governs it: a long tunnel, an open cut) stays
+        // straight, as the owner ruling of D52/D65 keeps it and the terrain carve recognises a cut by it: exactly the chord
+        // for a cut (length at most tunnel_cut_max_length_m), else the chord with the portal grades held within
+        // kPortalGradeSlack over short vertical curves (ground_ramp_m, a quarter of the length at most).
+        std::optional<VerticalProfile> vertical;
+        {
+            const double chord = (samples.back().height_m - samples.front().height_m) / length;
+            bool straight = std::fabs(chord) <= g;
+            for (std::size_t k = 1; straight && k + 1 < floor.size(); ++k)
+                straight = std::fabs(floor[k] - (floor.front() + chord * structure::station_m(length, k))) <= 0.01;
+            // D65 stays the only way a floor becomes an open cut (the terrain carve recognises a cut by a floor straight within 1 cm
+            // and at most tunnel_cut_max_length_m long, and carves it down to the floor): the ground over the chord must rise by a
+            // bounded hump, as before. Every other straight floor (the design floor of a short tunnel is the chord by construction)
+            // keeps the portal grades within kPortalGradeSlack and bends over the end ramps, so that it is not a cut to the carve.
+            bool cut = false;
+            if (options.tunnel_cut_max_length_m > 0 && length <= options.tunnel_cut_max_length_m && std::fabs(chord) <= g) {
+                const auto& ground = comp->ground[idx];
+                double hump = 0;
+                for (std::size_t k = 0; k < ground.size(); ++k)
+                    if (std::isfinite(ground[k])) hump = std::max(hump, ground[k] - (floor.front() + chord * structure::station_m(length, k)));
+                cut = hump >= options.tunnel_cut_hump_min_m && hump <= options.tunnel_cut_hump_max_m;
+            }
+            if (straight || cut) {
+                const double slack = options.tunnel_cut_max_length_m > 0 && length <= options.tunnel_cut_max_length_m ? 0.0 : kPortalGradeSlack;   // a short stretch that is no cut takes the portal grade itself
+                fit.start_grade = cut ? chord : std::clamp(chord, designed_start - slack, designed_start + slack);
+                fit.end_grade = cut ? chord : std::clamp(chord, designed_end - slack, designed_end + slack);
+                std::vector<VerticalSample> line{samples.front(), samples.back()};
+                if (fit.start_grade != chord || fit.end_grade != chord) {
+                    const double ramp = std::min(std::max(options.ground_ramp_m, 1.0), length / 4.0);
+                    line = {samples.front(), {ramp, samples.front().height_m + chord * ramp}, {length - ramp, samples.back().height_m - chord * ramp}, samples.back()};
+                    if (ramp < 0.5 || line[2].station_m - line[1].station_m < 0.5) line = {samples.front(), samples.back()};
+                }
+                if (auto v = fit_vertical_profile(line, fit)) { vertical = std::move(*v); ++(cut ? stats->tunnel_cut : stats->tunnel_chord); }
+            }
+        }
+        if (!vertical) vertical = solve(samples, designed_start, designed_end);
+        if (!vertical) {
+            vertical = solve(samples, own_grade(true), own_grade(false));
+            if (vertical) ++stats->floor_entry_own_grades;
+        }
+        if (!vertical) {
+            const std::vector<VerticalSample> ends{samples.front(), samples.back()};
+            const double chord = std::clamp((ends[1].height_m - ends[0].height_m) / length, -g, g);
+            vertical = solve(ends, chord, chord);
+            if (vertical) ++stats->floor_entry_straight;
+        }
+        if (!vertical) { fail(); continue; }
+        RoadProfile p; p.stretch = entry.stretch; p.attributes = *attrs; p.reference = comp->refs[idx]; p.vertical = std::move(*vertical);
+        double deviation = 0;
+        for (const auto& s : samples) if (const auto pose = p.at(s.station_m)) deviation = std::max(deviation, std::fabs(pose->height_m - s.height_m));
+        stats->floor_fit_max_deviation_m = std::max(stats->floor_fit_max_deviation_m, deviation);
+        if (deviation > 0.25) ++stats->floor_fit_over_250mm;
+        entry.profile = std::move(p); mark(i, ProfileProvenance::TunnelFloor); ++stats->tunnel_completed;
+    }
 
     // Step 2a (D47, the game's tunnel step): tunnel floors. The DEM along the tunnel's own reference is the floor (the
     // lower road's ground; the roof is supplied by the road above, so a floor is never carved into the terrain). A
@@ -424,7 +681,7 @@ Result<void> complete_road_profiles(std::vector<RoadGeomEntry>& entries, std::ve
     // 2026-10-15, long tunnels follow straight lines): the served threshold is de.json's 200 m. The threshold is
     // compared with the whole stretch's reference length, never with a tile's part of it. A function of the entry's
     // own way and the DEM along it (road_dem_dependencies), so tile-invariant.
-    for (std::size_t i = 0; options.tunnel_floors && i < entries.size(); ++i) {
+    for (std::size_t i = 0; options.tunnel_floors && !options.tunnel_design_floor && i < entries.size(); ++i) {
         auto& entry = entries[i]; if (entry.profile || !entry.decline) continue;
         const auto* attrs = walk.attributes(entry.way_id); if (!attrs || !attrs->tunnel) continue;
         ++stats->tunnel_candidates;
