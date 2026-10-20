@@ -31,3 +31,7 @@ target_link_libraries(g2m_restriction_probe PRIVATE g2m_server g2m_warnings g2m_
 # Read-only censuses over the road graphs of a block of tiles (tools/road_census: turn arrows, reference-line bow).
 add_executable(g2m_road_census ../../tools/road_census/main.cpp)
 target_link_libraries(g2m_road_census PRIVATE g2m_world g2m_server g2m_warnings g2m_options)
+
+# Railways R1/R2 census over an existing immutable source store (docs/formats/rail_geom.md).
+add_executable(g2m_rail_census ../../tools/rail_census/main.cpp)
+target_link_libraries(g2m_rail_census PRIVATE g2m_server g2m_warnings g2m_options)

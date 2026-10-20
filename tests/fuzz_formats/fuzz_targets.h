@@ -36,6 +36,7 @@ enum class Target {
     HttpRequest,   // g2m::http::parse_request (method byte, target line, If-None-Match lines) + header text
     HttpResponse,  // g2m::http::decode_response ("target\nstatus\nheaders\n\nbody"), then encode/decode is stable
     TerrainClass, // decode_body + decode_terrain_class (g2m.terrain.class, P2 slice 10) at a fixed key, round trip
+    RailGeom,     // decode_body + decode_rail_geom (g2m.rail.geom, R1) at a fixed key, validate + round trip
 };
 
 struct TargetInfo {
@@ -47,12 +48,14 @@ inline constexpr TargetInfo kTargets[] = {
     {Target::Container, "container"}, {Target::Elev, "elev"}, {Target::Landcover, "landcover"},
     {Target::Osm, "osm"},             {Target::Pack, "pack"}, {Target::Manifest, "manifest"},
     {Target::Path, "path"},           {Target::Region, "region"}, {Target::Roadgraph, "roadgraph"}, {Target::Roadgeom, "roadgeom"},
-    {Target::RoadCrossSectionEval, "roadCrossSectionEval"}, {Target::TerrainClass, "terrainClass"},
+    {Target::RoadCrossSectionEval, "roadCrossSectionEval"}, {Target::TerrainClass, "terrainClass"}, {Target::RailGeom, "railGeom"},
     {Target::PackDirectory, "packDirectory"}, {Target::HttpRequest, "httpRequest"}, {Target::HttpResponse, "httpResponse"},
 };
 
 // The key the TerrainClass target decodes against (and its seeds are encoded at).
 inline constexpr std::int32_t kFuzzClassX = 1820, kFuzzClassY = 21684;
+// The level-2 key the RailGeom target decodes against.
+inline constexpr std::int32_t kFuzzRailX = 456, kFuzzRailY = 5420;
 
 // Runs one input (fuzz_run.cpp).
 void run(Target target, std::span<const std::uint8_t> data);

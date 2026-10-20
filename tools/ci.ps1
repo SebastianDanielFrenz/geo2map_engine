@@ -80,7 +80,7 @@ foreach ($name in $Only) {
 
 $script:Results = New-Object System.Collections.Generic.List[object]
 $script:GoldenDumps = New-Object System.Collections.Generic.List[object]
-$script:GoldenSets = @('g0', 'g1', 'g1c', 'g2', 'g2mesh', 'g2roads', 'g2paint', 'g3xs', 'g3j', 'g3d', 'g3c')   # testdata/golden/<set>_golden.txt
+$script:GoldenSets = @('g0', 'g1', 'g1c', 'g2', 'g2mesh', 'g2roads', 'g2paint', 'g3xs', 'g3j', 'g3d', 'g3c', 'g3rail')   # testdata/golden/<set>_golden.txt
 $script:FuzzLegs = @('linux-release', 'linux-asan-ubsan')  # G2M_BUILD_FUZZERS=ON (CMakePresets.json)
 
 function Add-Result {

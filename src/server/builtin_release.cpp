@@ -8,10 +8,10 @@ namespace g2m {
 
 LocalReleaseParams builtin_local_release_params(std::string scope, const BuiltinTerrainDerivers& derivers,
                                                  std::vector<ReleaseSource> sources, bool include_roads, bool include_geometry,
-                                                 bool include_carved, bool include_classes) {
+                                                 bool include_carved, bool include_classes, bool include_rail) {
     LocalReleaseParams params;
     params.source_scope = std::move(scope);
-    params.derivers = derivers.ordered(include_roads, include_geometry, include_carved, include_classes);
+    params.derivers = derivers.ordered(include_roads, include_geometry, include_carved, include_classes, include_rail);
     params.sources = std::move(sources);
     return params;
 }

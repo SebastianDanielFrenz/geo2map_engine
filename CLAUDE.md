@@ -1256,6 +1256,30 @@ over the road is not modelled in geo2map at all (the racing_game side must sourc
 recorded sabotages `UnderpassRules.overpass = false`, `tunnel_cut_max_length_m = 0`, `CarveOptions.tunnel_cut = false`), pins `test_road_geom_xs.cpp`, `test_terrain_carve.cpp`,
 `test_road_rules.cpp` (de.json hash is of the LF bytes), goldens g3c/g3d (one hoechst_a66 tile). Tools `g2m_osm_near`, `g2m_spot_dump` (docs/pipeline/README.md 7.4).
 
+## Railways R1/R2 (2026-10-20, decision G2M-026)
+
+`g2m.rail.geom` v1, an OPT-IN level-2 baked layer (body encoding `LayerEncoding::RailGeom` = 1 in its own id space):
+every OSM railway way as pieces (cut at the first vertex at or past `piece.max_length_m` 512 m, owned by the tile that
+holds the first vertex, the roads.geom junction rule) with class (rail, light_rail, subway; tram class id 3 reserved but
+disabled in the rules), condition (in service / construction), flags (bridge, tunnel, embankment, cutting, declined,
+electrified), layer, tracks, service, usage, gauge and a z profile in 1/256 m taken from the line itself: bridge and
+tunnel pieces are linear between the two ground anchors of the chain of connected same-structure ways (budget 3000 m,
+16 ways), so a deck never follows the DEM into a cutting; ground pieces are resampled at 20 m, triangular-smoothed
+(40 m), grade limited (40 permille rail, 60 light_rail/subway) with both ends pinned to the raw DEM. A missing DEM tile
+declines only the pieces that need it (flag 16, all z = 0). Does NOT touch roads.geom encoding 9, so carved/class tiles
+and every existing release id are unchanged; only a release that opts in (`--layers g2m.rail.geom`, `LayerOptIn::rail`,
+`include_rail` as the trailing `builtin_release` parameter) gets a new id. Files: `include/g2m/layer/rail_rules.h` /
+`src/layer/rail_rules.cpp` (strict loader of `data/rail_rules/de.json`, embedded, its SHA-256 in the config hash),
+`include/g2m/layer/rail_geom_tile.h` (public API), `src/layer/rail_geom_tile.cpp` (codec, validator, descriptor, config
+text), `rail_geom_build.cpp` (attributes, piece plan, chain, profile, DEM dependencies), `derive_rail_geom.cpp`
+(`RailGeomDeriver`: 3x3 `src.osm` window, stage-2 DEM tiles incl. the chain anchors). `TerrainService`: typed ticket
+(job kind 11), `peek_rail_geom`, `ProductContext::rail_geom`. Tool `g2m_rail_census` (`tools/rail_census/main.cpp`,
+read-only census of ways, bridges, crossings with roads, baked tiles). Tests `tests/layer/test_rail_geom.cpp`
+(`[rail]`, every property with a recorded sabotage), `tests/world/test_terrain_service.cpp` (rail case), fuzz target
+`railGeom`, golden `g3rail` (`tests/golden/golden_g3rail.cpp`, `testdata/golden/g3rail_golden.txt`, Windows = Linux).
+Docs `docs/formats/rail_geom.md`, `docs/pipeline/rail.md` (decisions, home-region census). Not in v1: embankment/
+cutting geometry, carving under a rail bridge, level crossing records, rail.graph, catenary, trains, tram.
+
 ## G4 routing, slice 1 (2026-10-14)
 
 Design, owner questions and the slice plan: `docs/routing_design.md`. `g2m_route` (`include/g2m/route/`, `src/route/`)

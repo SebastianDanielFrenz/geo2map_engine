@@ -70,6 +70,7 @@ struct LayerOptIn {
     bool geometry = true;   // g2m.roads.geom (needs roads)
     bool carved = false;    // g2m.terrain.carved; when set, height() serves it instead of g2m.terrain.height
     bool classes = false;   // g2m.terrain.class (phase 6); implies the carved layer in the release (height() still follows `carved`)
+    bool rail = false;      // g2m.rail.geom (railways R1/R2); independent of the road layers, needs only src.osm and elev.base
 };
 
 struct TerrainServiceConfig {
@@ -97,6 +98,7 @@ class ProductContext {
 public:
     Outcome<HeightTile> height(const TileKey& key);
     Outcome<RoadGeomTile> road_geom(const TileKey& l2);
+    Outcome<RailGeomTile> rail_geom(const TileKey& l2);
     Outcome<RoadSegmentsTile> road_segments(const TileKey& l2);
     Outcome<OsmTile> source_osm(const TileKey& l2);
     Outcome<RawTile> raw_tile(const std::string& layer, const TileKey& key);
@@ -224,6 +226,9 @@ public:
     // road_geom / road_segments / source_osm: `key` is the level-2 tile (a finer key is mapped to its level-2
     // ancestor, so L0 and L2 requests for the same area share one job).
     Ticket<RoadGeomTile> road_geom(const TileKey& l2, Priority priority);
+    // The decoded g2m.rail.geom tile (level 2; railway pieces owned by the tile). Failed at once when the release has no
+    // rail layer (LayerOptIn::rail off).
+    Ticket<RailGeomTile> rail_geom(const TileKey& l2, Priority priority);
     Ticket<RoadSegmentsTile> road_segments(const TileKey& l2, Priority priority);
     Ticket<OsmTile> source_osm(const TileKey& l2, Priority priority);
     // Any layer's container, uncached typed decode skipped (for layers without a typed ticket, and tools).
@@ -240,6 +245,7 @@ public:
     std::shared_ptr<const HeightTile> peek_height(const TileKey& key) const noexcept;
     std::shared_ptr<const TerrainClassTile> peek_terrain_class(const TileKey& key) const noexcept;
     std::shared_ptr<const RoadGeomTile> peek_road_geom(const TileKey& l2) const noexcept;
+    std::shared_ptr<const RailGeomTile> peek_rail_geom(const TileKey& l2) const noexcept;
     std::shared_ptr<const RoadSegmentsTile> peek_road_segments(const TileKey& l2) const noexcept;
     std::shared_ptr<const OsmTile> peek_source_osm(const TileKey& l2) const noexcept;
     std::shared_ptr<const StructureSet> peek_structures(const TileKey& l2) const noexcept;

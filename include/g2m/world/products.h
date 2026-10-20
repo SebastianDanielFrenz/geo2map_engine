@@ -6,6 +6,7 @@
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/height_tile.h"
 #include "g2m/layer/osm_roads.h"
+#include "g2m/layer/rail_geom_tile.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/src_osm.h"
 #include "g2m/layer/tile_container.h"
@@ -61,6 +62,9 @@ using HeightTilePtr = std::shared_ptr<const HeightTile>;
 // served profiles (completion included) are the release's truth: a consumer does
 // not re-fit them.
 using RoadGeomTile = g2m::RoadGeomTile;
+
+// g2m.rail.geom, decoded (g2m::RailGeomTile): the railway pieces whose first vertex lies in the level-2 tile.
+using RailGeomTile = g2m::RailGeomTile;
 
 // The drivable road segments of one g2m.src.osm tile (extract_road_segments with
 // the default RoadStyle), the list grip, speed limit and road-ahead read.

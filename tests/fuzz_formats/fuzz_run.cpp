@@ -6,6 +6,7 @@
 
 #include "g2m/http/http_wire.h"
 #include "g2m/layer/pack.h"
+#include "g2m/layer/rail_geom_tile.h"
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/region.h"
@@ -245,6 +246,16 @@ void run(Target target, std::span<const std::uint8_t> data) {
         check(enc.ok(), "terrain.class: re-encode");
         g2m::TerrainClassTile back;
         check(g2m::decode_terrain_class(*enc, key, back).ok() && back == tile, "terrain.class: round trip");
+        return;
+    }
+    case Target::RailGeom: {
+        const auto body = body_of(data); if (!body) return;
+        const g2m::TileKey key{g2m::geo::UtmZone{32, g2m::geo::Hemisphere::North}, 2, kFuzzRailX, kFuzzRailY};
+        const auto tile = g2m::decode_rail_geom(*body, key); if (!tile) return;
+        check(g2m::validate_rail_geom_tile(*tile).ok(), "rail.geom: decoded tile validates");
+        const auto enc = g2m::encode_rail_geom(*tile); check(enc.ok(), "rail.geom: re-encode");
+        const auto back = g2m::decode_rail_geom(*enc, key); check(back.ok() && *back == *tile, "rail.geom: round trip");
+        const auto again = g2m::encode_rail_geom(*back); check(again.ok() && g2m::encode_body(*again).value() == g2m::encode_body(*enc).value(), "rail.geom: stable bytes");
         return;
     }
     case Target::Landcover:
