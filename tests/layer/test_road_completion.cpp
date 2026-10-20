@@ -840,11 +840,11 @@ namespace {
 const Tags kTunnel = {{"highway", "primary"}, {"tunnel", "yes"}, {"layer", "-1"}};
 // What the release before phase 4 served: the tier without tunnel floors and without D47's anchors.
 // The completion of the release before terrain migration phase 4: no tunnel floors, no accepted-bridge anchors, 60 m walk.
-RoadCompletionOptions previous_served() { auto o = served_road_completion_options(); o.tunnel_floors = false; o.bridge_anchor_reuse = false; o.abutment_path_m = 60; o.tunnel_chord_min_length_m = 0; return o; }
+RoadCompletionOptions previous_served() { auto o = g2m_test::served_without_portal_anchor(); o.tunnel_floors = false; o.bridge_anchor_reuse = false; o.abutment_path_m = 60; o.tunnel_chord_min_length_m = 0; return o; }
 // Phase 4's release (D47 at the 60 m walk), before D48 and before the straight-grade ruling.
-RoadCompletionOptions phase4_served() { auto o = served_road_completion_options(); o.abutment_path_m = 60; o.tunnel_chord_min_length_m = 0; return o; }
+RoadCompletionOptions phase4_served() { auto o = g2m_test::served_without_portal_anchor(); o.abutment_path_m = 60; o.tunnel_chord_min_length_m = 0; return o; }
 // Phase 5's release (D48), before the owner's straight-grade ruling: every tunnel follows the DEM.
-RoadCompletionOptions phase5_served() { auto o = served_road_completion_options(); o.tunnel_chord_min_length_m = 0; return o; }
+RoadCompletionOptions phase5_served() { auto o = g2m_test::served_without_portal_anchor(); o.tunnel_chord_min_length_m = 0; return o; }
 RoadGeomTile build_with(const Env& env, const RoadCompletionOptions& o, RoadCompletionStats* stats = nullptr) {
     auto g = build_road_geom_tile(env.tile, *env.dem, env.limits, &env.context, builtin_road_rules_de(), o, stats); REQUIRE(g);
     return std::move(*g);
@@ -910,11 +910,11 @@ TEST_CASE("tunnel floors: the game's tunnel step byte for byte on a straight and
         CHECK(lib.entries[t].profile->reference.length_m == game.entries[t].profile->reference.length_m);
         // Sabotages: no tunnel step leaves it declined; a 10 m sample spacing is another profile than the game's.
         // Below the served straight-grade threshold (200 m) the served tier gives this 180 m tunnel the same DEM floor.
-        { const auto served = build_with(*env, served_road_completion_options()); REQUIRE(served.entries[t].profile);
+        { const auto served = build_with(*env, g2m_test::served_without_portal_anchor()); REQUIRE(served.entries[t].profile);
           CHECK(same_vertical(served.entries[t].profile->vertical, lib.entries[t].profile->vertical)); }
-        auto off = served_road_completion_options(); off.tunnel_floors = false;
+        auto off = g2m_test::served_without_portal_anchor(); off.tunnel_floors = false;
         CHECK_FALSE(build_with(*env, off).entries[t].profile);
-        auto coarse = served_road_completion_options(); coarse.tunnel_spacing_m = 10;
+        auto coarse = g2m_test::served_without_portal_anchor(); coarse.tunnel_spacing_m = 10;
         const auto other = build_with(*env, coarse); REQUIRE(other.entries[t].profile);
         CHECK_FALSE(same_vertical(other.entries[t].profile->vertical, game.entries[t].profile->vertical));
         // Downstream: still a Tunnel approach at its junctions, no grip segment painted from it, validated and stored as 8.
@@ -962,7 +962,7 @@ TEST_CASE("tunnel floors: three long tunnels (539, 499, 498 m) follow the straig
         const auto t = index_of(floor, 30, 0);
         REQUIRE(floor.entries[t].profile); CHECK(floor.origins[t].provenance == ProfileProvenance::TunnelFloor);
         const double L = floor.entries[t].profile->reference.length_m;
-        const auto chord_opts = served_road_completion_options();
+        const auto chord_opts = g2m_test::served_without_portal_anchor();
         REQUIRE(chord_opts.tunnel_chord_min_length_m == 200);
         RoadCompletionStats chord_stats; const auto chord = build_with(*env, chord_opts, &chord_stats);
         { RoadCompletionStats s5; const auto before = build_with(*env, phase5_served(), &s5);   // the previous release: the DEM floor
@@ -979,7 +979,7 @@ TEST_CASE("tunnel floors: three long tunnels (539, 499, 498 m) follow the straig
         CHECK(cp.at(0)->height_m == fp.at(0)->height_m); CHECK(cp.at(L)->height_m == fp.at(L)->height_m);   // same portal samples
         CHECK(chord_stats.tunnel_chord == 1); CHECK(floor_stats.tunnel_chord == 0);
         // Below the threshold the floor rule stays: a threshold longer than the tunnel gives the DEM floor bit for bit.
-        auto above = served_road_completion_options(); above.tunnel_chord_min_length_m = 600;
+        auto above = g2m_test::served_without_portal_anchor(); above.tunnel_chord_min_length_m = 600;
         const auto same = build_with(*env, above); REQUIRE(same.entries[t].profile);
         CHECK(same_vertical(same.entries[t].profile->vertical, fp.vertical));
     }
@@ -987,7 +987,7 @@ TEST_CASE("tunnel floors: three long tunnels (539, 499, 498 m) follow the straig
         const auto world = tunnel_world(arc(100, -100, 0, 0, 0, 200, 15));
         const Fn steep = [](double e, double) { return 100.0 + 0.33 * (e - kOriginE); };
         const auto env = make_env(world, kTile, steep);
-        auto chord_opts = served_road_completion_options(); chord_opts.tunnel_chord_min_length_m = 150;
+        auto chord_opts = g2m_test::served_without_portal_anchor(); chord_opts.tunnel_chord_min_length_m = 150;
         RoadCompletionStats s; const auto a = build_with(*env, chord_opts, &s); const auto b = build(*env, true);
         const auto t = index_of(a, 30, 0);
         CHECK(s.tunnel_chord == 0);
@@ -1000,7 +1000,7 @@ TEST_CASE("tunnel floors: three long tunnels (539, 499, 498 m) follow the straig
         const auto builder = RoadReferenceBuilder::make(env->context); REQUIRE(builder);
         const auto strict = build(*env, false);
         for (int bad = 0; bad < 4; ++bad) {
-            auto o = served_road_completion_options();
+            auto o = g2m_test::served_without_portal_anchor();
             if (bad == 0) o.tunnel_max_grade = 0.31;
             if (bad == 1) o.tunnel_min_radius_m = 19;
             if (bad == 2) o.tunnel_spacing_m = 0.25;
@@ -1021,7 +1021,7 @@ TEST_CASE("tunnel floors: a long curved, sloped tunnel across a tile edge takes 
     const auto nodes = arc(100, 360, 0, 0.15, 400, 450, 15);
     const auto world = tunnel_world(nodes);
     const auto west = make_env(world, kTile, ridge), east = make_env(world, kTileEast, ridge);
-    const auto served = served_road_completion_options();
+    const auto served = g2m_test::served_without_portal_anchor();
     REQUIRE(served.tunnel_chord_min_length_m == 200);
     RoadCompletionStats sw, se;
     const auto a = build_with(*west, served, &sw), b = build_with(*east, served, &se);
@@ -1241,7 +1241,7 @@ TEST_CASE("tunnel floors: the straight-grade ruling on the fixture tunnels (meas
         std::map<std::pair<std::int64_t, std::uint32_t>, Seen> tunnels;
         std::size_t inconsistent = 0;
         for (const auto& key : keys) {
-            const auto before = encode(key, phase5_served()), now = encode(key, served_road_completion_options());
+            const auto before = encode(key, phase5_served()), now = encode(key, g2m_test::served_without_portal_anchor());
             REQUIRE(before.entries.size() == now.entries.size());
             for (std::size_t i = 0; i < now.entries.size(); ++i) {
                 const auto& e = now.entries[i];

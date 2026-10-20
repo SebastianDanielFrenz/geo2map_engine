@@ -450,6 +450,16 @@ At the NW portal node 30906085 (467585.07 / 5550217.80) that sample is the bank 
 - **Tunnel/tunnel nodes** take one floor value from the component solve (3.2).
 - **Rail** (`rail.geom` v1, chains linear between ground anchors) gets the same anchor rule.
 
+**Implemented (phase 7a-1, branch claude/portal-continuity, unmerged):** `road_completion.cpp` `portal_plane` (rules 1-3 above;
+the approach is `portal_approach.{h,cpp}`, the DEM median 2-8 m out detrended to the node), step 2a anchors both tunnel
+ends (height by a ramp of `ground_ramp_m` on the DEM samples, grade = the joining road's `away` grade continued; a straight
+chord keeps its chord within 0.015 and meets the ground grade over end ramps of at most a quarter of the length, a D65 cut
+stays EXACTLY the chord because the carve recognises a cut by a floor straight to 1 cm, so a cut's grade can differ from the
+ground road's by more than 0.02), step 3 refits declined ground stretches to the tunnel plane (strict, then with the D43
+mismatch waived, `ground_tunnel_chord`, else the DEM planes). Gated by `RoadCompletionOptions::tunnel_portal_anchor`
+(config token `portal-anchor=7a1` in roads.geom and rail.geom); rail: `rail_geom_build.cpp` `rail_node_anchor`. The test
+lives in `tests/layer/test_portal_continuity.cpp` (g2m_unit_tests does not link g2m_layers).
+
 **Test** (`test_portal_continuity`, tags `[roads][structure]`, geo2map):
 - on the corridor fixture tiles plus the 4812754 fixture tile (`utm32n/2/456/5420`), for every TunnelFloor entry and
   every node it shares, |dz| <= 0.01 m and |dgrade| <= 0.02;

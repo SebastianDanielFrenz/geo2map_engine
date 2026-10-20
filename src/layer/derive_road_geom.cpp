@@ -59,6 +59,9 @@ Result<std::optional<std::vector<InputTileRef>>> bridge_dependencies(const RoadG
     for (const auto& tile : tiles) graphs.push_back(&tile.graph);
     const auto context = merge_road_graphs(graphs); if (!context) return context.error();
     auto bridges = road_bridge_dependencies(graph.graph, *context, zone, &graph.key); if (!bridges) return bridges.error();
+    auto portals = road_portal_dependencies(graph.graph, *context, zone, &graph.key); if (!portals) return portals.error();   // 7a-1
+    bridges->insert(bridges->end(), portals->begin(), portals->end());
+    std::sort(bridges->begin(), bridges->end()); bridges->erase(std::unique(bridges->begin(), bridges->end()), bridges->end());
     return std::optional<std::vector<InputTileRef>>(std::move(*bridges));
 }
 // The roads.graph tiles holding every way that crosses a segment of the tile's ways (D57, underpass decks); empty with
@@ -129,7 +132,10 @@ std::string road_geom_config_text() {
         // crossing tiles adding the squares of this half-width (mm) around every tile way's end nodes (D63).
         " underpass=" + std::string(builtin_road_rules_de().underpass.enabled ? "1" : "off") + " crossing-context=1 underpass-tags=D61 underpass-join=D63/" + std::to_string(kRoadUnderpassJoinMarginMm) +
         // D64: a ground stretch under an upper bridge (a higher layer, bridge=*) masks the hump the bare-earth DEM holds there with the lower rim chord and takes its end planes from it.
-        " overpass-mask=D64";
+        " overpass-mask=D64"
+        // 7a-1: a tunnel floor end and the ground stretch meeting it take one portal plane (the adjacent ground profile's end,
+        // else the approach level); the stage-2 set adds the incident ground ways' DEM and node tiles at every portal.
+        + std::string(c.tunnel_portal_anchor ? " portal-anchor=7a1" : "");
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {

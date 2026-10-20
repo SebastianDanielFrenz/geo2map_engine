@@ -2,6 +2,9 @@
 //
 //   g2m_spot_dump STORE SCOPE SCRATCH_DIR ZONE EASTING NORTHING RADIUS_M [--way ID] [--step M]
 //   g2m_spot_dump STORE SCOPE SCRATCH_DIR ZONE EASTING NORTHING RADIUS_M --census HALF_M [--csv FILE] [--baseline]
+// --portals FILE (with --census): phase 7a-1 portal census, one CSV row per node a tunnel entry ends at: the tunnel floor end
+// height and grade, the profiled non-tunnel entries ending there (height, grade) and the declined ground stretches ending
+// there; a summary line counts the portals, the steps above 0.01 m / 0.5 m and the declined ground stretches at portals.
 // --baseline: run with D64 (hump mask under upper bridges) and D65 (short-tunnel cut) switched off, for before/after.
 //
 // --census: every level-2 roads.geom tile within HALF_M of the point is derived and tallied: entries by
@@ -40,6 +43,8 @@
 #include <set>
 #include <memory>
 #include <string>
+#include <tuple>
+#include <vector>
 #include <string_view>
 
 using namespace g2m;
@@ -100,6 +105,7 @@ int main(int argc, char** argv) {
     double step = 2, census_half = 0, cross_s = -1;
     std::string csv_path;
     bool baseline = false;
+    std::string portals_path;
     for (int i = 8; i < argc; ++i) {
         const std::string_view a = argv[i];
         if (a == "--way" && i + 1 < argc) way_filter = std::atoll(argv[++i]);
@@ -108,6 +114,7 @@ int main(int argc, char** argv) {
         else if (a == "--census" && i + 1 < argc) census_half = std::atof(argv[++i]);
         else if (a == "--csv" && i + 1 < argc) csv_path = argv[++i];
         else if (a == "--baseline") baseline = true;
+        else if (a == "--portals" && i + 1 < argc) portals_path = argv[++i];
         else { std::cerr << "unknown option\n"; return 1; }
     }
     if (baseline) {   // diagnostic only: the rules as they were before D64/D65 (separate SCRATCH_DIR: other derived keys)
@@ -149,6 +156,11 @@ int main(int argc, char** argv) {
         const auto k0 = tile_key_at(zone, 2, e0 - census_half, n0 - census_half), k1 = tile_key_at(zone, 2, e0 + census_half, n0 + census_half);
         if (!k0 || !k1) return 1;
         static const char* kProvN[] = {"strict", "retry", "bridge-completed", "ground-completed", "tunnel-floor"};
+        // 7a-1: what ends at each node, across the census tiles (a node is listed once per entry end).
+        struct EndAt { std::int64_t way; int prov; bool tunnel, bridge; double z, grade; };
+        struct NodeEnds { double east = 0, north = 0; std::vector<EndAt> ends; int declined_ground = 0; };
+        std::map<std::int64_t, NodeEnds> node_ends;
+        std::set<std::tuple<std::int64_t, std::uint32_t, int>> seen_ends, seen_declined;
         for (std::int32_t ty = k0->y; ty <= k1->y; ++ty) for (std::int32_t tx = k0->x; tx <= k1->x; ++tx) {
             TileKey key = *k0; key.x = tx; key.y = ty;
             TileRequest req; req.rid = manifest->rid; req.layer = std::string(kRoadGeomLayer); req.key = key;
@@ -165,6 +177,36 @@ int main(int argc, char** argv) {
                 const auto way = std::lower_bound(graph.ways.begin(), graph.ways.end(), e.way_id, [](const auto& w, auto id) { return w.osm_id < id; });
                 if (way == graph.ways.end() || way->osm_id != e.way_id || e.stretch.end_ref >= way->node_ids.size()) continue;
                 profiled_ends.insert(way->node_ids[e.stretch.start_ref]); profiled_ends.insert(way->node_ids[e.stretch.end_ref]);
+            }
+            if (!portals_path.empty()) {
+                const auto position_of = [&](std::int64_t id) {
+                    const auto n = std::lower_bound(graph.nodes.begin(), graph.nodes.end(), id, [](const auto& a, auto v) { return a.osm_id < v; });
+                    return n->position;
+                };
+                for (std::size_t ei = 0; ei < tile->entries.size(); ++ei) {
+                    const auto& e = tile->entries[ei];
+                    const auto way = std::lower_bound(graph.ways.begin(), graph.ways.end(), e.way_id, [](const auto& w, auto id) { return w.osm_id < id; });
+                    if (way == graph.ways.end() || way->osm_id != e.way_id || e.stretch.end_ref >= way->node_ids.size()) continue;
+                    const std::int64_t ends[2] = {way->node_ids[e.stretch.start_ref], way->node_ids[e.stretch.end_ref]};
+                    if (e.profile) {
+                        const auto& p = *e.profile;
+                        const auto prov = ei < tile->origins.size() ? static_cast<int>(tile->origins[ei].provenance) : 0;
+                        for (int side = 0; side < 2; ++side) {
+                            if (!seen_ends.insert({e.way_id, e.stretch.start_ref, side}).second) continue;
+                            const double st = side ? p.reference.length_m : 0;
+                            const auto z = p.at(st); const auto xy = p.reference.at(st); if (!z || !xy) continue;
+                            // The grade is reported rising away from the node (the end grade at side 1, the negated start grade at side 0).
+                            auto& n = node_ends[ends[side]]; const auto pos = position_of(ends[side]);
+                            n.east = pos.x / 1000.0; n.north = pos.y / 1000.0;
+                            n.ends.push_back({e.way_id, prov, p.attributes.tunnel, p.attributes.bridge, z->height_m, side ? -z->grade : z->grade});
+                        }
+                    } else {
+                        bool tunnel = false, bridge = false;
+                        for (const auto& [k, v] : way->tags) { if (k == "tunnel" && v != "no") tunnel = true; if (k == "bridge" && v != "no") bridge = true; }
+                        if (tunnel || bridge) continue;
+                        for (int side = 0; side < 2; ++side) if (seen_declined.insert({e.way_id, e.stretch.start_ref, side}).second) ++node_ends[ends[side]].declined_ground;
+                    }
+                }
             }
             for (std::size_t ei = 0; ei < tile->entries.size(); ++ei) {
                 const auto& e = tile->entries[ei];
@@ -219,6 +261,37 @@ int main(int argc, char** argv) {
         for (const auto& [k, v] : by_prov) std::cout << "  profiled " << k << ' ' << v << '\n';
         for (const auto& [k, v] : by_kind) std::cout << "  declined " << k << ' ' << v << " (touching profiled " << orphan_by_kind[k] << ")\n";
         for (const auto& [k, v] : by_message) std::cout << "  " << v << "  " << k << '\n';
+        if (!portals_path.empty()) {
+            std::ofstream out(portals_path);
+            out << "node,east,north,tunnel_ways,floor_z,floor_grade,ground_ways,ground_z,ground_grade,dz,dgrade,declined_ground\n";
+            std::size_t portals = 0, with_ground = 0, step_001 = 0, step_05 = 0, declined_at_portal = 0, tunnel_tunnel = 0, tt_bad = 0, grade_bad = 0;
+            double worst = 0, worst_grade = 0;
+            for (const auto& [id, n] : node_ends) {
+                std::vector<const EndAt*> tun, gro;
+                for (const auto& e : n.ends) { if (e.tunnel) tun.push_back(&e); else if (!e.bridge) gro.push_back(&e); }
+                if (tun.empty()) continue;
+                ++portals; declined_at_portal += static_cast<std::size_t>(n.declined_ground);
+                double dz = 0, dg = 0;
+                for (const auto* t : tun) {
+                    for (const auto* g : gro) { dz = std::max(dz, std::fabs(t->z - g->z)); dg = std::max(dg, std::fabs(t->grade + g->grade)); }
+                    for (const auto* u : tun) if (u != t) { dz = std::max(dz, std::fabs(t->z - u->z)); dg = std::max(dg, std::fabs(t->grade + u->grade)); }
+                }
+                if (!gro.empty()) ++with_ground;
+                if (tun.size() > 1) ++tunnel_tunnel;
+                if (!gro.empty() || tun.size() > 1) {
+                    if (dz > 0.01) ++step_001;
+                    if (dz > 0.5) ++step_05;
+                    if (dg > 0.02) ++grade_bad;
+                    worst = std::max(worst, dz); worst_grade = std::max(worst_grade, dg);
+                }
+                if (tun.size() > 1 && dz > 0.01) ++tt_bad;
+                out << id << ',' << n.east << ',' << n.north << ',' << tun.size() << ',' << tun[0]->z << ',' << tun[0]->grade << ',' << gro.size() << ','
+                    << (gro.empty() ? 0.0 : gro[0]->z) << ',' << (gro.empty() ? 0.0 : gro[0]->grade) << ',' << dz << ',' << dg << ',' << n.declined_ground << '\n';
+            }
+            std::cout << "portals " << portals << " with_ground_profile " << with_ground << " tunnel_tunnel " << tunnel_tunnel << " (step > 0.01 m: " << tt_bad
+                      << ") step>0.01m " << step_001 << " step>0.5m " << step_05 << " grade>0.02 " << grade_bad << " worst_dz " << worst << " worst_dgrade " << worst_grade
+                      << " declined_ground_at_portals " << declined_at_portal << '\n';
+        }
         return 0;
     }
     const auto l2 = tile_key_at(zone, 2, e0, n0);

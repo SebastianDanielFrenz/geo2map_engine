@@ -60,13 +60,13 @@ std::vector<InputTileRef> RailGeomDeriver::inputs_for(const TileKey& target) con
 
 Result<std::vector<InputTileRef>> RailGeomDeriver::additional_inputs_for(const DeriveRequest& request) const {
     auto window = make_window(request); if (!window) return window.error();
-    return rail_dem_dependencies(window->world, request.target, builtin_rail_rules_de());
+    return rail_dem_dependencies(window->world, request.target, builtin_rail_rules_de(), 1024, true);
 }
 
 Result<DeriveResult> RailGeomDeriver::derive(const DeriveRequest& request) const {
     auto window = make_window(request); if (!window) return window.error();
     auto expected = inputs_for(request.target);
-    auto dem_refs = rail_dem_dependencies(window->world, request.target, builtin_rail_rules_de()); if (!dem_refs) return dem_refs.error();
+    auto dem_refs = rail_dem_dependencies(window->world, request.target, builtin_rail_rules_de(), 1024, true); if (!dem_refs) return dem_refs.error();
     expected.insert(expected.end(), dem_refs->begin(), dem_refs->end());
     std::sort(expected.begin(), expected.end());
     if (request.inputs.size() != expected.size()) return make_error(ErrorCode::InvalidArgument, "rail.geom: incomplete dependency set");
@@ -92,7 +92,7 @@ Result<DeriveResult> RailGeomDeriver::derive(const DeriveRequest& request) const
     }
     std::vector<const HeightTile*> views; for (const auto& height : heights) views.push_back(&height);
     const auto dem = RoadDemSampler::make(views); if (!dem) return dem.error();
-    const auto tile = build_rail_geom_tile(window->world, request.target, builtin_rail_rules_de(), *dem);
+    const auto tile = build_rail_geom_tile(window->world, request.target, builtin_rail_rules_de(), *dem, true);
     if (!tile) return tile.error();
     const auto body = encode_rail_geom(*tile); if (!body) return body.error();
     auto bytes = encode_body(*body); if (!bytes) return bytes.error();
