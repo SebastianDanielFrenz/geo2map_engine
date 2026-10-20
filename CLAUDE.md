@@ -751,7 +751,7 @@ end of `CMakeLists.txt`):
   - build dirs are `out/build/<preset>`.
 - WSL (clang + lld):
   - `linux-release`, `linux-asan-ubsan`, `linux-tsan`;
-  - build dirs are `~/build/geo2map_engine/<preset>`, never under `/mnt/s`;
+  - build dirs are `~/build/<checkout dir name>/<preset>` (`geo2map_engine` for the main checkout, `geo2map_ciwsl` for that worktree), never under `/mnt/s`; the WSL legs run in the checkout that runs `ci.ps1` (`/mnt/<drive>/...` derived from `$repoRoot`);
   - `linux-tsan` symbolizes with `/usr/bin/addr2line` and loads
     `tools/tsan_suppressions.txt`.
 
@@ -829,10 +829,10 @@ Regenerate the reference values (WSL only; commands also in
 `tools/refgen/CMakeLists.txt`):
 
 ```bash
-cmake -S . -B ~/build/geo2map_engine/refgen -G Ninja -DCMAKE_BUILD_TYPE=Release \
+cmake -S . -B ~/build/$(basename "$PWD")/refgen -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_COMPILER=clang++ -DG2M_BUILD_TESTS=OFF -DG2M_BUILD_REFGEN=ON
-cmake --build ~/build/geo2map_engine/refgen --target g2m_refgen
-~/build/geo2map_engine/refgen/tools/refgen/g2m_refgen testdata/geodesy
+cmake --build ~/build/$(basename "$PWD")/refgen --target g2m_refgen
+~/build/$(basename "$PWD")/refgen/tools/refgen/g2m_refgen testdata/geodesy
 ```
 
 `testdata/geodesy/*.txt` holds one record per line, with hex doubles and each

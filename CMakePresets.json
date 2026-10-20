@@ -134,7 +134,7 @@
       "name": "linux-base",
       "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "$env{HOME}/build/geo2map_engine/${presetName}",
+      "binaryDir": "$env{HOME}/build/${sourceDirName}/${presetName}",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
