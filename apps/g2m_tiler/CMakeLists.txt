@@ -24,3 +24,6 @@ target_link_libraries(g2m_osm_near PRIVATE g2m_server g2m_warnings g2m_options)
 # Read-only inspection of the served road geometry (profile vs DEM vs carved terrain) at a spot.
 add_executable(g2m_spot_dump ../../tools/spot_dump/main.cpp)
 target_link_libraries(g2m_spot_dump PRIVATE g2m_server g2m_warnings g2m_options)
+
+add_executable(g2m_restriction_probe ../../tools/restriction_probe/main.cpp)
+target_link_libraries(g2m_restriction_probe PRIVATE g2m_server g2m_warnings g2m_options)
