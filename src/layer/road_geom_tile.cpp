@@ -788,8 +788,8 @@ Result<RoadGeomTile> decode_road_geom(const TileBody& body) {
     }
     if (body.encoding == kRoadGeomEncoding) {
         ByteReader dr(body.sections[7].data);
-        const auto count = dr.varint(); if (!dr.ok() || count > kMaxUnderpasses || count > dr.remaining() / 6) return invalid("underpass count");
-        for (std::uint64_t i = 0; i < count; ++i) {
+        const auto underpass_count = dr.varint(); if (!dr.ok() || underpass_count > kMaxUnderpasses || underpass_count > dr.remaining() / 6) return invalid("underpass underpass_count");
+        for (std::uint64_t i = 0; i < underpass_count; ++i) {
             RoadUnderpass u;
             const auto entry = dr.varint(), start = dr.varint(), length = dr.varint(), depth = dr.varint();
             u.flags = dr.u16();

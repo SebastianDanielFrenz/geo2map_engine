@@ -1383,17 +1383,12 @@ void junction_weights(const JunctionSurface& surface, double x, double y, std::s
     for (std::size_t m = 0; m < n; ++m) weights[m] /= static_cast<double>(touched);
 }
 
-double junction_height_m(const JunctionSurface& surface, const RoadGeomTile& tile, double x, double y,
-    const RoadSurfaceParams& params) noexcept {
-    constexpr std::size_t kInline = 32;
-    const std::size_t n = surface.approaches.size();
-    double inline_weights[kInline];
-    std::vector<double> heap;
-    std::span<double> w(inline_weights, std::min(n, kInline));
-    if (n > kInline) { heap.assign(n, 0.0); w = std::span<double>(heap); }   // beyond 32 approaches only; never on the fixtures
+namespace {
+double junction_height_weighted(const JunctionSurface& surface, const RoadGeomTile& tile, double x, double y,
+    const RoadSurfaceParams& params, std::span<double> w) noexcept {
     junction_weights(surface, x, y, w);
     double z = 0.0;
-    for (std::size_t i = 0; i < n; ++i) {
+    for (std::size_t i = 0; i < surface.approaches.size(); ++i) {
         if (w[i] == 0.0) continue;
         double phi = 0.0, psi = 0.0;
         junction_relief_weights(surface, i, x, y, phi, psi);
@@ -1401,6 +1396,24 @@ double junction_height_m(const JunctionSurface& surface, const RoadGeomTile& til
         z += w[i] * (v.base + phi * (v.paved - v.base) + psi * (v.z - v.paved));
     }
     return z;
+}
+
+// Beyond 32 approaches only; never on the fixtures. Kept out of junction_height_m so the common path constructs no
+// std::vector at all: a debug-STL (MSVC _ITERATOR_DEBUG_LEVEL) vector allocates its _Container_proxy even when empty.
+double junction_height_heap_weights(const JunctionSurface& surface, const RoadGeomTile& tile, double x, double y,
+    const RoadSurfaceParams& params) noexcept {
+    std::vector<double> heap(surface.approaches.size(), 0.0);
+    return junction_height_weighted(surface, tile, x, y, params, std::span<double>(heap));
+}
+} // namespace
+
+double junction_height_m(const JunctionSurface& surface, const RoadGeomTile& tile, double x, double y,
+    const RoadSurfaceParams& params) noexcept {
+    constexpr std::size_t kInline = 32;
+    const std::size_t n = surface.approaches.size();
+    if (n > kInline) return junction_height_heap_weights(surface, tile, x, y, params);
+    double inline_weights[kInline];
+    return junction_height_weighted(surface, tile, x, y, params, std::span<double>(inline_weights, n));
 }
 
 std::vector<ProfileFeature> JunctionFeatureAdjustment::core_features() const {

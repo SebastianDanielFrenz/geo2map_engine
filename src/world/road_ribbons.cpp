@@ -181,7 +181,7 @@ bool near_ring(const std::vector<g2m::geom::PointMm>& ring,double x,double y,dou
 // (the cubic between its two trim cuts, or its centre line run on into the ring) and the rest of the ring takes the
 // paving of the nearest other arm - a paving-stone side road reaches up to the asphalt edge of the road it joins.
 void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometry,const g2m::TileKey& key,const RoadRibbonGround& ground,double lift) {
- const double ox=key.min_easting(),oy=key.min_northing();
+ const double ox=static_cast<double>(key.min_easting()),oy=static_cast<double>(key.min_northing());
  constexpr double kPi=3.14159265358979323846;
  struct Arm { P2 cut,in;double half=0;int surface=0,rank=0; };
  for(const auto& j:geometry.junctions) {
@@ -367,7 +367,7 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
  const auto surface=[&](const g2m::RoadGeomEntry& entry,double station,double lateral,double e,double n)->std::optional<double>{
   return separated_at(entry,station)?deck_height(entry,station,lateral):ground(e,n);
  };
- const double ox=key.min_easting(),oy=key.min_northing();
+ const double ox=static_cast<double>(key.min_easting()),oy=static_cast<double>(key.min_northing());
  const auto owned=[&](double x,double y){return std::floor(x/1024)==key.x&&std::floor(y/1024)==key.y;};
  // Painted rectangle on a stretch (station s0..s1, lateral t0..t1, reference frame), split every metre across so it
  // follows the ground; `raise` above the ribbon surface.
@@ -608,7 +608,8 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
    // The arrow (tail 2 m behind the station, tip 1.7 m ahead) stands in front of the first marking the traffic meets at
    // the end it drives toward: the junction trim, a stop or give-way line of this direction, a crossing. 15 m before
    // the end unless one of those reaches further back; then its tip ends kArrowGapM before it.
-   constexpr double kArrowGapM=3.0,kArrowTipM=1.7,kArrowTailM=2.0,kArrowReachM=60.0;
+   constexpr double kArrowGapM=3.0,kArrowTipM=1.7,kArrowTailM=2.0;
+   static constexpr double kArrowReachM=60.0;   // static: cl flags a constexpr local read only inside a lambda as unreferenced (C4189)
    const std::size_t index=static_cast<std::size_t>(&entry-geometry.entries.data());
    double barrier=direction>0?length:0.0;
    const auto bar=[&](double s0,double s1){
