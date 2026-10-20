@@ -84,6 +84,10 @@ struct RoadCompletionOptions {
     double tunnel_max_grade = 0.30;
     double tunnel_min_radius_m = 20;
     double tunnel_chord_min_length_m = 0;
+    // D65: a tunnel shorter than tunnel_chord_min_length_m but at most tunnel_cut_max_length_m long whose DEM rises
+    // between tunnel_cut_hump_min_m and tunnel_cut_hump_max_m above its portal chord also takes the chord (an open cut
+    // through an embankment, the terrain carve cuts the bank); 0 = never. Served from de.json's tunnel block.
+    double tunnel_cut_max_length_m = 0, tunnel_cut_hump_min_m = 0, tunnel_cut_hump_max_m = 0;
     // D47: at a bridge end node the end plane of an accepted bridge stretch ending there (its height, its end grade
     // along its heading) takes precedence over the walk, as the game's anchor map does; the walk tries every incident
     // bridge edge in order, not only the first.
@@ -99,6 +103,9 @@ inline constexpr double kRoadCompletionMinTunnelRadiusM = 20;
 inline RoadCompletionOptions served_road_completion_options() {
     RoadCompletionOptions o; o.enabled = true;
     o.tunnel_chord_min_length_m = builtin_road_rules_de().tunnel.straight_grade_min_length_m;
+    o.tunnel_cut_max_length_m = builtin_road_rules_de().tunnel.cut_max_length_m;
+    o.tunnel_cut_hump_min_m = static_cast<double>(builtin_road_rules_de().tunnel.cut_hump_min_mm) / 1000.0;
+    o.tunnel_cut_hump_max_m = static_cast<double>(builtin_road_rules_de().tunnel.cut_hump_max_mm) / 1000.0;
     return o;
 }
 // What the completion tier did, per kind (design 6.6; diagnostics only, never stored).
@@ -109,7 +116,7 @@ struct RoadCompletionStats {
     std::size_t ground_bridge_anchored = 0;  // completed stretches with at least one end on a bridge abutment plane
     std::size_t ground_grades_eased = 0;     // completed only after easing both end grades toward the chord (D43)
     std::size_t ground_base_fallback = 0;    // completed on the base anchors after the accepted bridge planes left no cubic (D47)
-    std::size_t tunnel_candidates = 0, tunnel_completed = 0, tunnel_chord = 0, tunnel_failed = 0;
+    std::size_t tunnel_candidates = 0, tunnel_completed = 0, tunnel_chord = 0, tunnel_cut = 0, tunnel_failed = 0;
     std::size_t bridge_anchor_reused = 0;    // end nodes whose plane came from an accepted bridge stretch (D47), once per node
     std::size_t walk_other_side = 0;         // bridging nodes whose walk found support only away from a later bridge edge (D47)
     std::size_t strict_anchors = 0;          // bridging end nodes that took the strict pass's anchor (D30), once per node

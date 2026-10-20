@@ -81,6 +81,8 @@ struct CarveOptions {
     bool junction_relief_fade = true;       // D42 sabotage: false keeps every approach's full relief (the D22-D24 surface)
     bool underpass_decks = true;            // D58 sabotage: false carves a ground stretch over its underpass decks (the slot)
     bool underpass_steep_walls = true;      // D59 sabotage: false lets a ground end's blend cap reach into its deck (abutment slope)
+    bool tunnel_cut = true;                 // D65 sabotage: false leaves a short straight tunnel floor under the bank (never carved)
+    bool tunnel_cut_crossing_check = true;  // D65 sabotage: false also cuts a tunnel a ground road runs over (a slot in that road)
     std::uint64_t candidate_order_seed = 0; // T14: visit the candidates of a bucket in a seeded permutation (0 = stored order)
 };
 
@@ -202,6 +204,10 @@ std::vector<TileKey> carve_road_geom_keys(const TileKey& level0);
 LayerDesc terrain_carved_desc();
 // The text TerrainCarvedDeriver hashes into its config hash (design 9.3).
 std::string terrain_carved_config_text();
+
+// D65 diagnostic (tools/spot_dump census): is entry `entry` of `tile` a tunnel the carve opens as a cut (short straight floor, not
+// crossed by a ground road)? The same decision the carve loop takes; false for any other entry.
+bool tunnel_entry_is_carved(const RoadGeomTile& tile, std::size_t entry, const CarveOptions& options, const TunnelRules& rules);
 
 // g2m.terrain.carved. L0: inputs = the 3 x 3 g2m.elev.base neighbourhood (absent = NoData; an absent centre is
 // NotFound, as g2m.terrain.height) and carve_road_geom_keys (absent = no roads there). Offsets are applied once; the

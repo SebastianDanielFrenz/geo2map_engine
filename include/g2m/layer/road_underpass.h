@@ -85,6 +85,8 @@ struct RoadUnderpassStats {
     std::size_t in_structure = 0;   // D61: upper stretches and lower crossings skipped as parking-structure storeys
     std::size_t joined = 0;         // D63: crossings of the stretch handed to the way-boundary support of an end node
     std::size_t join_spans = 0;     // D63: covered spans a stretch took from the way-boundary support of an end node
+    std::size_t over_crossings = 0; // D64: upper bridges found over the stretch
+    std::size_t over_masked = 0;    // D64: hump spans masked (before merging)
 };
 struct RoadUnderpassChord { double from_m = 0, to_m = 0, from_height_m = 0, to_height_m = 0; };
 struct RoadUnderpassSpanFit {
@@ -148,6 +150,10 @@ public:
     // The mask (D54): every sample strictly inside (0, length) whose station lies in a span takes the highest chord
     // covering it; a span without an interior sample gets one at its middle where that keeps 0.5 m to both neighbours.
     static void mask(const std::vector<RoadUnderpassSpanFit>& spans, std::vector<VerticalSample>& samples);
+    // D64: the end plane of a stretch end that lies inside a masked hump span (nullopt otherwise): the rim chord's
+    // height at the end station and its slope along the end heading. The DEM plane there is the hump's wall.
+    std::optional<RoadJunctionPlane> overpass_end_plane(std::int64_t way_id, RoadStretch stretch, const RoadReferenceLine& reference,
+        bool at_start, RoadUnderpassStats* stats = nullptr) const;
     // spans() then mask(): what build_road_profile and the completion tier call.
     void mask_samples(std::int64_t way_id, RoadStretch stretch, const RoadReferenceLine& reference, std::vector<VerticalSample>& samples) const;
 private:
@@ -159,13 +165,16 @@ private:
     // the D55/D61 sense (ways `upper_a` and `upper_b` themselves skipped), appended to `out` with station 0;
     // `candidates` is scratch.
     void crossings_of(geom::PointMm a, geom::PointMm b, std::int64_t a_id, std::int64_t b_id, std::int64_t upper_a, std::int64_t upper_b,
-        int upper_layer, std::vector<Seg>& candidates, std::vector<Crossing>& out, RoadUnderpassStats& stats) const;
+        int upper_layer, std::vector<Seg>& candidates, std::vector<Crossing>& out, RoadUnderpassStats& stats, bool over = false) const;
     // Steps 3-5 of D55 for one crossing over a window h(k), k = -W..W, at stations centre + k (the crossing at offset
     // t = x.station - centre; t = 0 for a stretch's own crossings, so the D55 arithmetic is unchanged); `upper_width_mm`
     // and (ux, uy) the upper way's width and direction at the crossing. Nullopt when declined (the counter is bumped);
     // the end-clearance check is the caller's.
     std::optional<RoadUnderpassSpanFit> fit_crossing(const Crossing& x, double centre, const std::vector<std::int32_t>& h,
         std::int32_t upper_width_mm, double ux, double uy, RoadUnderpassStats& stats) const;
+    // D64: the hump spans (covered = true, mask only) of a ground stretch under upper bridges, clipped to the stretch.
+    std::vector<RoadUnderpassSpanFit> overpass_spans(std::int64_t way_id, RoadStretch stretch, const RoadReferenceLine& reference,
+        RoadUnderpassStats& stats) const;
     static std::vector<RoadUnderpassSpanFit> merge(std::vector<RoadUnderpassSpanFit> fits, RoadUnderpassStats& stats);
     const RoadGraph& graph_;
     const RoadGraph& context_;
