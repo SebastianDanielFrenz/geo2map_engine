@@ -850,8 +850,8 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
                 double wall = 1.0;   // D59: fades the blend to the terrain over kUnderpassWallFadeM past a deck end plane
                 if (m.options.underpass_steep_walls) {
                     double past = 0.0;
-                    for (const Station::DeckPlane* q : {&a.deck_lo, &a.deck_hi})
-                        if (q->on) past = std::max(past, (x - q->x) * q->nx + (y - q->y) * q->ny);
+                    for (const Station::DeckPlane* plane : {&a.deck_lo, &a.deck_hi})
+                        if (plane->on) past = std::max(past, (x - plane->x) * plane->nx + (y - plane->y) * plane->ny);
                     if (past >= kUnderpassWallFadeM) continue;
                     if (past > 0.0) wall = 1.0 - road_smooth_step(past / kUnderpassWallFadeM);
                 }
