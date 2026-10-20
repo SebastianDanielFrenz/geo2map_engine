@@ -16,3 +16,7 @@ endif()
 # G3 geometry diagnostics over an existing immutable source store.
 add_executable(g2m_road_probe ../../tools/road_probe/main.cpp)
 target_link_libraries(g2m_road_probe PRIVATE g2m_server g2m_warnings g2m_options)
+
+# Railways R1/R2 census over an existing immutable source store (docs/formats/rail_geom.md).
+add_executable(g2m_rail_census ../../tools/rail_census/main.cpp)
+target_link_libraries(g2m_rail_census PRIVATE g2m_server g2m_warnings g2m_options)

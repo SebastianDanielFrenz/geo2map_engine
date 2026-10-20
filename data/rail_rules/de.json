@@ -1,0 +1,20 @@
+{
+  "format": "g2m.rail_rules/1",
+  "country": "DE",
+  "source": "Class list and defaults: OSM Key:railway and Key:gauge (standard gauge 1435 mm; Germany: EBO). Grade limits: EBO 1990 par. 7 / DB Ril 800.0110 (main lines 12.5 permille normal, 40 permille maximum on new lines, steeper on old lines), light rail and tram steeper by design practice [AS]. Piece, smoothing and chain numbers are [AS] engineering choices, tuned on the Rhein-Main census (docs/formats/rail_geom.md).",
+  "classes": [
+    { "railway": "rail",       "id": 0, "enabled": true,  "gauge_mm": 1435, "tracks": 1, "max_grade_permille": 40 },
+    { "railway": "light_rail", "id": 1, "enabled": true,  "gauge_mm": 1435, "tracks": 1, "max_grade_permille": 60 },
+    { "railway": "subway",     "id": 2, "enabled": true,  "gauge_mm": 1435, "tracks": 1, "max_grade_permille": 60 },
+    { "railway": "tram",       "id": 3, "enabled": false, "gauge_mm": 1435, "tracks": 1, "max_grade_permille": 80 }
+  ],
+  "construction": { "enabled": true },
+  "piece": { "max_length_m": 512, "ground_spacing_m": 20, "smoothing_m": 40, "max_points": 1024 },
+  "structure": {
+    "chain_walk_budget_m": 3000,
+    "chain_max_ways": 16,
+    "bridge_not": ["no"],
+    "tunnel_not": ["no", "culvert"]
+  },
+  "dependency_margin_m": 4
+}

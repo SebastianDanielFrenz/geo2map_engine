@@ -6,6 +6,7 @@
 #pragma once
 
 #include "g2m/layer/derive_terrain.h"
+#include "g2m/layer/rail_geom_tile.h"
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/terrain_carve.h"
@@ -33,17 +34,20 @@ struct BuiltinTerrainDerivers {
     // Street fidelity P2 slice 10 (terrain migration phase 6, G-5): g2m.terrain.class (reads elev.base, roads.geom and
     // src.landcover; coverage follows elev.base).
     TerrainClassDeriver classes;
+    // Railways R1/R2: g2m.rail.geom (reads src.osm and elev.base; coverage follows src.osm). Independent of the road layers.
+    RailGeomDeriver rail;
     // Explicit opt-in preserves existing terrain-only release identities. The carved layer implies both road layers
     // (one release, one geometry: design 6.1); the class layer implies the carved layer too (its ownership is the
     // carve's), while a carved-only release keeps its slice-9 identity (D49).
     std::vector<const IDeriver*> ordered(bool include_roads = false, bool include_geometry = false, bool include_carved = false,
-                                         bool include_classes = false) const {
+                                         bool include_classes = false, bool include_rail = false) const {
         include_carved = include_carved || include_classes;
         std::vector<const IDeriver*> result{&elev, &height};
         if (include_roads || include_geometry || include_carved) result.push_back(&roads);
         if (include_geometry || include_carved) result.push_back(&geometry);
         if (include_carved) result.push_back(&carved);
         if (include_classes) result.push_back(&classes);
+        if (include_rail) result.push_back(&rail);
         return result;
     }
 };
@@ -55,6 +59,6 @@ struct BuiltinTerrainDerivers {
 // calling make_local_release() if the caller needs otherwise.
 LocalReleaseParams builtin_local_release_params(std::string scope, const BuiltinTerrainDerivers& derivers,
                                                 std::vector<ReleaseSource> sources, bool include_roads = false, bool include_geometry = false,
-                                                bool include_carved = false, bool include_classes = false);
+                                                bool include_carved = false, bool include_classes = false, bool include_rail = false);
 
 } // namespace g2m
