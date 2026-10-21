@@ -106,7 +106,7 @@ Result<std::optional<RoadGraphTile>> serve(const std::map<TileKey, TileBody>& ti
 
 } // namespace
 
-TEST_CASE("A region from encoding-6 tiles routes like the whole OSM extract, via-node and via-way rules", "[route][region][restriction][real-data]") {
+TEST_CASE("A region from encoding-6 tiles routes like the whole OSM extract, via-node and via-way rules", "[route][region][restriction][real-data][long]") {
     for (const char* name : {"frankfurt_hoechst", "hoechst_a66"}) {
         const auto data = g2m_test::read_route_fixture(name);
         const auto world = build_road_graph(data, g2m_test::kZone32N);

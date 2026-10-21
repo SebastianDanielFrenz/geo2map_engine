@@ -290,7 +290,7 @@ TEST_CASE("carve T12 sabotage: blending toward the raw DEM steps at the blend ed
     CHECK(j.blend_terrain > 0.005);
 }
 
-TEST_CASE("carve T12: continuity on every busy fixture tile, flat and tilted DEM (G3-D)", "[layer][carve]") {
+TEST_CASE("carve T12: continuity on every busy fixture tile, flat and tilted DEM (G3-D)", "[layer][carve][long]") {
     for (const auto& ft : kBusy)
         for (int tilted = 0; tilted < 2; ++tilted) {
             auto& fx = fixture(ft.file, tilted != 0);
@@ -395,7 +395,7 @@ SlopeStats cross_slopes(const CarveModel& model, const HeightTile& tile) {
 } // namespace
 
 
-TEST_CASE("carve T13: least-squares crossfall over >= 3 m of carriageway equals crown_per_mille within 0.2 %", "[layer][carve]") {
+TEST_CASE("carve T13: least-squares crossfall over >= 3 m of carriageway equals crown_per_mille within 0.2 %", "[layer][carve][long]") {
     std::vector<double> all; double single = 0; std::size_t skipped = 0;
     for (const auto& ft : kBusy)
         for (int tilted = 0; tilted < 2; ++tilted) {
@@ -422,7 +422,7 @@ TEST_CASE("carve T13: least-squares crossfall over >= 3 m of carriageway equals 
 
 // ---- T14 ownership ----
 
-TEST_CASE("carve T14: ownership is independent of the candidate order (100 shuffles); first-come differs", "[layer][carve]") {
+TEST_CASE("carve T14: ownership is independent of the candidate order (100 shuffles); first-come differs", "[layer][carve][long]") {
     auto& fx = fixture(kA66, true);
     const TileKey key = l0(1822, 21685);
     const auto base = fx.model(key);
@@ -594,7 +594,7 @@ double seam_difference(const CarveModel& a, const CarveModel& b, const TileKey& 
 }
 } // namespace
 
-TEST_CASE("carve: tile invariance across level-0 and level-2 seams, with negative controls", "[layer][carve]") {
+TEST_CASE("carve: tile invariance across level-0 and level-2 seams, with negative controls", "[layer][carve][long]") {
     struct Seam { const char* file; TileKey a, b; bool crosses_l2; };
     const Seam seams[] = {{kA66, l0(1819, 21684), l0(1820, 21684), true}, {kA66, l0(1822, 21685), l0(1822, 21686), false},
                           {kFfm, l0(1855, 21718), l0(1856, 21718), true}};
@@ -628,7 +628,7 @@ TEST_CASE("carve: tile invariance across level-0 and level-2 seams, with negativ
 
 // ---- grade limits (G3-D) ----
 
-TEST_CASE("carve: junction gradients and blend slopes of the busy tiles (G3-D)", "[layer][carve]") {
+TEST_CASE("carve: junction gradients and blend slopes of the busy tiles (G3-D)", "[layer][carve][long]") {
     double worst_excess = -1e9, worst_ratio = 0, max_grad = 0; std::size_t junctions = 0, steep = 0, stations = 0, over_bound = 0;
     char worst_where[256] = {};
     for (const auto& ft : kBusy)

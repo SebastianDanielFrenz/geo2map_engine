@@ -381,7 +381,7 @@ TEST_CASE("Lattice drape: ribbons never sit below the terrain surface by more th
     if (!jmesh.indices.empty()) CHECK(worst_buried(jmesh, ox, oy) <= 0.010);
 }
 
-TEST_CASE("Lattice drape: separated decks stay untouched by the drape", "[world][road_ribbons][ribbon_drape]") {
+TEST_CASE("Lattice drape: separated decks stay untouched by the drape", "[world][road_ribbons][ribbon_drape][long]") {
     // The overpass scene has a deck (bridge); the drape must not change the deck set and must not pull ribbon triangles of the
     // deck stretch onto the terrain: those are not in the ribbon mesh at all (they are carried by the deck).
     for (const char* name : {"overpass.h10.sep", "overpass.h25.sep"}) {

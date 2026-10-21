@@ -52,7 +52,7 @@ g2m::world::RoadSeparation separation_of(const g2m_mesh_test::MeshCase& c) {
 // The 55 pinned cases are the game's point-sampled drape (racing_game a8a1b13); the lattice drape (G2M-025) has its own tests.
 static g2m::world::RoadRibbonOptions point_sampled() { g2m::world::RoadRibbonOptions o; o.drape = g2m::world::RibbonDrape::PointSampled; return o; }
 
-TEST_CASE("Structure decks and road ribbons match the recorded fixture meshes", "[world][road_structures][road_ribbons]") {
+TEST_CASE("Structure decks and road ribbons match the recorded fixture meshes", "[world][road_structures][road_ribbons][long]") {
     const auto& all = cases();
     REQUIRE(all.size() == std::size(kPins));
     int bridges = 0, inferred = 0, separated_extra = 0;
@@ -87,7 +87,7 @@ TEST_CASE("Structure decks and road ribbons match the recorded fixture meshes", 
     CHECK(separated_extra > 0);
 }
 
-TEST_CASE("Approach decks follow the full served road footprints", "[world][road_structures]") {
+TEST_CASE("Approach decks follow the full served road footprints", "[world][road_structures][long]") {
     const auto find = [](const std::string& name) -> const g2m_mesh_test::MeshCase& {
         for (const auto& c : cases()) if (c.name == name) return c;
         throw std::runtime_error(name);
@@ -113,7 +113,7 @@ TEST_CASE("Approach decks follow the full served road footprints", "[world][road
     for(const auto& d:long_span)if(d->inferred)CHECK(d->end_station-d->start_station<=10.0);
 }
 
-TEST_CASE("Structure decks: crowned heights along the deck, nothing past its ends", "[world][road_structures]") {
+TEST_CASE("Structure decks: crowned heights along the deck, nothing past its ends", "[world][road_structures][long]") {
     const auto& c = cases().front();
     REQUIRE(c.name == "structure_scene");
     const auto set = g2m::world::build_structure_set(c.tile);

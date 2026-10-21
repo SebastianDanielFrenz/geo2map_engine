@@ -638,7 +638,7 @@ std::string outcome_key(const RoadGeomEntry& e, const RoadProfileOrigin& o) {
 }
 }
 
-TEST_CASE("completion: fixtures, completed stretches by kind before and after, tile invariance and bridge-node heights", "[layer][roads][completion][fixtures][invariance]") {
+TEST_CASE("completion: fixtures, completed stretches by kind before and after, tile invariance and bridge-node heights", "[layer][roads][completion][fixtures][invariance][long]") {
     struct Mode { const char* name; Fn dem; };
     const Mode modes[] = {{"flat DEM", Fn{}}, {"tilted bumpy DEM", Fn(tilted_fixture_dem)}};
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
@@ -747,7 +747,7 @@ TEST_CASE("strict pass: the far-end read of a bridge anchor is tile-invariant wi
     }
 }
 
-TEST_CASE("completion: fixtures against a world reference (whole world as context, a DEM without holes); strict far-end reads tile-invariant (D32, D35)", "[layer][roads][completion][fixtures][invariance]") {
+TEST_CASE("completion: fixtures against a world reference (whole world as context, a DEM without holes); strict far-end reads tile-invariant (D32, D35)", "[layer][roads][completion][fixtures][invariance][long]") {
     // Every entry of every tile is compared with the same tile built from the WHOLE world graph as its context and a DEM
     // covering the whole world: the reads a tile cannot have are then all available. This covers every entry (not only the
     // ones two tiles both hold) and reads up to the bounds. P1's latent far-end dependence (surface_anchor reads
@@ -1136,7 +1136,7 @@ TEST_CASE("bridge anchors: a ground stretch next to a secant-fallback span takes
     CHECK(worst <= 1e-3);
 }
 
-TEST_CASE("completion: fixture tiles derive the same bytes on 1 and 4 threads; game-only completions per fixture (roadcmp, D47)", "[layer][roads][completion][fixtures][D47]") {
+TEST_CASE("completion: fixture tiles derive the same bytes on 1 and 4 threads; game-only completions per fixture (roadcmp, D47)", "[layer][roads][completion][fixtures][D47][long]") {
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + pbf);
         const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
@@ -1189,7 +1189,7 @@ TEST_CASE("completion: fixture tiles derive the same bytes on 1 and 4 threads; g
     }
 }
 
-TEST_CASE("completion: release cost of the 200 m walk on the fixtures (D48)", "[layer][roads][completion][D48][cost]") {
+TEST_CASE("completion: release cost of the 200 m walk on the fixtures (D48)", "[layer][roads][completion][D48][cost][long]") {
     // The deriver's input set and the tier's outcome per fixture tile, pre-D48 (no walk squares, 60 m) against D48. A
     // measurement: only the outcome direction is checked (the longer walk never loses a completed bridge).
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
@@ -1224,7 +1224,7 @@ TEST_CASE("completion: release cost of the 200 m walk on the fixtures (D48)", "[
     }
 }
 
-TEST_CASE("tunnel floors: the straight-grade ruling on the fixture tunnels (measurement, owner ruling 2026-10-15)", "[layer][roads][completion][tunnel][fixtures]") {
+TEST_CASE("tunnel floors: the straight-grade ruling on the fixture tunnels (measurement, owner ruling 2026-10-15)", "[layer][roads][completion][tunnel][fixtures][long]") {
     // Every tunnel stretch of both fixtures on the tilted bumpy DEM, the release before the ruling (DEM floor for every
     // length) against the served tier. Also counts tunnel chains: tunnel stretches joined end to end at a node no other
     // road meets, whose own stretches are each judged by their own length.
