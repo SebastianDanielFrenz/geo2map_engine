@@ -12,6 +12,7 @@ add_executable(g2m_world_tests
   test_surface_id_table.cpp
   test_terrain_service.cpp
   test_road_meshes.cpp
+  test_bridge_visual.cpp
   test_road_arrows.cpp
   test_road_paint.cpp
   test_ribbon_drape.cpp

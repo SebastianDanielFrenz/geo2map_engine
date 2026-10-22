@@ -9,6 +9,7 @@
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/mesh/terrain_chunk.h"
+#include "g2m/world/bridge_visual.h"
 
 #include <cstdint>
 #include <memory>
@@ -35,6 +36,7 @@ struct RoadDeck {
     LandClass land_class = LandClass::PavedRoad;
     std::optional<RoadCrossSection> cross_section; // signed served bed and crown, shared by slab and ribbon
     mesh::TerrainChunkMesh mesh;
+    BridgeVisual appearance; // render-only, built on the structure worker; never installed in physics
 };
 
 // Grade separation between ground roads, set by the caller (the game: world config "road_separation"). Two roads whose

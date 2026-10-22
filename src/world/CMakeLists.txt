@@ -20,6 +20,7 @@ set(G2M_WORLD_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/job_scheduler.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/terrain_service.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_structures.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/bridge_visual.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_ribbons.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_paint.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/lattice_drape.cpp
