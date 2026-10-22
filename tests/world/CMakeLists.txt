@@ -16,6 +16,7 @@ add_executable(g2m_world_tests
   test_ribbon_drape.cpp
   test_merge_markings.cpp
   test_buildings.cpp
+  test_building_mesh.cpp
   test_view_streamer.cpp
   test_ring_streamer.cpp
 )

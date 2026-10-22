@@ -347,3 +347,33 @@ runtime by any shipped `g2m` binary - fixtures and fuzz seeds only.
   `cut-worldcover` section for the exact georeferencing/tag handling) and
   `testdata/fuzz_seeds/tiff/worldcover_crop_64x64_u8.tif` (a further 64x64
   crop of the first fixture, re-encoded uncompressed).
+
+## BeamNG.Earth procedural terrain feature algorithms
+
+Reference: https://github.com/TecnaGamer/BeamNG.Earth
+Snapshot: 606ba0fb966529659d07a3120c31c01c0fc3df92.
+`src/world/building_mesh.cpp`: adapted roof/facade concepts from
+`server/buildings.py`, reimplemented for g2m's deterministic geometry and materials.
+No BeamNG.drive stock textures, materials, models or native binaries are included.
+
+MIT License
+
+Copyright (c) 2026 TecnaGamer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

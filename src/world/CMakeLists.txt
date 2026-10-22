@@ -23,6 +23,7 @@ set(G2M_WORLD_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/road_ribbons.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/lattice_drape.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/buildings.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/building_mesh.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/view_streamer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ring_streamer.cpp
   CACHE INTERNAL "g2m_world sources"
