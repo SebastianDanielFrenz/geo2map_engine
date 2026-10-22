@@ -46,6 +46,25 @@ TEST_CASE("terrain port geometry has cross-platform golden hashes",
       building.f(x);
     building.add(static_cast<std::uint32_t>(v.material));
   }
+  house.outers = {{{450000, 5500000},
+                   {450012, 5500000},
+                   {450012, 5500004},
+                   {450006, 5500004},
+                   {450006, 5500008},
+                   {450000, 5500008}}};
+  house.inners = {{{450001, 5500001},
+                   {450003, 5500001},
+                   {450003, 5500003},
+                   {450001, 5500003}}};
+  const auto complex = build_building_mesh(house, options);
+  for (const auto &v : complex.vertices) {
+    for (const auto &f : {v.position, v.normal, v.colour})
+      for (auto x : f)
+        building.f(x);
+    for (auto x : v.uv)
+      building.f(x);
+    building.add(static_cast<std::uint32_t>(v.material));
+  }
   RoadRibbonTile road;
   road.vertices = {{-4, 0, 100, -4, 0, 8, 1, 2, 1, 3, 0},
                    {4, 0, 100, 4, 0, 8, 1, 2, 1, 3, 0},
@@ -98,5 +117,6 @@ TEST_CASE("terrain port geometry has cross-platform golden hashes",
   hashes << std::hex << building.hash << " " << marking.hash << " "
          << bridge.hash << " " << dsm.hash;
   CHECK(hashes.str() ==
-        "d61f99178f5b8990 67907b18c44ae827 922b58ce77ec77ed fbd2872c5d41ffef");
+        "8f2d2286f48c4c7a 67907b18c44ae827 922b58ce77ec77ed fbd2872c5d41ffef");
 }
+

@@ -96,6 +96,33 @@ struct Builder {
       mesh.vertices.push_back(v);
     }
   }
+  void box(V origin, V dx, V dy, V dz, C tint, BuildingMaterial material) {
+    std::array<V, 8> points;
+    for (int i = 0; i < 8; ++i)
+      for (int axis = 0; axis < 3; ++axis)
+        points[static_cast<std::size_t>(i)][static_cast<std::size_t>(axis)] =
+            origin[static_cast<std::size_t>(axis)] +
+            ((i & 1) ? dx[static_cast<std::size_t>(axis)] : 0) +
+            ((i & 2) ? dy[static_cast<std::size_t>(axis)] : 0) +
+            ((i & 4) ? dz[static_cast<std::size_t>(axis)] : 0);
+    const auto n = cross(dx, dy);
+    const bool reverse = n[0] * dz[0] + n[1] * dz[1] + n[2] * dz[2] < 0;
+    constexpr int faces[6][4] = {{0, 2, 3, 1}, {4, 5, 7, 6}, {0, 1, 5, 4},
+                                 {2, 6, 7, 3}, {0, 4, 6, 2}, {1, 3, 7, 5}};
+    for (const auto &f : faces) {
+      const auto a = points[static_cast<std::size_t>(f[0])],
+                 b = points[static_cast<std::size_t>(f[1])],
+                 c = points[static_cast<std::size_t>(f[2])],
+                 d = points[static_cast<std::size_t>(f[3])];
+      if (reverse) {
+        tri(a, d, c, tint, material);
+        tri(a, c, b, tint, material);
+      } else {
+        tri(a, b, c, tint, material);
+        tri(a, c, d, tint, material);
+      }
+    }
+  }
   void quad(V a, V b, V c, V d, C tint, BuildingMaterial material) {
     tri(a, b, c, tint, material);
     tri(a, c, d, tint, material);
@@ -436,6 +463,29 @@ BuildingMesh build_building_mesh(const Building &b,
               return {a.e + dx / len * s + nx * off,
                       a.n + dy / len * s + ny * off, z};
             };
+            if (!inner && i == 0 && f == 0 && k == 0 &&
+                (b.type == "house" || b.type == "detached" ||
+                 b.type == "semidetached_house" || b.type == "terrace" ||
+                 b.type == "residential")) {
+              const double center = (s0 + s1) * .5,
+                           half = std::min(.525, (s1 - s0) * .5),
+                           floor = b.base + b.min_height;
+              const double door_h = std::min(2.15, floor_h * .85);
+              const auto vec = [&](double width) {
+                return V{dx / len * width, dy / len * width, 0};
+              };
+              m.box(at(center - half - .07, floor, .015), vec(2 * half + .14),
+                    {nx * .075, ny * .075, 0}, {0, 0, door_h + .08},
+                    {.34f, .32f, .28f}, BuildingMaterial::Frame);
+              m.box(at(center - half, floor + .025, .08), vec(2 * half),
+                    {nx * .035, ny * .035, 0}, {0, 0, door_h - .025},
+                    {.30f, .23f, .16f}, BuildingMaterial::Frame);
+              m.box(at(center + half * .65, floor + 1.0, .115), vec(.09),
+                    {nx * .05, ny * .05, 0}, {0, 0, .035}, {.65f, .65f, .63f},
+                    BuildingMaterial::Frame);
+              ++m.mesh.doors;
+              continue;
+            }
             m.quad(at(s0 - .06, z0 - .06, .012), at(s1 + .06, z0 - .06, .012),
                    at(s1 + .06, z1 + .06, .012), at(s0 - .06, z1 + .06, .012),
                    {.27f, .26f, .24f}, BuildingMaterial::Frame);
@@ -480,6 +530,55 @@ BuildingMesh build_building_mesh(const Building &b,
     }
     return std::move(m.mesh);
   }
+  const auto add_chimney = [&]() {
+    if (!options.facade_detail || seed % 3 == 0 ||
+        (b.type != "house" && b.type != "detached" &&
+         b.type != "semidetached_house" && b.type != "terrace" &&
+         b.type != "residential"))
+      return;
+    const double u = -box.hl * .25, v = box.hw * .65;
+    const V center{box.e + box.ux * u - box.uy * v,
+                   box.n + box.uy * u + box.ux * v, 0};
+    const auto inside = [](const auto &ring, double x, double y) {
+      bool value = false;
+      for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++) {
+        const auto a = ring[i], c = ring[j];
+        if ((a.n > y) != (c.n > y) &&
+            x < (c.e - a.e) * (y - a.n) / (c.n - a.n) + a.e)
+          value = !value;
+      }
+      return value;
+    };
+    bool support = false;
+    for (const auto &ring : b.outers)
+      support = support || inside(ring, center[0], center[1]);
+    for (const auto &ring : b.inners)
+      if (inside(ring, center[0], center[1]))
+        support = false;
+    if (!support)
+      return;
+    double z = top - rise * std::abs(v) / box.hw;
+    if (form == RoofForm::Hipped)
+      z = std::min(z, eave + rise * (box.hl - std::abs(u)) / box.hw);
+    if (form == RoofForm::Pyramidal)
+      z = std::min(z, top - rise * std::abs(u) / box.hl);
+    if (form == RoofForm::Skillion)
+      z = eave + rise * (v + box.hw) / (2 * box.hw);
+    const double upper = std::min(top - .05, z + .95),
+                 half = std::min(.25, box.hw * .2);
+    if (upper - z < .25)
+      return;
+    const V base{center[0] - box.ux * half + box.uy * half,
+                 center[1] - box.uy * half - box.ux * half, z - .15};
+    m.box(base, {box.ux * half * 2, box.uy * half * 2, 0},
+          {-box.uy * half * 2, box.ux * half * 2, 0}, {0, 0, upper - z + .15},
+          {1, 1, 1}, BuildingMaterial::Brick);
+    m.box({base[0], base[1], upper}, {box.ux * half * 2, box.uy * half * 2, 0},
+          {-box.uy * half * 2, box.ux * half * 2, 0}, {0, 0, .04},
+          {.55f, .54f, .52f}, BuildingMaterial::Frame);
+    ++m.mesh.chimneys;
+  };
+  add_chimney();
   if (!rectangular) {
     clipped_roof(m, b, box, form, eave, rise, roof, wall);
     for (auto &v : m.mesh.vertices) {

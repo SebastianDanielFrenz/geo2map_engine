@@ -46,11 +46,11 @@ struct BuildingMesh {
   bool inferred_roof = false;
   bool unsupported_roof =
       false; // mapped shape/orientation/footprint not representable
-  std::uint32_t windows = 0;
+  std::uint32_t windows = 0, doors = 0, chimneys = 0;
 };
 // Pure render geometry, never collision. Total mapped height is an upper bound,
-// not eave height. Courtyards remain open. Complex footprints use an exact flat
-// roof rather than a bounding-box roof spanning outside the mapped building.
+// not eave height. Courtyards remain open. Pitched roof planes are clipped to
+// complex footprints; mapped unsupported shapes remain explicit flat fallbacks.
 BuildingMesh build_building_mesh(const Building &,
                                  const BuildingMeshOptions & = {});
 } // namespace g2m::world

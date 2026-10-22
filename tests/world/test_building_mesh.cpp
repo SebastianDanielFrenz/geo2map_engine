@@ -234,3 +234,28 @@ TEST_CASE("building faces have non-degenerate metric UVs and mapped material "
   CHECK(slate);
   CHECK(projecting_sill);
 }
+
+TEST_CASE("residential buildings include volumetric doors and supported "
+          "chimney models",
+          "[world][building_mesh]") {
+  auto b = house();
+  b.roof_shape = "gabled";
+  const auto full = build_building_mesh(b, opts());
+  CHECK(full.doors == 1);
+  CHECK(full.windows > 0);
+  auto lite = opts();
+  lite.facade_detail = false;
+  const auto far = build_building_mesh(b, lite);
+  CHECK(far.doors == 0);
+  CHECK(far.chimneys == 0);
+  CHECK(far.windows == 0);
+  bool chimney = false;
+  for (int id = 1; id <= 5; ++id) {
+    b.id = id;
+    const auto m = build_building_mesh(b, opts());
+    chimney = chimney || m.chimneys > 0;
+    for (const auto &v : m.vertices)
+      CHECK(v.position[2] <= 109.0001);
+  }
+  CHECK(chimney);
+}
