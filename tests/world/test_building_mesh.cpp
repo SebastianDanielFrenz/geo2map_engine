@@ -124,8 +124,8 @@ TEST_CASE("courtyards and concave roofs are not replaced by bounding boxes",
                {450008, 5500006},
                {450004, 5500006}}};
   const auto m = build_building_mesh(b, opts());
-  CHECK(m.roof == RoofForm::Flat);
-  CHECK(m.unsupported_roof);
+  CHECK(m.roof == RoofForm::Gabled);
+  CHECK_FALSE(m.unsupported_roof);
   CHECK(std::abs(roof_area(m) - 80) < 1e-4);
   b.inners.clear();
   b.outers = {{{450000, 5500000},
@@ -135,7 +135,7 @@ TEST_CASE("courtyards and concave roofs are not replaced by bounding boxes",
                {450006, 5500008},
                {450000, 5500008}}};
   const auto c = build_building_mesh(b, opts());
-  CHECK(c.roof == RoofForm::Flat);
+  CHECK(c.roof == RoofForm::Gabled);
   CHECK(std::abs(roof_area(c) - 72) < 1e-4);
 }
 TEST_CASE(

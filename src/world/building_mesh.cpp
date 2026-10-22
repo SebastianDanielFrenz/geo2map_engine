@@ -114,12 +114,13 @@ double area(const std::vector<BuildingPoint> &ring) {
 struct Box {
   double e = 0, n = 0, ux = 0, uy = 0, hl = 0, hw = 0;
 };
-bool rectangle(const Building &b, Box &box) {
-  if (b.outers.size() != 1 || !b.inners.empty() || b.outers[0].size() != 4)
+bool rectangle(const Building &b, Box &box, bool require_rectangle = true) {
+  if (b.outers.size() != 1 ||
+      (require_rectangle && (!b.inners.empty() || b.outers[0].size() != 4)))
     return false;
   const auto &r = b.outers[0];
   double longest = 0;
-  for (std::size_t i = 0; i < 4; ++i) {
+  for (std::size_t i = 0; i < r.size(); ++i) {
     const auto a = r[i], c = r[(i + 1) % 4];
     const double x = c.e - a.e, y = c.n - a.n, l = x * x + y * y;
     if (l > longest) {
@@ -154,6 +155,8 @@ bool rectangle(const Building &b, Box &box) {
     return false;
   box.e = p0.e + box.ux * (a0 + a1) * .5 - box.uy * (b0 + b1) * .5;
   box.n = p0.n + box.uy * (a0 + a1) * .5 + box.ux * (b0 + b1) * .5;
+  if (!require_rectangle)
+    return true;
   for (auto p : r) {
     const double x = p.e - box.e, y = p.n - box.n, u = x * box.ux + y * box.uy,
                  v = -x * box.uy + y * box.ux;
@@ -163,7 +166,8 @@ bool rectangle(const Building &b, Box &box) {
   }
   return true;
 }
-void flat_roof(Builder &m, const Building &b, double z, C tint) {
+void flat_roof(Builder &m, const Building &b, double z, C tint,
+               const std::function<void(V, V, V)> &emit = {}) {
   // Even/odd scan slabs cover concave rings and courtyard holes without an
   // unconstrained triangulation. Same exact contours as the footprint walls.
   std::vector<double> ys;
@@ -196,11 +200,118 @@ void flat_roof(Builder &m, const Building &b, double z, C tint) {
               [](const auto &a, const auto &c) { return a.mid < c.mid; });
     for (std::size_t i = 1; i < edges.size(); i += 2) {
       auto a = edges[i - 1], c = edges[i];
-      m.quad({a.lo, lo, z}, {c.lo, lo, z}, {c.hi, hi, z}, {a.hi, hi, z}, tint,
-             BuildingMaterial::Roof);
+      if (emit) {
+        emit({a.lo, lo, z}, {c.lo, lo, z}, {c.hi, hi, z});
+        emit({a.lo, lo, z}, {c.hi, hi, z}, {a.hi, hi, z});
+      } else
+        m.quad({a.lo, lo, z}, {c.lo, lo, z}, {c.hi, hi, z}, {a.hi, hi, z}, tint,
+               BuildingMaterial::Roof);
     }
   }
 }
+struct RoofPlane {
+  double u, v, z;
+};
+void clipped_roof(Builder &m, const Building &building, const Box &box,
+                  RoofForm form, double eave, double rise, C roof, C wall) {
+  const double top = eave + rise;
+  std::vector<RoofPlane> planes;
+  if (form == RoofForm::Skillion)
+    planes = {{0, rise / (2 * box.hw), eave + rise * .5}};
+  else {
+    planes = {{0, rise / box.hw, top}, {0, -rise / box.hw, top}};
+    if (form == RoofForm::Hipped) {
+      planes.push_back({rise / box.hw, 0, eave + rise * box.hl / box.hw});
+      planes.push_back({-rise / box.hw, 0, eave + rise * box.hl / box.hw});
+    }
+    if (form == RoofForm::Pyramidal) {
+      planes.push_back({rise / box.hl, 0, top});
+      planes.push_back({-rise / box.hl, 0, top});
+    }
+  }
+  const auto height = [&](const RoofPlane &p, V a) {
+    const double x = a[0] - box.e, y = a[1] - box.n;
+    return p.z + p.u * (x * box.ux + y * box.uy) +
+           p.v * (-x * box.uy + y * box.ux);
+  };
+  const auto minimum = [&](V a) {
+    double h = 1e30;
+    for (const auto &p : planes)
+      h = std::min(h, height(p, a));
+    return h;
+  };
+  const auto emit = [&](V a, V b, V c) {
+    for (std::size_t plane = 0; plane < planes.size(); ++plane) {
+      std::vector<V> polygon{a, b, c};
+      for (std::size_t other = 0; other < planes.size() && !polygon.empty();
+           ++other) {
+        if (other == plane)
+          continue;
+        std::vector<V> output;
+        auto prev = polygon.back();
+        double dp = height(planes[other], prev) - height(planes[plane], prev);
+        for (auto next : polygon) {
+          const double dn =
+              height(planes[other], next) - height(planes[plane], next);
+          if ((dp >= 0) != (dn >= 0)) {
+            const double t = dp / (dp - dn);
+            output.push_back({prev[0] + (next[0] - prev[0]) * t,
+                              prev[1] + (next[1] - prev[1]) * t, 0});
+          }
+          if (dn >= 0)
+            output.push_back(next);
+          prev = next;
+          dp = dn;
+        }
+        polygon = std::move(output);
+      }
+      for (std::size_t i = 2; i < polygon.size(); ++i) {
+        auto p = polygon[0], q = polygon[i - 1], r = polygon[i];
+        p[2] = height(planes[plane], p);
+        q[2] = height(planes[plane], q);
+        r[2] = height(planes[plane], r);
+        m.tri(p, q, r, roof, BuildingMaterial::Roof);
+      }
+    }
+  };
+  // Start with the exact footprint triangulation (including holes), then split
+  // at every roof-plane crease. No bounding-box triangle spans a courtyard.
+  flat_roof(m, building, 0, roof, emit);
+  for (const auto *rings : {&building.outers, &building.inners})
+    for (const auto &ring : *rings) {
+      const bool reverse = (area(ring) < 0) != (rings == &building.inners);
+      for (std::size_t i = 0; i < ring.size(); ++i) {
+        auto a = ring[i], b = ring[(i + 1) % ring.size()];
+        if (reverse)
+          std::swap(a, b);
+        const V first{a.e, a.n, eave}, last{b.e, b.n, eave};
+        std::vector<double> cuts{0, 1};
+        for (std::size_t j = 0; j < planes.size(); ++j)
+          for (std::size_t k = j + 1; k < planes.size(); ++k) {
+            const double p = height(planes[j], first) -
+                             height(planes[k], first),
+                         q = height(planes[j], last) - height(planes[k], last);
+            if ((p > 0) != (q > 0)) {
+              const double t = p / (p - q);
+              if (t > 0 && t < 1)
+                cuts.push_back(t);
+            }
+          }
+        std::sort(cuts.begin(), cuts.end());
+        cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+        for (std::size_t j = 1; j < cuts.size(); ++j) {
+          const auto at = [&](double t) {
+            return V{a.e + (b.e - a.e) * t, a.n + (b.n - a.n) * t, eave};
+          };
+          auto p = at(cuts[j - 1]), q = at(cuts[j]), r = q, s = p;
+          r[2] = minimum(r);
+          s[2] = minimum(s);
+          m.quad(p, q, r, s, wall, BuildingMaterial::Wall);
+        }
+      }
+    }
+}
+
 } // namespace
 
 BuildingMesh build_building_mesh(const Building &b,
@@ -237,6 +348,7 @@ BuildingMesh build_building_mesh(const Building &b,
   const double top = b.base + b.height;
   Box box;
   const bool rectangular = rectangle(b, box);
+  const bool valid_box = rectangular || rectangle(b, box, false);
   RoofForm form = RoofForm::Flat;
   if (b.roof_shape == "gabled")
     form = RoofForm::Gabled;
@@ -251,17 +363,18 @@ BuildingMesh build_building_mesh(const Building &b,
   else if (b.roof_shape.empty() && options.infer_residential_roofs &&
            b.height <= 18 &&
            (b.type == "house" || b.type == "detached" ||
-            b.type == "semidetached_house" || b.type == "terrace")) {
+            b.type == "semidetached_house" || b.type == "terrace" ||
+            b.type == "residential")) {
     form = seed % 4 == 0 ? RoofForm::Hipped : RoofForm::Gabled;
     m.mesh.inferred_roof = true;
   }
   // Arbitrary mapped ridge azimuths need polygon roof clipping, not an
   // approximate box. Preserve the tag and report the fallback explicitly.
-  if (form != RoofForm::Flat && (!rectangular || !b.roof_direction.empty())) {
+  if (form != RoofForm::Flat && (!valid_box || !b.roof_direction.empty())) {
     form = RoofForm::Flat;
     m.mesh.unsupported_roof = true;
   }
-  if (b.roof_orientation == "across" && rectangular) {
+  if (b.roof_orientation == "across" && valid_box) {
     std::swap(box.hl, box.hw);
     const auto u = box.ux;
     box.ux = -box.uy;
@@ -359,6 +472,21 @@ BuildingMesh build_building_mesh(const Building &b,
     for (auto &v : m.mesh.vertices) {
       if (v.material == BuildingMaterial::Roof) {
         v.material = BuildingMaterial::FlatRoof;
+        if (b.roof_colour.empty())
+          v.colour = {1, 1, 1};
+      }
+      if (v.material == BuildingMaterial::Wall && b.material == "brick")
+        v.material = BuildingMaterial::Brick;
+    }
+    return std::move(m.mesh);
+  }
+  if (!rectangular) {
+    clipped_roof(m, b, box, form, eave, rise, roof, wall);
+    for (auto &v : m.mesh.vertices) {
+      if (v.material == BuildingMaterial::Roof) {
+        if (b.roof_material == "slate" || b.roof_colour == "grey" ||
+            b.roof_colour == "gray" || b.roof_colour == "black")
+          v.material = BuildingMaterial::Slate;
         if (b.roof_colour.empty())
           v.colour = {1, 1, 1};
       }
