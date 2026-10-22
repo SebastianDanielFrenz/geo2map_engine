@@ -354,6 +354,8 @@ Reference: https://github.com/TecnaGamer/BeamNG.Earth
 Snapshot: 606ba0fb966529659d07a3120c31c01c0fc3df92.
 `src/world/building_mesh.cpp`: adapted roof/facade concepts from
 `server/buildings.py`, reimplemented for g2m's deterministic geometry and materials.
+Also adapted: `road_paint.cpp` (roads.py/roadmesh.py concepts),
+`bridge_visual.cpp` (bridgetypes.py) and `dsm_ground.cpp` (dsmground.py).
 No BeamNG.drive stock textures, materials, models or native binaries are included.
 
 MIT License

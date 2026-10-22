@@ -26,6 +26,7 @@ set(G2M_WORLD_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/lattice_drape.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/buildings.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/building_mesh.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dsm_ground.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/view_streamer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ring_streamer.cpp
   CACHE INTERNAL "g2m_world sources"
@@ -37,3 +38,4 @@ target_link_libraries(g2m_world
   PUBLIC  g2m_client g2m_mesh g2m_phys g2m_server
   PRIVATE g2m_warnings g2m_options Threads::Threads
 )
+

@@ -19,6 +19,7 @@ add_executable(g2m_world_tests
   test_merge_markings.cpp
   test_buildings.cpp
   test_building_mesh.cpp
+  test_dsm_ground.cpp
   test_view_streamer.cpp
   test_ring_streamer.cpp
 )
@@ -82,3 +83,4 @@ if(G2M_WORLD_VIEW_REFGEN_DIR)
   target_compile_definitions(g2m_world_view_refgen PRIVATE G2M_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
   target_link_libraries(g2m_world_view_refgen PRIVATE g2m_world g2m_layers g2m_decode g2m_headless_env g2m_options)
 endif()
+
