@@ -4,11 +4,14 @@
 // stable feature IDs and engine-neutral materials. No BeamNG asset dependency.
 #include "g2m/world/building_mesh.h"
 #include "g2m/core/det_math.h"
+#include "g2m/core/geo/angle.h"
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <optional>
 #include <string_view>
+#include <utility>
 
 namespace g2m::world {
 namespace {
@@ -141,6 +144,71 @@ double area(const std::vector<BuildingPoint> &ring) {
 struct Box {
   double e = 0, n = 0, ux = 0, uy = 0, hl = 0, hw = 0;
 };
+std::optional<double> roof_direction_degrees(std::string_view value) {
+  while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+    value.remove_prefix(1);
+  while (!value.empty() && (value.back() == ' ' || value.back() == '\t'))
+    value.remove_suffix(1);
+  if (value.empty())
+    return std::nullopt;
+  double degrees = 0;
+  const auto parsed = std::from_chars(value.data(), value.data() + value.size(),
+                                      degrees, std::chars_format::general);
+  if (parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() &&
+      std::isfinite(degrees) && degrees >= 0 && degrees <= 360)
+    return degrees == 360 ? 0 : degrees;
+  constexpr std::pair<std::string_view, double> compass[] = {
+      {"N", 0},   {"NNE", 22.5},  {"NE", 45},  {"ENE", 67.5},
+      {"E", 90},  {"ESE", 112.5}, {"SE", 135}, {"SSE", 157.5},
+      {"S", 180}, {"SSW", 202.5}, {"SW", 225}, {"WSW", 247.5},
+      {"W", 270}, {"WNW", 292.5}, {"NW", 315}, {"NNW", 337.5}};
+  for (const auto &[name, angle] : compass) {
+    if (value.size() != name.size())
+      continue;
+    bool equal = true;
+    for (std::size_t i = 0; i < value.size(); ++i) {
+      const char c = value[i] >= 'a' && value[i] <= 'z'
+                         ? static_cast<char>(value[i] - 'a' + 'A')
+                         : value[i];
+      equal = equal && c == name[i];
+    }
+    if (equal)
+      return angle;
+  }
+  return std::nullopt;
+}
+bool align_roof_direction(const Building &b, Box &box, double degrees,
+                          RoofForm form) {
+  double east = 0, north = 0;
+  g2m::geo::sincosd(degrees, east, north);
+  // A skillion's high edge is opposite the mapped downhill direction. For
+  // ridge-shaped roofs, either sign names the same pair of slope faces.
+  if (form == RoofForm::Skillion) {
+    east = -east;
+    north = -north;
+  }
+  const double ux = north, uy = -east;
+  double u0 = 1e300, u1 = -1e300, v0 = 1e300, v1 = -1e300;
+  for (const auto &ring : b.outers)
+    for (const auto p : ring) {
+      const double u = p.e * ux + p.n * uy;
+      const double v = -p.e * uy + p.n * ux;
+      u0 = std::min(u0, u);
+      u1 = std::max(u1, u);
+      v0 = std::min(v0, v);
+      v1 = std::max(v1, v);
+    }
+  if (!(u1 - u0 >= 1 && v1 - v0 >= 1))
+    return false;
+  box.ux = ux;
+  box.uy = uy;
+  box.hl = (u1 - u0) * .5;
+  box.hw = (v1 - v0) * .5;
+  const double um = (u0 + u1) * .5, vm = (v0 + v1) * .5;
+  box.e = um * ux - vm * uy;
+  box.n = um * uy + vm * ux;
+  return true;
+}
 bool rectangle(const Building &b, Box &box, bool require_rectangle = true) {
   if (b.outers.size() != 1 ||
       (require_rectangle && (!b.inners.empty() || b.outers[0].size() != 4)))
@@ -240,7 +308,8 @@ struct RoofPlane {
   double u, v, z;
 };
 void clipped_roof(Builder &m, const Building &building, const Box &box,
-                  RoofForm form, double eave, double rise, C roof, C wall) {
+                  RoofForm form, double eave, double rise, C roof, C wall,
+                  bool mapped_direction) {
   const double top = eave + rise;
   std::vector<RoofPlane> planes;
   if (form == RoofForm::Skillion)
@@ -248,8 +317,16 @@ void clipped_roof(Builder &m, const Building &building, const Box &box,
   else {
     planes = {{0, rise / box.hw, top}, {0, -rise / box.hw, top}};
     if (form == RoofForm::Hipped) {
-      planes.push_back({rise / box.hw, 0, eave + rise * box.hl / box.hw});
-      planes.push_back({-rise / box.hw, 0, eave + rise * box.hl / box.hw});
+      if (mapped_direction && box.hl < box.hw) {
+        // With the mapped slope axis wider than the ridge axis, the hip ridge
+        // collapses to a peak. Use four planes meeting at the mapped total
+        // height instead of letting the short-axis planes cut the peak down.
+        planes.push_back({rise / box.hl, 0, top});
+        planes.push_back({-rise / box.hl, 0, top});
+      } else {
+        planes.push_back({rise / box.hw, 0, eave + rise * box.hl / box.hw});
+        planes.push_back({-rise / box.hw, 0, eave + rise * box.hl / box.hw});
+      }
     }
     if (form == RoofForm::Pyramidal) {
       planes.push_back({rise / box.hl, 0, top});
@@ -395,18 +472,28 @@ BuildingMesh build_building_mesh(const Building &b,
     form = seed % 4 == 0 ? RoofForm::Hipped : RoofForm::Gabled;
     m.mesh.inferred_roof = true;
   }
-  // Arbitrary mapped ridge azimuths need polygon roof clipping, not an
-  // approximate box. Preserve the tag and report the fallback explicitly.
-  if (form != RoofForm::Flat && (!valid_box || !b.roof_direction.empty())) {
+  const auto direction = roof_direction_degrees(b.roof_direction);
+  const bool has_direction = !b.roof_direction.empty();
+  // A mapped direction works for both box roofs and the clipped polygon path:
+  // align the local slope axis to the compass direction, then project the
+  // actual footprint to recover the envelope used by each roof form.
+  if (form != RoofForm::Flat && (!valid_box || (has_direction && !direction))) {
     form = RoofForm::Flat;
     m.mesh.unsupported_roof = true;
   }
-  if (b.roof_orientation == "across" && valid_box) {
+  if (form != RoofForm::Flat && has_direction && direction) {
+    if (!align_roof_direction(b, box, *direction, form)) {
+      form = RoofForm::Flat;
+      m.mesh.unsupported_roof = true;
+    }
+  } else if (b.roof_orientation == "across" && valid_box) {
     std::swap(box.hl, box.hw);
     const auto u = box.ux;
     box.ux = -box.uy;
     box.uy = u;
   }
+  const bool mapped_direction =
+      form != RoofForm::Flat && has_direction && direction.has_value();
   double rise = 0;
   if (form != RoofForm::Flat) {
     rise = b.roof_height > 0 ? b.roof_height : std::min(box.hw * .6, 3.5);
@@ -558,8 +645,12 @@ BuildingMesh build_building_mesh(const Building &b,
     if (!support)
       return;
     double z = top - rise * std::abs(v) / box.hw;
-    if (form == RoofForm::Hipped)
-      z = std::min(z, eave + rise * (box.hl - std::abs(u)) / box.hw);
+    if (form == RoofForm::Hipped) {
+      if (mapped_direction && box.hl < box.hw)
+        z = std::min(z, top - rise * std::abs(u) / box.hl);
+      else
+        z = std::min(z, eave + rise * (box.hl - std::abs(u)) / box.hw);
+    }
     if (form == RoofForm::Pyramidal)
       z = std::min(z, top - rise * std::abs(u) / box.hl);
     if (form == RoofForm::Skillion)
@@ -579,8 +670,8 @@ BuildingMesh build_building_mesh(const Building &b,
     ++m.mesh.chimneys;
   };
   add_chimney();
-  if (!rectangular) {
-    clipped_roof(m, b, box, form, eave, rise, roof, wall);
+  if (!rectangular || mapped_direction) {
+    clipped_roof(m, b, box, form, eave, rise, roof, wall, mapped_direction);
     for (auto &v : m.mesh.vertices) {
       if (v.material == BuildingMaterial::Roof) {
         if (b.roof_material == "slate" || b.roof_colour == "grey" ||

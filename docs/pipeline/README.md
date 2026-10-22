@@ -533,3 +533,5 @@ Geographic elevation ingestion primitive: [COG sampling and reprojection](geogra
 Offline canonical elevation preparation: [combined pipeline](elevation_preparation.md), [Terrarium sampling](terrarium_elevation.md), [Mapterhorn WebP preparation](mapterhorn_preparation.md), [source blending](elevation_blending.md).
 
 Bounded local Mapterhorn archive extraction: [PMTiles v3](mapterhorn_pmtiles.md).
+
+Bridge visual limits and clearance: [bridge_appearance.md](bridge_appearance.md).

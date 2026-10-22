@@ -18,17 +18,18 @@ struct BridgeFacts {
   std::string source_id, wikidata_id, inventory_id, structure_tag;
   bool explicit_form = false;
 };
+BridgeFacts bridge_facts(const RoadGraphWay &);
 struct BridgeVisual {
   mesh::TerrainChunkMesh mesh; // render only, same origin as the physical deck
   BridgeFacts facts;
   std::uint32_t rgba = 0x737b7e00u;
   bool unsupported = false;
 };
-BridgeFacts bridge_facts(const RoadGraphWay &);
 // Generic parapets or an explicitly tagged structure family, never an inventory
-// proximity guess. Procedural member dimensions are visual approximations, not
-// surveyed engineering facts. No piers are invented in lower road/water space.
-// The authoritative deck mesh is read, never modified or used as a new
-// collider.
+// proximity guess. Procedural dimensions are visual approximations, not
+// surveyed facts. An unqualified arch retains source facts but produces generic
+// parapets only because its topology is unknown. No piers are invented in lower
+// road or water space. The authoritative deck mesh is read, never modified or
+// used as a new collider.
 BridgeVisual build_bridge_visual(const RoadDeck &, const BridgeFacts &);
 } // namespace g2m::world

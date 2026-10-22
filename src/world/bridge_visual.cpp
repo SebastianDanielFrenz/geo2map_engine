@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 namespace g2m::world {
 namespace {
@@ -140,20 +141,79 @@ BridgeVisual build_bridge_visual(const RoadDeck &deck,
     p[2] += z;
     return p;
   };
+  // Subdivide where sampled deck edges depart from their chord by >5 cm.
+  constexpr double max_chord_error_m = .05;
+  constexpr std::size_t max_rail_panels = 512;
   const int panels = std::clamp(static_cast<int>(std::ceil(span / 4)), 1, 80);
+  const auto form = facts.explicit_form ? facts.form : BridgeForm::Generic;
+  std::vector<std::array<double, 2>> pending, accepted;
+  for (int i = 0; i < panels; ++i)
+    pending.push_back(
+        {static_cast<double>(i) / panels, static_cast<double>(i + 1) / panels});
+  const auto chord_error = [&](double t0, double t1) {
+    const double s0 = t0 * static_cast<double>(rows - 1);
+    const double s1 = t1 * static_cast<double>(rows - 1);
+    double error = 0;
+    for (std::size_t row = static_cast<std::size_t>(std::floor(s0)) + 1;
+         row < static_cast<std::size_t>(std::ceil(s1)) && row < rows; ++row) {
+      const double f = (static_cast<double>(row) - s0) / (s1 - s0);
+      for (int side : {-1, 1}) {
+        const auto actual = point(
+            static_cast<double>(row) / static_cast<double>(rows - 1), side, 0);
+        const auto chord =
+            add(mul(point(t0, side, 0), 1 - f), mul(point(t1, side, 0), f));
+        const auto delta = sub(actual, chord);
+        error = std::max(error, length(delta));
+      }
+    }
+    return error;
+  };
+  while (!pending.empty()) {
+    const auto interval = pending.back();
+    pending.pop_back();
+    const auto [t0, t1] = interval;
+    if (chord_error(t0, t1) <= max_chord_error_m) {
+      accepted.push_back(interval);
+      if (accepted.size() + pending.size() > max_rail_panels) {
+        out.unsupported = true;
+        return out;
+      }
+    } else {
+      const double mid = (t0 + t1) * .5;
+      if (mid <= t0 || mid >= t1 ||
+          accepted.size() + pending.size() + 2 > max_rail_panels) {
+        out.unsupported = true;
+        return out;
+      }
+      pending.push_back({mid, t1});
+      pending.push_back({t0, mid});
+    }
+  }
+  std::sort(accepted.begin(), accepted.end(),
+            [](const auto &a, const auto &b) { return a[0] < b[0]; });
+  std::vector<double> rail_stations{0};
+  for (const auto &interval : accepted)
+    rail_stations.push_back(interval[1]);
   for (int side : {-1, 1}) {
-    for (int i = 0; i < panels; ++i) {
-      const double t = static_cast<double>(i) / panels,
-                   u = static_cast<double>(i + 1) / panels;
+    for (std::size_t i = 0; i + 1 < rail_stations.size(); ++i) {
+      const double t = rail_stations[i], u = rail_stations[i + 1];
       b.beam(point(t, side, 1.1), point(u, side, 1.1), .12);
       b.beam(point(t, side, .55), point(u, side, .55), .08);
       b.beam(point(t, side, 0), point(t, side, 1.1), .10);
     }
     b.beam(point(1, side, 0), point(1, side, 1.1), .10);
   }
-  const auto form = facts.explicit_form ? facts.form : BridgeForm::Generic;
+  const bool has_structural_form = form == BridgeForm::Truss ||
+                                   form == BridgeForm::Suspension ||
+                                   form == BridgeForm::CableStayed;
+  const bool curved_structural_form =
+      has_structural_form && chord_error(0, 1) > max_chord_error_m;
   const double h = std::clamp(span * .12, 3.0, 18.0);
-  if (form == BridgeForm::Truss) {
+  if (curved_structural_form) {
+    // These straight member layouts can cut through a curved deck. Keep only
+    // the safe adaptive parapets until a curve-aware structural layout exists.
+    out.unsupported = true;
+  } else if (form == BridgeForm::Truss) {
     const int count = std::clamp(static_cast<int>(std::ceil(span / 8)), 2, 60);
     for (int side : {-1, 1})
       for (int i = 0; i < count; ++i) {
@@ -165,16 +225,8 @@ BridgeVisual build_bridge_visual(const RoadDeck &deck,
                point(u, side, i % 2 == 0 ? h : .2), .20);
       }
   } else if (form == BridgeForm::Arch) {
-    for (int side : {-1, 1})
-      for (int i = 0; i < panels; ++i) {
-        const double t = static_cast<double>(i) / panels,
-                     u = static_cast<double>(i + 1) / panels;
-        const double z = .3 + 4 * h * t * (1 - t),
-                     zz = .3 + 4 * h * u * (1 - u);
-        b.beam(point(t, side, z), point(u, side, zz), .3);
-        if (i > 0)
-          b.beam(point(t, side, .2), point(t, side, z), .10);
-      }
+    // Generic arch does not establish deck/through/above topology.
+    out.unsupported = true;
   } else if (form == BridgeForm::Suspension ||
              form == BridgeForm::CableStayed) {
     const double tower_h = std::clamp(span * .18, 8.0, 60.0);

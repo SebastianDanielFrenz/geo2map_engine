@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <limits>
+#include <string_view>
 
 namespace {
 using namespace g2m::world;
@@ -55,6 +56,25 @@ std::uint64_t hash(const BuildingMesh &m) {
     h *= 1099511628211ULL;
   }
   return h;
+}
+auto roof_triangles(const BuildingMesh &m) {
+  using Point = std::array<float, 3>;
+  using Triangle = std::array<Point, 3>;
+  std::vector<Triangle> result;
+  for (std::size_t i = 0; i + 2 < m.vertices.size(); i += 3) {
+    const auto material = m.vertices[i].material;
+    if (material != BuildingMaterial::Roof &&
+        material != BuildingMaterial::FlatRoof &&
+        material != BuildingMaterial::Slate &&
+        material != BuildingMaterial::Metal)
+      continue;
+    Triangle triangle{m.vertices[i].position, m.vertices[i + 1].position,
+                      m.vertices[i + 2].position};
+    std::sort(triangle.begin(), triangle.end());
+    result.push_back(triangle);
+  }
+  std::sort(result.begin(), result.end());
+  return result;
 }
 } // namespace
 TEST_CASE("procedural roof forms preserve mapped total height and finite unit "
@@ -183,6 +203,168 @@ TEST_CASE(
     CHECK(shifted.vertices[i].normal == first.vertices[i].normal);
   }
 }
+TEST_CASE("mapped roof directions align deterministic pitched geometry",
+          "[world][building_mesh]") {
+  for (const auto *shape : {"gabled", "hipped", "skillion", "pyramidal"}) {
+    auto b = house();
+    b.roof_shape = shape;
+    b.roof_direction = "90";
+    b.roof_height = 2.5;
+    const auto directed = build_building_mesh(b, opts());
+    b.roof_direction = "E";
+    const auto compass = build_building_mesh(b, opts());
+    INFO(shape);
+    CHECK(directed.roof != RoofForm::Flat);
+    CHECK_FALSE(directed.unsupported_roof);
+    CHECK(hash(directed) == hash(compass));
+    float max_z = -10000;
+    for (const auto &v : directed.vertices) {
+      max_z = std::max(max_z, v.position[2]);
+      CHECK(v.position[2] <= 109.0001f);
+    }
+    CHECK(std::abs(max_z - 109) < 1e-4);
+  }
+  auto b = house();
+  b.roof_shape = "gabled";
+  b.roof_direction = "90";
+  const auto rotated = build_building_mesh(b, opts());
+  double ridge_e = 0, ridge_n_min = 10000, ridge_n_max = -10000;
+  std::size_t ridge_count = 0;
+  for (const auto &v : rotated.vertices)
+    if ((v.material == BuildingMaterial::Roof ||
+         v.material == BuildingMaterial::Slate ||
+         v.material == BuildingMaterial::Metal) &&
+        std::abs(v.position[2] - 109) < 1e-4) {
+      ridge_e += v.position[0];
+      ridge_n_min = std::min(ridge_n_min, static_cast<double>(v.position[1]));
+      ridge_n_max = std::max(ridge_n_max, static_cast<double>(v.position[1]));
+      ++ridge_count;
+    }
+  REQUIRE(ridge_count > 0);
+  CHECK(std::abs(ridge_e / ridge_count - 6) < 1e-4);
+  CHECK(std::abs(ridge_n_min) < 1e-4);
+  CHECK(std::abs(ridge_n_max - 8) < 1e-4);
+
+  auto diagonal = house();
+  diagonal.roof_shape = "gabled";
+  diagonal.roof_direction = "45";
+  diagonal.roof_height = 2.5;
+  constexpr double c = .86602540378443864676, s = .5;
+  for (auto &p : diagonal.outers.front()) {
+    const double e = p.e - 450006, n = p.n - 5500004;
+    p.e = 450006 + c * e - s * n;
+    p.n = 5500004 + s * e + c * n;
+  }
+  const auto rotated_footprint = build_building_mesh(diagonal, opts());
+  CHECK(rotated_footprint.roof == RoofForm::Gabled);
+  CHECK_FALSE(rotated_footprint.unsupported_roof);
+  float rotated_top = -10000;
+  for (const auto &v : rotated_footprint.vertices)
+    rotated_top = std::max(rotated_top, v.position[2]);
+  CHECK(std::abs(rotated_top - 109) < 1e-4);
+  CHECK(std::abs(roof_area(rotated_footprint) - 96) < 1e-4);
+  CHECK(hash(rotated_footprint) == hash(build_building_mesh(diagonal, opts())));
+
+  auto east_slope = house();
+  east_slope.roof_shape = "skillion";
+  east_slope.roof_direction = "90";
+  east_slope.roof_height = 2.5;
+  const auto skillion = build_building_mesh(east_slope, opts());
+  float west_high = -10000, east_low = 10000;
+  for (const auto &v : skillion.vertices) {
+    if (v.material != BuildingMaterial::Roof &&
+        v.material != BuildingMaterial::Slate &&
+        v.material != BuildingMaterial::Metal)
+      continue;
+    if (std::abs(v.position[0]) < 1e-4)
+      west_high = std::max(west_high, v.position[2]);
+    if (std::abs(v.position[0] - 12) < 1e-4)
+      east_low = std::min(east_low, v.position[2]);
+  }
+  CHECK(std::abs(west_high - 109) < 1e-4);
+  CHECK(std::abs(east_low - 106.5) < 1e-4);
+
+  auto gable_north = house();
+  gable_north.roof_shape = "gabled";
+  gable_north.roof_direction = "0";
+  auto gable_south = gable_north;
+  gable_south.roof_direction = "180";
+  CHECK(roof_triangles(build_building_mesh(gable_north, opts())) ==
+        roof_triangles(build_building_mesh(gable_south, opts())));
+  auto gable_zero = gable_north;
+  gable_zero.roof_direction = "N";
+  auto gable_wrap = gable_north;
+  gable_wrap.roof_direction = "360";
+  CHECK(hash(build_building_mesh(gable_north, opts())) ==
+        hash(build_building_mesh(gable_zero, opts())));
+  CHECK(hash(build_building_mesh(gable_north, opts())) ==
+        hash(build_building_mesh(gable_wrap, opts())));
+  gable_north.roof_direction = "90.5";
+  CHECK_FALSE(build_building_mesh(gable_north, opts()).unsupported_roof);
+  for (const auto *invalid : {"-1", "360.1", "nan", "inf"}) {
+    gable_north.roof_direction = invalid;
+    CHECK(build_building_mesh(gable_north, opts()).unsupported_roof);
+  }
+  auto short_ridge_hip = house();
+  short_ridge_hip.roof_shape = "hipped";
+  short_ridge_hip.roof_direction = "90";
+  short_ridge_hip.roof_height = 2.5;
+  const auto hipped = build_building_mesh(short_ridge_hip, opts());
+  CHECK(hipped.roof == RoofForm::Hipped);
+  CHECK_FALSE(hipped.unsupported_roof);
+  float hipped_top = -10000;
+  for (const auto &v : hipped.vertices)
+    hipped_top = std::max(hipped_top, v.position[2]);
+  CHECK(std::abs(hipped_top - 109) < 1e-4);
+
+  auto chimney_case = short_ridge_hip;
+  auto chimney_mesh = build_building_mesh(chimney_case, opts());
+  for (std::uint64_t id = 1; chimney_mesh.chimneys == 0 && id <= 12; ++id) {
+    chimney_case.id = id;
+    chimney_mesh = build_building_mesh(chimney_case, opts());
+  }
+  REQUIRE(chimney_mesh.chimneys > 0);
+  float chimney_bottom = 10000;
+  for (const auto &v : chimney_mesh.vertices)
+    if (v.material == BuildingMaterial::Brick)
+      chimney_bottom = std::min(chimney_bottom, v.position[2]);
+  CHECK(std::abs(chimney_bottom - 107.225) < 1e-4);
+}
+TEST_CASE("mapped directions clip across concave footprints and courtyards",
+          "[world][building_mesh]") {
+  auto b = house();
+  b.roof_shape = "gabled";
+  b.roof_direction = "NE";
+  b.roof_height = 2.5;
+  b.inners = {{{450004, 5500002},
+               {450008, 5500002},
+               {450008, 5500006},
+               {450004, 5500006}}};
+  const auto courtyard = build_building_mesh(b, opts());
+  CHECK(courtyard.roof == RoofForm::Gabled);
+  CHECK_FALSE(courtyard.unsupported_roof);
+  CHECK(std::abs(roof_area(courtyard) - 80) < 1e-4);
+  float courtyard_top = -10000;
+  for (const auto &v : courtyard.vertices)
+    courtyard_top = std::max(courtyard_top, v.position[2]);
+  CHECK(std::abs(courtyard_top - 109) < 1e-4);
+
+  b.inners.clear();
+  b.outers = {{{450000, 5500000},
+               {450012, 5500000},
+               {450012, 5500004},
+               {450006, 5500004},
+               {450006, 5500008},
+               {450000, 5500008}}};
+  const auto concave = build_building_mesh(b, opts());
+  CHECK(concave.roof == RoofForm::Gabled);
+  CHECK_FALSE(concave.unsupported_roof);
+  CHECK(std::abs(roof_area(concave) - 72) < 1e-4);
+  float concave_top = -10000;
+  for (const auto &v : concave.vertices)
+    concave_top = std::max(concave_top, v.position[2]);
+  CHECK(std::abs(concave_top - 109) < 1e-4);
+}
 TEST_CASE("mapped flat and unsupported roofs do not get inferred pitched "
           "replacements",
           "[world][building_mesh]") {
@@ -194,8 +376,10 @@ TEST_CASE("mapped flat and unsupported roofs do not get inferred pitched "
   CHECK(m.roof == RoofForm::Flat);
   CHECK(m.unsupported_roof);
   b.roof_shape = "gabled";
-  b.roof_direction = "NE";
-  CHECK(build_building_mesh(b, opts()).unsupported_roof);
+  b.roof_direction = "not-a-compass-direction";
+  const auto invalid_direction = build_building_mesh(b, opts());
+  CHECK(invalid_direction.unsupported_roof);
+  CHECK(invalid_direction.roof == RoofForm::Flat);
   b.roof_direction.clear();
   b.bottom = 105;
   b.min_height = 5;

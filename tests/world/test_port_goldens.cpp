@@ -120,3 +120,45 @@ TEST_CASE("terrain port geometry has cross-platform golden hashes",
         "8f2d2286f48c4c7a 67907b18c44ae827 922b58ce77ec77ed fbd2872c5d41ffef");
 }
 
+TEST_CASE("mapped roof azimuths have cross-platform geometry hashes",
+          "[world][port_goldens][roof_direction]") {
+  using namespace g2m::world;
+  Building house;
+  house.id = 42;
+  house.type = "house";
+  house.height = 9;
+  house.base = 100;
+  house.bottom = 98;
+  house.roof_height = 2.5;
+  house.outers = {{{450000, 5500000},
+                   {450012, 5500000},
+                   {450010, 5500008},
+                   {450002, 5500010}}};
+  house.inners = {{{450004, 5500002},
+                   {450007, 5500002},
+                   {450007, 5500004},
+                   {450004, 5500004}}};
+  BuildingMeshOptions options;
+  options.origin_e = 450000;
+  options.origin_n = 5500000;
+  Digest digest;
+  for (const auto *shape : {"gabled", "hipped", "skillion", "pyramidal"}) {
+    house.roof_shape = shape;
+    for (const auto *direction : {"NNE", "90", "203.25", "360"}) {
+      house.roof_direction = direction;
+      const auto mesh = build_building_mesh(house, options);
+      REQUIRE_FALSE(mesh.unsupported_roof);
+      for (const auto &v : mesh.vertices) {
+        for (const auto &field : {v.position, v.normal, v.colour})
+          for (auto x : field)
+            digest.f(x);
+        for (auto x : v.uv)
+          digest.f(x);
+        digest.add(static_cast<std::uint32_t>(v.material));
+      }
+    }
+  }
+  std::ostringstream encoded;
+  encoded << std::hex << digest.hash;
+  CHECK(encoded.str() == "8fa3eb8ea315fa64");
+}
