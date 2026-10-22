@@ -112,7 +112,7 @@ struct TerrainService::Impl {
         std::function<ErasedOutcome()> fn;
     };
 
-    explicit Impl(const TerrainServiceConfig& c) : cfg(c), cache(c.cache_bytes) {}
+    explicit Impl(const TerrainServiceConfig& c) : cfg(c), derivers(c.elevation_source), cache(c.cache_bytes) {}
 
     TerrainServiceConfig cfg;
     std::unique_ptr<TileStore> sources;
@@ -545,6 +545,10 @@ Result<std::unique_ptr<TerrainService>> TerrainService::open(const TerrainServic
         return bad(ErrorCode::InvalidArgument, "remote transport and manifest must be supplied together");
     if (!config.remote_transport && config.stores.source_scope.empty()) return bad(ErrorCode::InvalidArgument, "stores.source_scope is empty");
 
+    if (!config.elevation_source.starts_with(kSrcElevPrefix) ||
+        !is_valid_layer_name(config.elevation_source) ||
+        config.elevation_source.substr(kSrcElevPrefix.size()).find('.') != std::string::npos)
+        return make_error(ErrorCode::InvalidArgument, "invalid elevation source layer");
     auto impl = std::make_unique<Impl>(config);
     Impl& m = *impl;
 
@@ -585,6 +589,22 @@ Result<std::unique_ptr<TerrainService>> TerrainService::open(const TerrainServic
         const bool geometry = config.layers.geometry || carved || classes;
         LocalReleaseParams params =
             builtin_local_release_params(config.stores.source_scope, m.derivers, config.attribution, roads, geometry, carved, classes, config.layers.rail);
+        LayerRegistry source_registry = LayerRegistry::builtin();
+        if (config.elevation_source != kSrcElevDgm1Layer) {
+            auto registered = source_registry.add(make_raw_elev_layer(config.elevation_source.substr(kSrcElevPrefix.size())));
+            if (!registered) return bad(registered.error().code, registered.error().message);
+        }
+        // A scope can contain several imported elevation products. Register
+        // their raw descriptors even when this release selects another one.
+        auto source_index = m.sources->index(config.stores.source_scope);
+        if (!source_index) return bad(source_index.error().code, source_index.error().message);
+        for (const auto& entry : *source_index) {
+            if (entry.layer.starts_with(kSrcElevPrefix) && !source_registry.find(entry.layer)) {
+                auto registered = source_registry.add(make_raw_elev_layer(entry.layer.substr(kSrcElevPrefix.size())));
+                if (!registered) return bad(registered.error().code, registered.error().message);
+            }
+        }
+        params.registry = &source_registry;
         params.world_seed = config.world_seed;
         for (const IDeriver* d : config.extra_derivers) params.derivers.push_back(d);
         auto manifest = make_local_release(*m.sources, params);

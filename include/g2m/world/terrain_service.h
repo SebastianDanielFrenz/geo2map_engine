@@ -80,6 +80,9 @@ struct TerrainServiceConfig {
     std::shared_ptr<ITransport> remote_transport;
     std::optional<ReleaseManifest> remote_manifest;
     StoreConfig stores;
+    // Explicit imported source; defaults preserve established DGM1 releases.
+    // Caller imports/reprojects this layer before opening the service.
+    std::string elevation_source = "g2m.src.elev.dgm1";
     LayerOptIn layers;
     // The session frame (local metres): zone and the origin in whole kilometres.
     geo::UtmZone zone{32, geo::Hemisphere::North};

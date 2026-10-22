@@ -527,3 +527,5 @@ cache remain the same. The caller supplies and owns a shared thread-safe
 identity before opening. Required layer flags are checked against the manifest.
 `nullptr` retains the existing local-store pipeline. The library adds no HTTP
 dependency: racing_game constructs the HTTP transport and its disk cache.
+
+Geographic elevation ingestion primitive: [COG sampling and reprojection](geographic_elevation.md).

@@ -8,6 +8,7 @@
 #include "g2m/layer/src_elev.h"
 
 #include <array>
+#include <stdexcept>
 #include <cstddef>
 #include <utility>
 #include <vector>
@@ -30,16 +31,29 @@ TileKey ancestor_at(const TileKey& target, int level) {
 // ---- ElevBaseDeriver --------------------------------------------------------
 
 ElevBaseDeriver::ElevBaseDeriver()
-    : desc_(elev_base_desc()), memo_(std::make_unique<layer_detail::DecodedElevMemo>()) {}
+    : ElevBaseDeriver(std::string(kSrcElevDgm1Layer)) {}
+
+ElevBaseDeriver::ElevBaseDeriver(std::string source_layer)
+    : desc_(elev_base_desc()), memo_(std::make_unique<layer_detail::DecodedElevMemo>()) {
+    if (!source_layer.starts_with(kSrcElevPrefix) || !is_valid_layer_name(source_layer) ||
+        source_layer.substr(kSrcElevPrefix.size()).find('.') != std::string::npos)
+        throw std::invalid_argument("elev.base: invalid raw elevation source layer");
+    desc_.inputs = {std::move(source_layer)};
+    if (desc_.inputs[0] != kSrcElevDgm1Layer)
+        desc_.content = "terrain elevation from a registered imported elevation source, level 0";
+}
 
 ElevBaseDeriver::~ElevBaseDeriver() = default;
 
 const LayerDesc& ElevBaseDeriver::output() const { return desc_; }
 
-ContentHash ElevBaseDeriver::config_hash() const { return config_hash_of("g2m.elev.base/1 dgm1-only"); }
+ContentHash ElevBaseDeriver::config_hash() const {
+    if (desc_.inputs[0] == kSrcElevDgm1Layer) return config_hash_of("g2m.elev.base/1 dgm1-only");
+    return config_hash_of("g2m.elev.base/2 imported-source " + desc_.inputs[0]);
+}
 
 std::vector<InputTileRef> ElevBaseDeriver::inputs_for(const TileKey& target) const {
-    return {InputTileRef{std::string(kSrcElevDgm1Layer), ancestor_at(target, kRawTileLevel)}};
+    return {InputTileRef{desc_.inputs[0], ancestor_at(target, kRawTileLevel)}};
 }
 
 Result<DeriveResult> ElevBaseDeriver::derive(const DeriveRequest& request) const {
@@ -92,7 +106,9 @@ Result<DeriveResult> ElevBaseDeriver::derive(const DeriveRequest& request) const
 
     DeriveResult out;
     out.body = std::move(bytes).value();
-    out.datum = VerticalDatum::DHHN2016;
+    out.datum = request.inputs.empty() || !request.inputs[0].header
+                    ? (desc_.inputs[0] == kSrcElevDgm1Layer ? VerticalDatum::DHHN2016 : VerticalDatum::None)
+                    : request.inputs[0].header->datum;
     out.height_offset = 0;
     return out;
 }
@@ -164,11 +180,16 @@ Result<DeriveResult> TerrainHeightDeriver::derive(const DeriveRequest& request) 
     // any enclosing frame's own locals are counted - found the hard way
     // (STATUS_STACK_OVERFLOW) via a depth-7 (L6) resolve in
     // tests/layer/test_derive_terrain.cpp.
+    VerticalDatum datum = VerticalDatum::DHHN2016;
+    bool have_datum = false;
     std::vector<HeightTile> children(4);
     std::array<const HeightTile*, 4> child_ptrs{nullptr, nullptr, nullptr, nullptr};
     for (std::size_t i = 0; i < 4; ++i) {
         const InputTile& in = request.inputs[i];
         if (!in.header) continue;
+        if (!have_datum) { datum = in.header->datum; have_datum = true; }
+        else if (datum != in.header->datum)
+            return make_error(ErrorCode::Malformed, "terrain.height: inconsistent child datums; normalize imported heights before pyramiding");
         Result<TileBody> body = decode_body(in.body);
         if (!body) return body.error();
         Result<void> decoded = decode_height_tile(*body, in.ref.key, children[i]);
@@ -187,7 +208,7 @@ Result<DeriveResult> TerrainHeightDeriver::derive(const DeriveRequest& request) 
 
     DeriveResult out;
     out.body = std::move(bytes).value();
-    out.datum = VerticalDatum::DHHN2016;
+    out.datum = datum;
     out.height_offset = 0;
     return out;
 }
