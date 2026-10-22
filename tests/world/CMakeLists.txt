@@ -13,6 +13,7 @@ add_executable(g2m_world_tests
   test_terrain_service.cpp
   test_road_meshes.cpp
   test_road_arrows.cpp
+  test_road_paint.cpp
   test_ribbon_drape.cpp
   test_merge_markings.cpp
   test_buildings.cpp

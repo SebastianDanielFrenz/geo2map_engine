@@ -21,6 +21,7 @@ set(G2M_WORLD_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/terrain_service.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_structures.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_ribbons.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/road_paint.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/lattice_drape.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/buildings.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/building_mesh.cpp
