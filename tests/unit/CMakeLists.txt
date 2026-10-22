@@ -14,6 +14,7 @@ add_executable(g2m_unit_tests
   test_decode_zip.cpp
   test_decode_tiff.cpp
   test_geographic_dem.cpp
+  test_terrarium_dem.cpp
   test_decode_osm.cpp
   test_decode_real_data.cpp
   test_clothoid.cpp

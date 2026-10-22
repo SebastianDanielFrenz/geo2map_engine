@@ -1136,7 +1136,7 @@ std::vector<CarveGeomInput> CarveL0Inputs::geom() const {
 Result<void> decode_carve_l0_inputs(const TileKey& target, std::span<const InputTile> inputs, CarveL0Inputs& out,
     std::string_view what_view) {
     const std::string what(what_view);
-    std::optional<VerticalDatum> datum;
+    std::optional<VerticalDatum> datum, known_datum;
     bool centre = false;
     std::size_t bytes = 0;
     for (const auto& in : inputs) {
@@ -1152,10 +1152,17 @@ Result<void> decode_carve_l0_inputs(const TileKey& target, std::span<const Input
             const std::int64_t dx = static_cast<std::int64_t>(in.ref.key.x) - target.x, dy = static_cast<std::int64_t>(in.ref.key.y) - target.y;
             if (dx < -1 || dx > 1 || dy < -1 || dy > 1 || in.ref.key.level != 0) return make_error(ErrorCode::Malformed, what + ": elev.base outside the window");
             const std::size_t slot = static_cast<std::size_t>((dy + 1) * 3 + (dx + 1));
-            if (in.header->datum != VerticalDatum::DHHN2016 && in.header->datum != VerticalDatum::EGM2008)
+            const VerticalDatum input_datum = in.header->datum;
+            if (input_datum != VerticalDatum::DHHN2016 && input_datum != VerticalDatum::EGM2008 &&
+                input_datum != VerticalDatum::Unspecified)
                 return make_error(ErrorCode::Unsupported, what + ": unknown elevation datum");
-            if (datum && *datum != in.header->datum) return make_error(ErrorCode::Malformed, what + ": mixed elevation datums");
-            datum = in.header->datum;
+            if (input_datum != VerticalDatum::Unspecified) {
+                if (known_datum && *known_datum != input_datum)
+                    return make_error(ErrorCode::Malformed, what + ": mixed elevation datums");
+                known_datum = input_datum;
+            }
+            if (!datum || input_datum == VerticalDatum::Unspecified)
+                datum = input_datum;
             if (auto ok = decode_height_tile(*body, in.ref.key, out.dem[slot]); !ok) return ok.error();
             for (auto& h : out.dem[slot].h) if (h != kHeightNoData) {
                 const auto adjusted = static_cast<std::int64_t>(h) + in.header->height_offset;
@@ -1172,10 +1179,22 @@ Result<void> decode_carve_l0_inputs(const TileKey& target, std::span<const Input
         }
     }
     if (!centre) return make_error(ErrorCode::NotFound, what + ": g2m.elev.base input missing");
-    // roads.geom heights are in the DEM's datum (or None for a tile without profiles).
-    for (const auto& in : inputs)
-        if (in.header && in.ref.layer == kRoadGeomLayer && in.header->datum != VerticalDatum::None && in.header->datum != *datum)
-            return make_error(ErrorCode::Malformed, what + ": roads.geom datum differs from the DEM");
+    // None marks geometry without height profiles; known references must agree.
+    for (const auto& in : inputs) {
+        if (!in.header || in.ref.layer != kRoadGeomLayer || in.header->datum == VerticalDatum::None)
+            continue;
+        const VerticalDatum road_datum = in.header->datum;
+        if (road_datum != VerticalDatum::DHHN2016 && road_datum != VerticalDatum::EGM2008 &&
+            road_datum != VerticalDatum::Unspecified)
+            return make_error(ErrorCode::Unsupported, what + ": unknown roads.geom datum");
+        if (road_datum != VerticalDatum::Unspecified) {
+            if (known_datum && *known_datum != road_datum)
+                return make_error(ErrorCode::Malformed, what + ": mixed known elevation datums");
+            known_datum = road_datum;
+        } else {
+            datum = VerticalDatum::Unspecified;
+        }
+    }
     out.datum = *datum;
     return {};
 }

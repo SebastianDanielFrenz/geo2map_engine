@@ -529,3 +529,7 @@ identity before opening. Required layer flags are checked against the manifest.
 dependency: racing_game constructs the HTTP transport and its disk cache.
 
 Geographic elevation ingestion primitive: [COG sampling and reprojection](geographic_elevation.md).
+
+Offline canonical elevation preparation: [combined pipeline](elevation_preparation.md), [Terrarium sampling](terrarium_elevation.md), [Mapterhorn WebP preparation](mapterhorn_preparation.md), [source blending](elevation_blending.md).
+
+Bounded local Mapterhorn archive extraction: [PMTiles v3](mapterhorn_pmtiles.md).

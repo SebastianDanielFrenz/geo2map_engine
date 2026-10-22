@@ -20,6 +20,8 @@ add_executable(g2m_world_tests
   test_buildings.cpp
   test_building_mesh.cpp
   test_dsm_ground.cpp
+  test_elevation_ground.cpp
+  test_elevation_blend.cpp
   test_port_goldens.cpp
   test_view_streamer.cpp
   test_ring_streamer.cpp

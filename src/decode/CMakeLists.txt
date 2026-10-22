@@ -16,6 +16,7 @@ set(G2M_DECODE_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/tiff/tiff_reader.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/osm/pbf_reader.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/geographic_dem.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/terrarium_dem.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/dgm1.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/dgm1_bw.cpp
   CACHE INTERNAL "g2m_decode sources (also compiled into the fuzz-instrumented copy, tests/fuzz)"
