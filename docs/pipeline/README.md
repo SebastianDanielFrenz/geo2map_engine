@@ -516,3 +516,14 @@ These are listed, not resolved. Each needs an owner decision or a check.
 | Architecture map and rules | `CLAUDE.md` |
 | Road probe | `tools/road_probe/README.md` |
 | Source data, licences | `S:\claude_code\geo2map_data\SOURCES.md` |
+
+## Remote TerrainService consumer (2026-10-22)
+
+`TerrainServiceConfig::remote_transport` plus `remote_manifest` selects a remote,
+release-pinned data source. It skips local source/derived stores and derivation;
+the existing job scheduler, priorities, coalescing, decoders and decoded LRU
+cache remain the same. The caller supplies and owns a shared thread-safe
+`ITransport` (for example HTTP wrapped in `ClientCache`) and checks the manifest
+identity before opening. Required layer flags are checked against the manifest.
+`nullptr` retains the existing local-store pipeline. The library adds no HTTP
+dependency: racing_game constructs the HTTP transport and its disk cache.

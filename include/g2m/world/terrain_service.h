@@ -48,6 +48,7 @@
 #include <vector>
 
 namespace g2m {
+class ITransport;
 struct TerrainClassTile; // g2m/layer/terrain_class.h (include it to use terrain_class())
 }
 
@@ -74,6 +75,10 @@ struct LayerOptIn {
 };
 
 struct TerrainServiceConfig {
+    // Optional remote mode: pinned manifest and a shared, thread-safe transport.
+    // Skips all local stores/derivers. The existing scheduler and decoded cache remain.
+    std::shared_ptr<ITransport> remote_transport;
+    std::optional<ReleaseManifest> remote_manifest;
     StoreConfig stores;
     LayerOptIn layers;
     // The session frame (local metres): zone and the origin in whole kilometres.
