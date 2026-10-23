@@ -7,6 +7,8 @@
 
 #include "g2m/core/hash.h"
 #include "g2m/layer/rail_geom_tile.h"
+#include "g2m/layer/src_osm.h"
+#include "g2m/layer/terrain_layers.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -498,6 +500,68 @@ TEST_CASE("rail.geom build is deterministic and tile-set independent", "[layer][
     CHECK(d->pieces.size() > a.pieces.size());
 }
 
+TEST_CASE("rail.geom deriver accepts unspecified height reference and rejects None", "[layer][rail]") {
+    Scene scene;
+    scene.line(10, -500, 500, 25, 0, {{"railway", "rail"}});
+    const auto data = scene.data();
+    const RailGeomDeriver deriver;
+
+    std::vector<InputTile> inputs;
+    for (const auto& ref : deriver.inputs_for(kTile)) {
+        InputTile in;
+        in.ref = ref;
+        if (ref.key == kTile) {
+            const auto raw = encode_src_osm(OsmTile{64, data}); REQUIRE(raw);
+            const auto bytes = encode_body(*raw); REQUIRE(bytes);
+            in.body = *bytes;
+            TileHeader header;
+            header.layer = ref.layer; header.layer_version = 1; header.key = ref.key;
+            header.datum = VerticalDatum::None; header.body_size = in.body.size();
+            header.body_hash = content_hash(in.body); in.header = header;
+        }
+        inputs.push_back(std::move(in));
+    }
+    std::sort(inputs.begin(), inputs.end(), [](const auto& a, const auto& b) { return a.ref < b.ref; });
+    const auto dem_refs = deriver.additional_inputs_for({kTile, 0, inputs}); REQUIRE(dem_refs);
+    REQUIRE(dem_refs->size() > 1);
+    const auto add_dem = [&](VerticalDatum datum) {
+        auto result = inputs;
+        for (const auto& ref : *dem_refs) {
+            HeightTile height; height.key = ref.key; height.h.fill(25600);
+            const auto raw = encode_height_tile(height); REQUIRE(raw);
+            const auto bytes = encode_body(*raw); REQUIRE(bytes);
+            InputTile in;
+            in.ref = ref; in.body = *bytes;
+            TileHeader header;
+            header.layer = ref.layer; header.layer_version = 1; header.key = ref.key;
+            header.datum = datum; header.body_size = in.body.size();
+            header.body_hash = content_hash(in.body); in.header = header;
+            result.push_back(std::move(in));
+        }
+        std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return a.ref < b.ref; });
+        return result;
+    };
+
+    auto unspecified = add_dem(VerticalDatum::Unspecified);
+    const auto result = deriver.derive({kTile, 0, unspecified}); REQUIRE(result);
+    CHECK(result->datum == VerticalDatum::Unspecified);
+
+    auto none = unspecified;
+    for (auto& in : none) if (in.ref.layer == kElevBaseLayer) { in.header->datum = VerticalDatum::None; break; }
+    CHECK_FALSE(deriver.derive({kTile, 0, none}));
+
+    auto mixed_known = add_dem(VerticalDatum::DHHN2016);
+    std::vector<std::size_t> elevation_indices;
+    for (std::size_t i = 0; i < mixed_known.size(); ++i)
+        if (mixed_known[i].ref.layer == kElevBaseLayer) elevation_indices.push_back(i);
+    REQUIRE(elevation_indices.size() >= 3);
+    for (const auto i : elevation_indices) mixed_known[i].header->datum = VerticalDatum::Unspecified;
+    mixed_known[elevation_indices.front()].header->datum = VerticalDatum::DHHN2016;
+    mixed_known[elevation_indices.back()].header->datum = VerticalDatum::EGM2008;
+    CHECK_FALSE(deriver.derive({kTile, 0, mixed_known}));
+    std::reverse(mixed_known.begin(), mixed_known.end());
+    CHECK_FALSE(deriver.derive({kTile, 0, mixed_known}));
+}
 TEST_CASE("rail.geom layer descriptor", "[layer][rail]") {
     const auto desc = rail_geom_desc();
     CHECK(desc.id.name == "g2m.rail.geom");

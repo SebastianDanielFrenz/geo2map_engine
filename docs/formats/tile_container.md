@@ -24,13 +24,15 @@ stored per address ([cache_db.md](cache_db.md)).
 | level | u8 | 0..20 |
 | x | i32 | tile index; the key must be valid |
 | y | i32 | |
-| datum | u16 | 0 none, 1 DHHN2016 (German normal heights, DGM1), 2 EGM2008 |
+| datum | u16 | 0 none (not a height datum), 1 DHHN2016 (German normal heights, DGM1), 2 EGM2008, 3 unspecified height reference |
 | height_offset | i32 | 1/256 m, added to every stored height (0 for raw layers) |
 | n_inputs | u16 | ≤ 4096 |
 | inputs | n_inputs × 32 bytes | body hashes of the input tiles, strictly ascending (sorted, unique) |
 | body_hash | 32 bytes | SHA-256 of BODY |
 | body_size | u64 | size of BODY in bytes |
 | checksum | u64 | FNV-1a 64 over every header byte before this field |
+
+Datum value 0 (`None`) marks a tile that does not carry heights. Value 3 (`Unspecified`) marks height data whose vertical reference is unknown. Height-consuming road, rail, and carve derivation accepts `Unspecified` and carries it to the output; `None` remains invalid for elevation inputs. When sources provide known references, DHHN2016 and EGM2008 may not be mixed, even if an `Unspecified` source occurs between them.
 
 `parse_container` checks the header checksum, `body_size` against the bytes
 that follow, and the body hash. It does not decode the body.

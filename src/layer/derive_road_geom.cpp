@@ -153,7 +153,7 @@ Result<DeriveResult> RoadGeomDeriver::derive(const DeriveRequest& request) const
     expected->push_back({std::string(kRoadGraphLayer), request.target}); std::sort(expected->begin(), expected->end());
     if (request.inputs.size() != expected->size()) return make_error(ErrorCode::InvalidArgument, "roads.geom: incomplete dependency set");
     std::set<InputTileRef> seen; std::vector<HeightTile> heights; std::vector<RoadGraphTile> context_tiles, crossing_tiles;
-    std::optional<VerticalDatum> datum; std::size_t bytes = 0;
+    std::optional<VerticalDatum> datum, known_datum; std::size_t bytes = 0;
     for (const auto& input : request.inputs) {
         if (!std::binary_search(expected->begin(), expected->end(), input.ref) || !seen.insert(input.ref).second)
             return make_error(ErrorCode::Malformed, "roads.geom: unexpected or duplicate dependency");
@@ -171,9 +171,17 @@ Result<DeriveResult> RoadGeomDeriver::derive(const DeriveRequest& request) const
             if (in_context) context_tiles.push_back(std::move(*tile));
             continue;
         }
-        if (input.header->datum != VerticalDatum::DHHN2016 && input.header->datum != VerticalDatum::EGM2008)
+        const VerticalDatum input_datum = input.header->datum;
+        if (input_datum != VerticalDatum::DHHN2016 && input_datum != VerticalDatum::EGM2008 &&
+            input_datum != VerticalDatum::Unspecified)
             return make_error(ErrorCode::Unsupported, "roads.geom: unknown elevation datum");
-        if (datum && *datum != input.header->datum) return make_error(ErrorCode::Malformed, "roads.geom: mixed elevation datums"); datum = input.header->datum;
+        if (input_datum != VerticalDatum::Unspecified) {
+            if (known_datum && *known_datum != input_datum)
+                return make_error(ErrorCode::Malformed, "roads.geom: mixed elevation datums");
+            known_datum = input_datum;
+        }
+        if (!datum || input_datum == VerticalDatum::Unspecified)
+            datum = input_datum;
         const auto body = decode_body(input.body); if (!body) return body.error();
         heights.emplace_back(); const auto decoded = decode_height_tile(*body, input.ref.key, heights.back()); if (!decoded) return decoded.error();
         for (auto& height : heights.back().h) if (height != kHeightNoData) {

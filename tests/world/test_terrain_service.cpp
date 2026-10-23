@@ -1041,3 +1041,30 @@ TEST_CASE("service: g2m.rail.geom is opt-in, served end to end and independent o
     CHECK(bytes_one.value()->header.body_hash == bytes_four.value()->header.body_hash);
     CHECK(bytes_one.value()->container == bytes_four.value()->container);
 }
+
+TEST_CASE("service: explicitly imported global elevation serves heights and preserves its datum", "[world][geographic_source]") {
+    World w;
+    {
+        auto store = TileStore::open({w.sources_dir(), "tiles"}); REQUIRE(store);
+        ElevTile tile{*tile_georef(l2(0,0),1024,SampleRegistration::Cell,RowOrder::NorthToSouth),HeightRaster(1024,1024,112*256)};
+        auto raw = input_tile("g2m.src.elev.glo30",l2(0,0),*encode_src_elev(tile),VerticalDatum::EGM2008);
+        REQUIRE((*store)->put({kScope,raw.ref.layer,raw.ref.key},*raw.header,raw.body,true));
+    }
+    auto c = w.config("global");c.elevation_source="g2m.src.elev.glo30";
+    c.layers.roads=false;c.layers.geometry=false;
+    auto service=w.open(c);
+    for(int level : {0,1,2}) {
+        TileKey target{kZone,level,0,0};
+        auto height=service->height(target,Priority::Physics);REQUIRE(height.wait_for(kLong));
+        INFO(height.message());REQUIRE(height.value());
+        REQUIRE(height.value()->h[0]==112*256);
+        auto raw=service->raw_tile("g2m.terrain.height",target,Priority::Physics);
+        REQUIRE(raw.wait_for(kLong));REQUIRE(raw.value());
+        REQUIRE(raw.value()->header.datum==VerticalDatum::EGM2008);
+    }
+    auto original=w.open("original");
+    auto old=original->height(l0(0,0),Priority::Physics);REQUIRE(old.wait_for(kLong));REQUIRE(old.value());
+    REQUIRE(old.value()->h[0]==100*256);
+    REQUIRE(service->release_id()!=original->release_id());
+    c.elevation_source="g2m.src.osm";REQUIRE_FALSE(TerrainService::open(c));
+}

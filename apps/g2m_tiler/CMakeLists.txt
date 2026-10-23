@@ -42,3 +42,9 @@ target_link_libraries(g2m_ribbon_census PRIVATE g2m_server g2m_world g2m_warning
 # Cross-section dump of OSM ways and a lane-change census (vault G2M-025).
 add_executable(g2m_xs_probe ../../tools/xs_probe/main.cpp)
 target_link_libraries(g2m_xs_probe PRIVATE g2m_server g2m_warnings g2m_options)
+
+add_executable(g2m_geographic_dem ../../tools/geographic_dem/main.cpp)
+target_link_libraries(g2m_geographic_dem PRIVATE g2m_decode g2m_server g2m_layers g2m_warnings g2m_options)
+
+add_executable(g2m_elevation_prepare ../../tools/elevation_prepare/main.cpp)
+target_link_libraries(g2m_elevation_prepare PRIVATE g2m_decode g2m_world g2m_dep_json g2m_warnings g2m_options)
