@@ -377,7 +377,7 @@ void print_numbers(const char* name, const char* dem, const FixtureNumbers& n) {
 }
 }
 
-TEST_CASE("T5/T6 fixtures: matches, C1, no overshoot and approach-to-node agreement on every built junction", "[layer][junction][height][roads]") {
+TEST_CASE("T5/T6 fixtures: matches, C1, no overshoot and approach-to-node agreement on every built junction", "[layer][junction][height][roads][long]") {
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         const auto flat = fixture_numbers(pbf, {});
         print_numbers(pbf, "flat DEM", flat);
@@ -548,7 +548,7 @@ TEST_CASE("T5: a feature on an approach inside the ring is suppressed, one beyon
     }
 }
 
-TEST_CASE("T5 fixtures: tables and calming on the real junction nodes", "[layer][junction][height][roads]") {
+TEST_CASE("T5 fixtures: tables and calming on the real junction nodes", "[layer][junction][height][roads][long]") {
     // Counts: the fixtures' junction nodes with a table or hump, with another vertical kind, the ramps and the suppressed features.
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         const auto n = fixture_numbers(pbf, {});

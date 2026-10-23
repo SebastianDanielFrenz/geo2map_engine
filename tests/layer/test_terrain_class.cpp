@@ -239,7 +239,7 @@ TEST_CASE("terrain.class: neighbouring tiles agree on their shared edge nodes (D
 // T17 (class half): L1 = the rank-max of the 3 x 3 L0 nodes around each coincident node, ties to the centre then row-major,
 // recomputed here over a global node map; neighbouring L1 tiles agree on their edge; rank-max keeps more road nodes than
 // subsampling (the rejected design).
-TEST_CASE("terrain.class T17: the rank-max pyramid", "[layer][terrain_class][terrain]") {
+TEST_CASE("terrain.class T17: the rank-max pyramid", "[layer][terrain_class][terrain][long]") {
     const std::int32_t px = 910, py = 10842;   // L1 tiles (910, 10842) and (911, 10842): L0 x 1819..1824, y 21683..21686
     std::map<std::pair<std::int32_t, std::int32_t>, std::unique_ptr<TerrainClassTile>> l0s;
     for (std::int32_t y = 2 * py - 1; y <= 2 * py + 2; ++y)

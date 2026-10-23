@@ -251,7 +251,7 @@ TEST_CASE("Fillets: random star junctions always give valid nested rings and nev
     CHECK(filleted >= built / 2);
 }
 
-TEST_CASE("Fillets: fixture census - kerb returns on most junctions, rings valid and nested", "[layer][junction][fillet][roads]") {
+TEST_CASE("Fillets: fixture census - kerb returns on most junctions, rings valid and nested", "[layer][junction][fillet][roads][long]") {
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + pbf);
         const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);

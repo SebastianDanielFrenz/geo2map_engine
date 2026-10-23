@@ -885,7 +885,8 @@ Fuzzers (WSL, `linux-release` or `linux-asan-ubsan` build dir):
 ## CI
 
 ```powershell
-tools\ci.ps1                               # every leg + grep + golden compare
+tools\ci.ps1                               # every leg + grep + golden compare; ctest -LE long
+tools\ci.ps1 -Full                         # ... with every test incl. [long] (a test >= 5 s in release is tagged [long])
 tools\ci.ps1 -SkipWsl                      # Windows legs only
 tools\ci.ps1 -SkipWindows                  # WSL legs only
 tools\ci.ps1 -Only release,linux-release   # named legs only
@@ -906,7 +907,7 @@ tools\ci.ps1 -Only release,linux-release   # named legs only
   untouched. A missing offline dependency directory (see the preset's own
   entry above) is an actionable configure-time failure, not a silent
   network fetch.
-- **Per leg:** configure, build, `ctest` (every test), then
+- **Per leg:** configure, build, `ctest` (`-LE long`; `-Full` = every test), then
   `g2m_golden_dump <set>` into `out/ci_golden/<leg>.<set>.txt` for each set
   (g0, g1). On `linux-release` and `linux-asan-ubsan` the ctest run includes
   the libFuzzer runs (label `fuzz`), and a `fuzz` result line counts them.

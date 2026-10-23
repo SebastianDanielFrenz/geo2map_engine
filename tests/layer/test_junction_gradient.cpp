@@ -251,7 +251,7 @@ Census census(const std::vector<Row>& all, bool print) {
 }
 } // namespace
 
-TEST_CASE("junction gradient D42: the drivable junction surface stays within the bound its trim data allow, flat and tilted DEM", "[layer][carve][junction]") {
+TEST_CASE("junction gradient D42: the drivable junction surface stays within the bound its trim data allow, flat and tilted DEM", "[layer][carve][junction][long]") {
     for (const bool tilted : {false, true}) {
         const auto& all = rows(tilted, true);
         const Census n = census(all, true);
