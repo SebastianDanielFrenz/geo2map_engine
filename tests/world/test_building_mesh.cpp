@@ -473,8 +473,11 @@ TEST_CASE("facade archetypes change rhythm, openings, and mapped wall material",
   };
   CHECK(has_material(detached, BuildingMaterial::Wall));
   CHECK(has_material(apartment, BuildingMaterial::WallSmooth));
+  CHECK(has_material(apartment, BuildingMaterial::Glass));
   CHECK(has_material(commercial, BuildingMaterial::WallSmooth));
+  CHECK(has_material(commercial, BuildingMaterial::OfficeWindow));
   CHECK(has_material(industrial, BuildingMaterial::Cladding));
+  CHECK(has_material(industrial, BuildingMaterial::IndustrialWindow));
   CHECK(apartment.doors == 1);
   CHECK(commercial.doors == 1);
   CHECK(industrial.doors == 1);
@@ -531,7 +534,19 @@ TEST_CASE("facade archetypes change rhythm, openings, and mapped wall material",
   CHECK(apartment_lite.doors == 0);
   CHECK_FALSE(has_material(apartment_lite, BuildingMaterial::Frame));
   CHECK_FALSE(has_material(apartment_lite, BuildingMaterial::Glass));
+  CHECK_FALSE(has_material(apartment_lite, BuildingMaterial::Door));
+  CHECK_FALSE(has_material(apartment_lite, BuildingMaterial::OfficeWindow));
+  CHECK_FALSE(has_material(apartment_lite, BuildingMaterial::IndustrialWindow));
   CHECK(apartment_lite.vertices.size() < full_vertices);
+  b.type = "commercial";
+  const auto commercial_lite = build_building_mesh(b, lite);
+  CHECK_FALSE(has_material(commercial_lite, BuildingMaterial::OfficeWindow));
+  CHECK_FALSE(has_material(commercial_lite, BuildingMaterial::Door));
+  b.type = "industrial";
+  const auto industrial_lite = build_building_mesh(b, lite);
+  CHECK_FALSE(
+      has_material(industrial_lite, BuildingMaterial::IndustrialWindow));
+  CHECK_FALSE(has_material(industrial_lite, BuildingMaterial::Door));
 
   // Existing semantic IDs remain stable; new facade IDs are appended.
   CHECK(static_cast<unsigned>(BuildingMaterial::Wall) == 0);
@@ -540,7 +555,10 @@ TEST_CASE("facade archetypes change rhythm, openings, and mapped wall material",
   CHECK(static_cast<unsigned>(BuildingMaterial::Timber) == 9);
   CHECK(static_cast<unsigned>(BuildingMaterial::WallSmooth) == 10);
   CHECK(static_cast<unsigned>(BuildingMaterial::Cladding) == 11);
-  CHECK(static_cast<unsigned>(BuildingMaterial::Count) == 12);
+  CHECK(static_cast<unsigned>(BuildingMaterial::Door) == 12);
+  CHECK(static_cast<unsigned>(BuildingMaterial::OfficeWindow) == 13);
+  CHECK(static_cast<unsigned>(BuildingMaterial::IndustrialWindow) == 14);
+  CHECK(static_cast<unsigned>(BuildingMaterial::Count) == 15);
 }
 
 TEST_CASE("explicit facade material and colour take precedence over archetype",
@@ -593,4 +611,48 @@ TEST_CASE("explicit facade material and colour take precedence over archetype",
         v.colour[2] > .12f && v.colour[2] < .13f)
       found_explicit_tint = true;
   CHECK(found_explicit_tint);
+}
+
+TEST_CASE("glass and door atlas quads use upright normalized local UVs",
+          "[world][building_mesh][appearance]") {
+  constexpr std::array<std::array<float, 2>, 6> expected_uv = {
+      {{0, 1}, {1, 1}, {1, 0}, {0, 1}, {1, 0}, {0, 0}}};
+  const auto check_atlas_quads = [&](std::string_view type,
+                                     BuildingMaterial window_material) {
+    auto b = house();
+    b.type = type;
+    b.roof_shape = "flat";
+    const auto mesh = build_building_mesh(b, opts());
+    std::size_t window_quads = 0, door_vertices = 0;
+    for (std::size_t i = 0; i + 2 < mesh.vertices.size(); i += 3) {
+      const auto material = mesh.vertices[i].material;
+      if (material != window_material && material != BuildingMaterial::Door)
+        continue;
+      REQUIRE(i + 5 < mesh.vertices.size());
+      for (std::size_t j = 0; j < expected_uv.size(); ++j) {
+        const auto &v = mesh.vertices[i + j];
+        CHECK(v.material == material);
+        CHECK(v.uv == expected_uv[j]);
+        CHECK((v.uv[0] >= 0 && v.uv[0] <= 1));
+        CHECK((v.uv[1] >= 0 && v.uv[1] <= 1));
+        CHECK(v.colour == (std::array<float, 3>{1, 1, 1}));
+      }
+      const auto &bottom_left = mesh.vertices[i].position;
+      const auto &bottom_right = mesh.vertices[i + 1].position;
+      const auto &top_right = mesh.vertices[i + 2].position;
+      CHECK(std::abs(bottom_left[2] - bottom_right[2]) < 1e-4);
+      CHECK(top_right[2] > bottom_right[2]);
+      if (material == window_material)
+        ++window_quads;
+      else
+        door_vertices += 6;
+      i += 3; // skip the second triangle of this emitted quad
+    }
+    CHECK(window_quads == mesh.windows);
+    CHECK(door_vertices == 6);
+    CHECK(mesh.doors == 1);
+  };
+  check_atlas_quads("apartment", BuildingMaterial::Glass);
+  check_atlas_quads("commercial", BuildingMaterial::OfficeWindow);
+  check_atlas_quads("industrial", BuildingMaterial::IndustrialWindow);
 }

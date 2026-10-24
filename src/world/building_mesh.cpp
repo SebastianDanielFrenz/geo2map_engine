@@ -130,6 +130,16 @@ struct Builder {
     tri(a, b, c, tint, material);
     tri(a, c, d, tint, material);
   }
+  void quad_unit_uv(V a, V b, V c, V d, C tint, BuildingMaterial material) {
+    const auto first = mesh.vertices.size();
+    quad(a, b, c, d, tint, material);
+    if (mesh.vertices.size() != first + 6)
+      return;
+    constexpr std::array<std::array<float, 2>, 6> uv = {
+        {{0, 1}, {1, 1}, {1, 0}, {0, 1}, {1, 0}, {0, 0}}};
+    for (std::size_t i = 0; i < uv.size(); ++i)
+      mesh.vertices[first + i].uv = uv[i];
+  }
 };
 double area(const std::vector<BuildingPoint> &ring) {
   double a = 0;
@@ -148,7 +158,6 @@ struct FacadeStyle {
   C wall;
   C frame;
   C band;
-  C glass;
   double window_width = .52;
   double window_bottom = .28;
   double window_top = .76;
@@ -268,8 +277,14 @@ FacadeStyle facade_style(std::string_view type, std::string_view material,
     for (auto &channel : s.wall)
       channel = std::clamp(channel + shift, .12f, .90f);
   }
-  s.glass = seed % 2 == 0 ? C{.13f, .21f, .26f} : C{.20f, .27f, .30f};
   return s;
+}
+BuildingMaterial facade_window_material(std::string_view type) {
+  if (type == "commercial" || type == "retail" || type == "office")
+    return BuildingMaterial::OfficeWindow;
+  if (type == "industrial" || type == "warehouse" || type == "factory")
+    return BuildingMaterial::IndustrialWindow;
+  return BuildingMaterial::Glass;
 }
 std::optional<double> roof_direction_degrees(std::string_view value) {
   while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
@@ -641,6 +656,7 @@ BuildingMesh build_building_mesh(const Building &b,
                        : std::floor((eave - b.base - b.min_height) / storey)),
       1, 64);
   const double floor_h = (eave - b.base - b.min_height) / floors;
+  const auto window_material = facade_window_material(b.type);
   for (const auto *rings : {&b.outers, &b.inners})
     for (const auto &r : *rings) {
       const bool inner = rings == &b.inners;
@@ -719,9 +735,11 @@ BuildingMesh build_building_mesh(const Building &b,
               m.box(at(center - half - .07, floor, .015), vec(2 * half + .14),
                     {nx * .075, ny * .075, 0}, {0, 0, door_h + .08},
                     facade.frame, BuildingMaterial::Frame);
-              m.box(at(center - half, floor + .025, .08), vec(2 * half),
-                    {nx * .035, ny * .035, 0}, {0, 0, door_h - .025},
-                    {.30f, .23f, .16f}, BuildingMaterial::Frame);
+              m.quad_unit_uv(at(center - half, floor + .025, .115),
+                             at(center + half, floor + .025, .115),
+                             at(center + half, floor + door_h - .025, .115),
+                             at(center - half, floor + door_h - .025, .115),
+                             {1, 1, 1}, BuildingMaterial::Door);
               m.box(at(center + half * .65, floor + 1.0, .115), vec(.09),
                     {nx * .05, ny * .05, 0}, {0, 0, .035}, {.65f, .65f, .63f},
                     BuildingMaterial::Frame);
@@ -731,8 +749,8 @@ BuildingMesh build_building_mesh(const Building &b,
             m.quad(at(s0 - .06, z0 - .06, .012), at(s1 + .06, z0 - .06, .012),
                    at(s1 + .06, z1 + .06, .012), at(s0 - .06, z1 + .06, .012),
                    facade.frame, BuildingMaterial::Frame);
-            m.quad(at(s0, z0, .018), at(s1, z0, .018), at(s1, z1, .018),
-                   at(s0, z1, .018), facade.glass, BuildingMaterial::Glass);
+            m.quad_unit_uv(at(s0, z0, .018), at(s1, z0, .018), at(s1, z1, .018),
+                           at(s0, z1, .018), {1, 1, 1}, window_material);
             if (facade.mullions && s1 - s0 > .55) {
               const double mid = (s0 + s1) * .5;
               m.quad(at(mid - .025, z0, .026), at(mid + .025, z0, .026),

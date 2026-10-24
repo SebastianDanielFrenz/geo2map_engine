@@ -23,6 +23,9 @@ enum class BuildingMaterial : std::uint8_t {
   Timber,
   WallSmooth,
   Cladding,
+  Door,
+  OfficeWindow,
+  IndustrialWindow,
   Count
 };
 enum class RoofForm : std::uint8_t {

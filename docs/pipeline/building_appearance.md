@@ -42,8 +42,21 @@ unchanged.
 
 `BuildingMaterial` IDs 0 through 7 remain `Wall`, `Roof`, `Glass`, `Frame`,
 `Brick`, `Slate`, `FlatRoof`, and `Metal`. Facade IDs are appended: `Stone` 8,
-`Timber` 9, `WallSmooth` 10, and `Cladding` 11; `Count` is 12. Render bindings
-can size their material batches from `Count`.
+`Timber` 9, `WallSmooth` 10, `Cladding` 11, `Door` 12, `OfficeWindow` 13,
+and `IndustrialWindow` 14; `Count` is 15. Residential and generic windows use
+`Glass`; commercial, retail, and office windows share `OfficeWindow`; industrial,
+warehouse, and factory windows share `IndustrialWindow`. A near tile can add at
+most two window material batches when these archetypes are present, regardless
+of how many windows it contains. Render bindings can size batches from `Count`.
+
+Window surfaces (`Glass`, `OfficeWindow`, `IndustrialWindow`) and opaque door
+panels (`Door`) use one upright unit quad each, with image-origin UVs:
+bottom-left `(0,1)`, bottom-right `(1,1)`, top-right `(1,0)`, and top-left
+`(0,0)`. This keeps decoded texture images upright when UV `(0,0)` addresses
+the image's top-left. They use a white vertex tint for atlas colour. The door
+retains its frame and handle but uses a single front panel instead of a solid
+box insert. These atlas surfaces keep six vertices per quad;
+`facade_detail=false` emits no window, door, or facade frame detail.
 
 ## Geometry and bounds
 
