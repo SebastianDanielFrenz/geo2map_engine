@@ -535,3 +535,6 @@ Offline canonical elevation preparation: [combined pipeline](elevation_preparati
 Bounded local Mapterhorn archive extraction: [PMTiles v3](mapterhorn_pmtiles.md).
 
 Bridge visual limits and clearance: [bridge_appearance.md](bridge_appearance.md).
+
+Facade archetypes and material precedence: [building_appearance.md](building_appearance.md).
+Native appearance comparison and Godot gallery: [appearance_review.md](appearance_review.md).

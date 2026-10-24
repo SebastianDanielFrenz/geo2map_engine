@@ -144,6 +144,133 @@ double area(const std::vector<BuildingPoint> &ring) {
 struct Box {
   double e = 0, n = 0, ux = 0, uy = 0, hl = 0, hw = 0;
 };
+struct FacadeStyle {
+  C wall;
+  C frame;
+  C band;
+  C glass;
+  double window_width = .52;
+  double window_bottom = .28;
+  double window_top = .76;
+  double bay_scale = 1.0;
+  double frame_depth = .018;
+  bool plinth = true;
+  bool floor_bands = false;
+  bool mullions = false;
+  bool residential_entry = true;
+  bool any_entry = false;
+  BuildingMaterial wall_material = BuildingMaterial::Wall;
+};
+FacadeStyle facade_style(std::string_view type, std::string_view material,
+                         std::uint64_t seed) {
+  FacadeStyle s;
+  // Archetypes describe visual conventions only; they do not claim to infer
+  // measured construction facts from the OSM building type.
+  if (type == "apartment" || type == "apartments" || type == "dormitory") {
+    s.wall = {.70f, .69f, .65f};
+    s.frame = {.24f, .25f, .26f};
+    s.band = {.54f, .54f, .52f};
+    s.window_width = .60;
+    s.bay_scale = .65;
+    s.window_bottom = .24;
+    s.window_top = .78;
+    s.floor_bands = true;
+    s.mullions = true;
+    s.any_entry = true;
+    s.wall_material = BuildingMaterial::WallSmooth;
+  } else if (type == "commercial" || type == "retail" || type == "office") {
+    s.wall = {.72f, .71f, .67f};
+    s.frame = {.20f, .23f, .25f};
+    s.band = {.49f, .50f, .50f};
+    s.window_width = .72;
+    s.bay_scale = 1.1;
+    s.window_bottom = .20;
+    s.window_top = .80;
+    s.floor_bands = true;
+    s.mullions = true;
+    s.any_entry = true;
+    s.wall_material = BuildingMaterial::WallSmooth;
+  } else if (type == "industrial" || type == "warehouse" || type == "factory") {
+    s.wall = {.64f, .65f, .63f};
+    s.frame = {.27f, .29f, .29f};
+    s.band = {.43f, .45f, .45f};
+    s.window_width = .40;
+    s.bay_scale = 1.8;
+    s.window_bottom = .55;
+    s.window_top = .84;
+    s.floor_bands = true;
+    s.plinth = true;
+    s.any_entry = true;
+    s.wall_material = BuildingMaterial::Cladding;
+  } else if (type == "townhouse" || type == "terrace" || type == "row_house") {
+    s.wall = {.76f, .71f, .62f};
+    s.frame = {.31f, .25f, .20f};
+    s.band = {.58f, .52f, .43f};
+    s.window_width = .46;
+    s.bay_scale = .82;
+    s.window_bottom = .30;
+    s.window_top = .79;
+    s.residential_entry = true;
+  } else {
+    // Detached and generic low-rise residential buildings use a restrained
+    // plaster palette and slightly taller openings.
+    s.wall = {.78f, .74f, .66f};
+    s.frame = {.34f, .31f, .27f};
+    s.band = {.62f, .58f, .51f};
+    s.window_width = .50;
+    s.window_bottom = .27;
+    s.window_top = .78;
+  }
+  if (material == "brick" || material == "masonry") {
+    s.wall = {.58f, .31f, .23f};
+    s.wall_material = BuildingMaterial::Brick;
+  } else if (material == "stone" || material == "sandstone" ||
+             material == "limestone" || material == "granite") {
+    s.wall = {.61f, .59f, .54f};
+    s.wall_material = BuildingMaterial::Stone;
+  } else if (material == "concrete") {
+    s.wall = {.62f, .64f, .63f};
+    s.wall_material = BuildingMaterial::WallSmooth;
+  } else if (material == "wood" || material == "timber") {
+    s.wall = {.48f, .34f, .23f};
+    s.wall_material = BuildingMaterial::Timber;
+  } else if (material == "metal" || material == "steel" ||
+             material == "aluminium" || material == "aluminum") {
+    s.wall = {.55f, .58f, .59f};
+    s.wall_material = BuildingMaterial::Cladding;
+  } else if (material == "plaster" || material == "render") {
+    s.wall_material = BuildingMaterial::Wall;
+  }
+  // Textured facade materials supply their own colour. Keep their vertex tint
+  // near white so the texture is not darkened; an explicit building:colour
+  // still overrides this fallback in build_building_mesh.
+  if (s.wall_material != BuildingMaterial::Wall)
+    s.wall = {.90f, .89f, .86f};
+
+  // A small deterministic whole-building variant gives otherwise identical
+  // houses a different opening cadence and frame finish without per-window
+  // noise. Type archetypes remain recognizable because their base proportions
+  // and details are adjusted only modestly.
+  const unsigned variant = static_cast<unsigned>(seed % 3);
+  if (variant == 0) {
+    s.window_width *= .92;
+    s.bay_scale *= 1.06;
+  } else if (variant == 2) {
+    s.window_width *= 1.08;
+    s.bay_scale *= .94;
+  }
+  const float frame_shift = variant == 0 ? .025f : variant == 2 ? -.025f : 0.f;
+  for (auto &channel : s.frame)
+    channel = std::clamp(channel + frame_shift, .10f, .80f);
+  if (s.wall_material == BuildingMaterial::Wall) {
+    const float shift =
+        static_cast<float>(static_cast<int>(seed % 5) - 2) * .018f;
+    for (auto &channel : s.wall)
+      channel = std::clamp(channel + shift, .12f, .90f);
+  }
+  s.glass = seed % 2 == 0 ? C{.13f, .21f, .26f} : C{.20f, .27f, .30f};
+  return s;
+}
 std::optional<double> roof_direction_degrees(std::string_view value) {
   while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
     value.remove_prefix(1);
@@ -441,12 +568,8 @@ BuildingMesh build_building_mesh(const Building &b,
                  b.base};
   const auto seed = mix(static_cast<std::uint64_t>(b.id) ^ options.seed ^
                         (b.relation ? 0xa0761d6478bd642fULL : 0));
-  constexpr C palette[] = {{.77f, .73f, .65f},
-                           {.68f, .64f, .55f},
-                           {.84f, .80f, .70f},
-                           {.63f, .45f, .34f},
-                           {.69f, .70f, .69f}};
-  const C wall = colour(b.colour, palette[seed % 5]);
+  const auto facade = facade_style(b.type, b.material, seed);
+  const C wall = colour(b.colour, facade.wall);
   const C roof = colour(b.roof_colour, seed % 3 == 0 ? C{.24f, .25f, .27f}
                                                      : C{.43f, .21f, .14f});
   const double top = b.base + b.height;
@@ -530,40 +653,72 @@ BuildingMesh build_building_mesh(const Building &b,
                      len = std::sqrt(dx * dx + dy * dy);
         if (len < .001)
           continue;
+        const double nx = dy / len, ny = -dx / len;
+        const auto at = [&](double s, double z, double off) -> V {
+          return {a.e + dx / len * s + nx * off, a.n + dy / len * s + ny * off,
+                  z};
+        };
         m.quad({a.e, a.n, b.bottom}, {c.e, c.n, b.bottom}, {c.e, c.n, eave},
-               {a.e, a.n, eave}, wall, BuildingMaterial::Wall);
+               {a.e, a.n, eave}, wall, facade.wall_material);
         if (!options.facade_detail || floor_h < 2 || b.type == "garage" ||
             b.type == "garages" || b.type == "shed")
           continue;
-        const int bays =
-            std::clamp(static_cast<int>(std::floor(len / bay)), 1, 64);
+        const double facade_base = b.base + b.min_height;
+        if (facade.plinth && !inner && floor_h > .55) {
+          const double z0 = facade_base, z1 = std::min(eave, facade_base + .38);
+          m.quad(at(0, z0, .012), at(len, z0, .012), at(len, z1, .012),
+                 at(0, z1, .012), facade.band, BuildingMaterial::Frame);
+        }
+        if (facade.floor_bands) {
+          for (int floor = 1; floor < floors; ++floor) {
+            const double z = facade_base + floor_h * floor;
+            m.quad(at(0, z - .035, .018), at(len, z - .035, .018),
+                   at(len, z + .035, .018), at(0, z + .035, .018), facade.band,
+                   BuildingMaterial::Frame);
+          }
+        }
+        const int bays = std::clamp(
+            static_cast<int>(std::floor(len / (bay * facade.bay_scale))), 1,
+            64);
         const double width = len / bays;
-        const double nx = dy / len, ny = -dx / len;
         for (int f = 0; f < floors; ++f)
           for (int k = 0; k < bays; ++k) {
             if (m.mesh.windows >= std::min(options.max_windows, 4096U))
               break;
-            const double s0 = width * (k + .25), s1 = width * (k + .75),
-                         z0 = b.base + b.min_height + floor_h * (f + .28),
-                         z1 = b.base + b.min_height + floor_h * (f + .76);
-            const auto at = [&](double s, double z, double off) -> V {
-              return {a.e + dx / len * s + nx * off,
-                      a.n + dy / len * s + ny * off, z};
-            };
-            if (!inner && i == 0 && f == 0 && k == 0 &&
-                (b.type == "house" || b.type == "detached" ||
-                 b.type == "semidetached_house" || b.type == "terrace" ||
-                 b.type == "residential")) {
+            double opening = facade.window_width;
+            double bottom_fraction = facade.window_bottom;
+            double top_fraction = facade.window_top;
+            if ((b.type == "commercial" || b.type == "retail" ||
+                 b.type == "office") &&
+                f == 0) {
+              opening = .88;
+              bottom_fraction = .08;
+              top_fraction = .92;
+            }
+            const double s0 = width * (k + (1 - opening) * .5),
+                         s1 = width * (k + (1 + opening) * .5),
+                         z0 = facade_base + floor_h * (f + bottom_fraction),
+                         z1 = facade_base + floor_h * (f + top_fraction);
+            const bool residential =
+                b.type == "house" || b.type == "detached" ||
+                b.type == "semidetached_house" || b.type == "terrace" ||
+                b.type == "townhouse" || b.type == "row_house" ||
+                b.type == "residential";
+            const bool has_entry =
+                facade.any_entry || (facade.residential_entry && residential);
+            if (!inner && i == 0 && f == 0 && k == 0 && has_entry) {
               const double center = (s0 + s1) * .5,
-                           half = std::min(.525, (s1 - s0) * .5),
-                           floor = b.base + b.min_height;
-              const double door_h = std::min(2.15, floor_h * .85);
+                           half = std::min(residential ? .525 : .7,
+                                           (s1 - s0) * .42),
+                           floor = facade_base;
+              const double door_h =
+                  std::min(residential ? 2.15 : 2.35, floor_h * .88);
               const auto vec = [&](double width) {
                 return V{dx / len * width, dy / len * width, 0};
               };
               m.box(at(center - half - .07, floor, .015), vec(2 * half + .14),
                     {nx * .075, ny * .075, 0}, {0, 0, door_h + .08},
-                    {.34f, .32f, .28f}, BuildingMaterial::Frame);
+                    facade.frame, BuildingMaterial::Frame);
               m.box(at(center - half, floor + .025, .08), vec(2 * half),
                     {nx * .035, ny * .035, 0}, {0, 0, door_h - .025},
                     {.30f, .23f, .16f}, BuildingMaterial::Frame);
@@ -575,17 +730,17 @@ BuildingMesh build_building_mesh(const Building &b,
             }
             m.quad(at(s0 - .06, z0 - .06, .012), at(s1 + .06, z0 - .06, .012),
                    at(s1 + .06, z1 + .06, .012), at(s0 - .06, z1 + .06, .012),
-                   {.27f, .26f, .24f}, BuildingMaterial::Frame);
-            const auto variation =
-                mix(seed ^ static_cast<std::uint64_t>(
-                               i * 4096 + static_cast<std::size_t>(f) * 64 +
-                               static_cast<std::size_t>(k)));
-            const C glass =
-                variation % 7 == 0 ? C{.30f, .33f, .35f} : C{.12f, .20f, .25f};
+                   facade.frame, BuildingMaterial::Frame);
             m.quad(at(s0, z0, .018), at(s1, z0, .018), at(s1, z1, .018),
-                   at(s0, z1, .018), glass, BuildingMaterial::Glass);
-            if (f == 0) {
-              const C sill{.65f, .64f, .60f};
+                   at(s0, z1, .018), facade.glass, BuildingMaterial::Glass);
+            if (facade.mullions && s1 - s0 > .55) {
+              const double mid = (s0 + s1) * .5;
+              m.quad(at(mid - .025, z0, .026), at(mid + .025, z0, .026),
+                     at(mid + .025, z1, .026), at(mid - .025, z1, .026),
+                     facade.frame, BuildingMaterial::Frame);
+            }
+            if (f == 0 && residential) {
+              const C sill = facade.band;
               m.quad(at(s0 - .1, z0 - .08, .02), at(s1 + .1, z0 - .08, .02),
                      at(s1 + .1, z0 - .08, .22), at(s0 - .1, z0 - .08, .22),
                      sill, BuildingMaterial::Frame);
@@ -612,8 +767,8 @@ BuildingMesh build_building_mesh(const Building &b,
         if (b.roof_colour.empty())
           v.colour = {1, 1, 1};
       }
-      if (v.material == BuildingMaterial::Wall && b.material == "brick")
-        v.material = BuildingMaterial::Brick;
+      if (v.material == BuildingMaterial::Wall)
+        v.material = facade.wall_material;
     }
     return std::move(m.mesh);
   }
@@ -680,8 +835,8 @@ BuildingMesh build_building_mesh(const Building &b,
         if (b.roof_colour.empty())
           v.colour = {1, 1, 1};
       }
-      if (v.material == BuildingMaterial::Wall && b.material == "brick")
-        v.material = BuildingMaterial::Brick;
+      if (v.material == BuildingMaterial::Wall)
+        v.material = facade.wall_material;
     }
     return std::move(m.mesh);
   }
@@ -735,8 +890,8 @@ BuildingMesh build_building_mesh(const Building &b,
       if (b.roof_colour.empty())
         v.colour = {1, 1, 1};
     }
-    if (v.material == BuildingMaterial::Wall && b.material == "brick")
-      v.material = BuildingMaterial::Brick;
+    if (v.material == BuildingMaterial::Wall)
+      v.material = facade.wall_material;
   }
   return std::move(m.mesh);
 }

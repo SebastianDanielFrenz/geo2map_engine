@@ -443,3 +443,154 @@ TEST_CASE("residential buildings include volumetric doors and supported "
   }
   CHECK(chimney);
 }
+
+TEST_CASE("facade archetypes change rhythm, openings, and mapped wall material",
+          "[world][building_mesh][appearance]") {
+  auto b = house();
+  b.roof_shape = "flat";
+  b.levels = 4;
+  const auto detached = build_building_mesh(b, opts());
+  b.type = "townhouse";
+  const auto townhouse = build_building_mesh(b, opts());
+  b.type = "apartment";
+  const auto apartment = build_building_mesh(b, opts());
+  b.type = "commercial";
+  const auto commercial = build_building_mesh(b, opts());
+  b.type = "industrial";
+  const auto industrial = build_building_mesh(b, opts());
+
+  CHECK(detached.windows > 0);
+  CHECK(townhouse.windows > detached.windows);
+  CHECK(apartment.windows > townhouse.windows);
+  CHECK(commercial.windows > 0);
+  CHECK(commercial.windows != townhouse.windows);
+  CHECK(industrial.windows < apartment.windows);
+  const auto has_material = [](const BuildingMesh &mesh,
+                               BuildingMaterial material) {
+    return std::any_of(
+        mesh.vertices.begin(), mesh.vertices.end(),
+        [material](const auto &v) { return v.material == material; });
+  };
+  CHECK(has_material(detached, BuildingMaterial::Wall));
+  CHECK(has_material(apartment, BuildingMaterial::WallSmooth));
+  CHECK(has_material(commercial, BuildingMaterial::WallSmooth));
+  CHECK(has_material(industrial, BuildingMaterial::Cladding));
+  CHECK(apartment.doors == 1);
+  CHECK(commercial.doors == 1);
+  CHECK(industrial.doors == 1);
+
+  std::vector<double> glass_bottoms;
+  for (std::size_t i = 0; i + 2 < apartment.vertices.size(); i += 3) {
+    if (apartment.vertices[i].material != BuildingMaterial::Glass)
+      continue;
+    glass_bottoms.push_back(std::min({apartment.vertices[i].position[2],
+                                      apartment.vertices[i + 1].position[2],
+                                      apartment.vertices[i + 2].position[2]}));
+  }
+  std::sort(glass_bottoms.begin(), glass_bottoms.end());
+  glass_bottoms.erase(
+      std::unique(glass_bottoms.begin(), glass_bottoms.end(),
+                  [](double a, double c) { return std::abs(a - c) < 1e-4; }),
+      glass_bottoms.end());
+  REQUIRE(glass_bottoms.size() == 4);
+  for (std::size_t floor = 1; floor < glass_bottoms.size(); ++floor)
+    CHECK(std::abs(glass_bottoms[floor] - glass_bottoms[floor - 1] - 2.25) <
+          1e-4);
+
+  auto width_of_widest_glass = [](const BuildingMesh &mesh) {
+    double widest = 0;
+    for (std::size_t i = 0; i + 2 < mesh.vertices.size(); i += 3) {
+      if (mesh.vertices[i].material != BuildingMaterial::Glass)
+        continue;
+      const auto &a = mesh.vertices[i].position;
+      const auto &b = mesh.vertices[i + 1].position;
+      if (std::abs(a[2] - b[2]) < 1e-4)
+        widest = std::max(
+            widest, static_cast<double>(std::hypot(b[0] - a[0], b[1] - a[1])));
+    }
+    return widest;
+  };
+  double narrowest_variant = 100, widest_variant = 0;
+  for (std::int64_t id = 1; id <= 12; ++id) {
+    b = house();
+    b.id = id;
+    const auto variant = build_building_mesh(b, opts());
+    const auto width = width_of_widest_glass(variant);
+    narrowest_variant = std::min(narrowest_variant, width);
+    widest_variant = std::max(widest_variant, width);
+    CHECK(hash(variant) == hash(build_building_mesh(b, opts())));
+  }
+  CHECK(widest_variant - narrowest_variant > .1);
+
+  const auto full_vertices = apartment.vertices.size();
+  b.type = "apartment";
+  auto lite = opts();
+  lite.facade_detail = false;
+  const auto apartment_lite = build_building_mesh(b, lite);
+  CHECK(apartment_lite.windows == 0);
+  CHECK(apartment_lite.doors == 0);
+  CHECK_FALSE(has_material(apartment_lite, BuildingMaterial::Frame));
+  CHECK_FALSE(has_material(apartment_lite, BuildingMaterial::Glass));
+  CHECK(apartment_lite.vertices.size() < full_vertices);
+
+  // Existing semantic IDs remain stable; new facade IDs are appended.
+  CHECK(static_cast<unsigned>(BuildingMaterial::Wall) == 0);
+  CHECK(static_cast<unsigned>(BuildingMaterial::Metal) == 7);
+  CHECK(static_cast<unsigned>(BuildingMaterial::Stone) == 8);
+  CHECK(static_cast<unsigned>(BuildingMaterial::Timber) == 9);
+  CHECK(static_cast<unsigned>(BuildingMaterial::WallSmooth) == 10);
+  CHECK(static_cast<unsigned>(BuildingMaterial::Cladding) == 11);
+  CHECK(static_cast<unsigned>(BuildingMaterial::Count) == 12);
+}
+
+TEST_CASE("explicit facade material and colour take precedence over archetype",
+          "[world][building_mesh][appearance]") {
+  auto b = house();
+  b.type = "industrial";
+  b.material = "stone";
+  const auto stone = build_building_mesh(b, opts());
+  bool has_stone = false, stone_tint_is_neutral = false;
+  for (const auto &v : stone.vertices)
+    if (v.material == BuildingMaterial::Stone) {
+      has_stone = true;
+      stone_tint_is_neutral = v.colour[0] > .89f && v.colour[0] < .91f &&
+                              v.colour[1] > .88f && v.colour[1] < .90f &&
+                              v.colour[2] > .85f && v.colour[2] < .87f;
+      break;
+    }
+  CHECK(has_stone);
+  CHECK(stone_tint_is_neutral);
+
+  b.material = "wood";
+  const auto timber = build_building_mesh(b, opts());
+  CHECK(
+      std::any_of(timber.vertices.begin(), timber.vertices.end(), [](auto &v) {
+        return v.material == BuildingMaterial::Timber;
+      }));
+  b.material = "metal";
+  const auto cladding = build_building_mesh(b, opts());
+  CHECK(std::any_of(
+      cladding.vertices.begin(), cladding.vertices.end(),
+      [](auto &v) { return v.material == BuildingMaterial::Cladding; }));
+  b.material = "concrete";
+  const auto concrete = build_building_mesh(b, opts());
+  CHECK(std::any_of(
+      concrete.vertices.begin(), concrete.vertices.end(),
+      [](auto &v) { return v.material == BuildingMaterial::WallSmooth; }));
+  b.material = "plaster";
+  const auto plaster = build_building_mesh(b, opts());
+  CHECK(std::any_of(
+      plaster.vertices.begin(), plaster.vertices.end(),
+      [](auto &v) { return v.material == BuildingMaterial::Wall; }));
+
+  b.material = "brick";
+  b.colour = "#804020";
+  const auto brick = build_building_mesh(b, opts());
+  bool found_explicit_tint = false;
+  for (const auto &v : brick.vertices)
+    if (v.material == BuildingMaterial::Brick && v.colour[0] > .49f &&
+        v.colour[0] < .51f && v.colour[1] > .24f && v.colour[1] < .26f &&
+        v.colour[2] > .12f && v.colour[2] < .13f)
+      found_explicit_tint = true;
+  CHECK(found_explicit_tint);
+}

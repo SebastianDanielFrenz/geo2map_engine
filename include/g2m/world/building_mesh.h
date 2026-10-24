@@ -8,6 +8,8 @@
 #include <vector>
 
 namespace g2m::world {
+// Consumer material semantics. Keep the original IDs 0..7 stable; Count is
+// the batch-array size for consumers that bind one batch per semantic.
 enum class BuildingMaterial : std::uint8_t {
   Wall,
   Roof,
@@ -16,7 +18,12 @@ enum class BuildingMaterial : std::uint8_t {
   Brick,
   Slate,
   FlatRoof,
-  Metal
+  Metal,
+  Stone,
+  Timber,
+  WallSmooth,
+  Cladding,
+  Count
 };
 enum class RoofForm : std::uint8_t {
   Flat,

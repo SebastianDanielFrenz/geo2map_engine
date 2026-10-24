@@ -117,7 +117,7 @@ TEST_CASE("terrain port geometry has cross-platform golden hashes",
   hashes << std::hex << building.hash << " " << marking.hash << " "
          << bridge.hash << " " << dsm.hash;
   CHECK(hashes.str() ==
-        "8f2d2286f48c4c7a 67907b18c44ae827 922b58ce77ec77ed fbd2872c5d41ffef");
+        "49831207ebbd3b3b 67907b18c44ae827 a87a2be14ba50dc5 fbd2872c5d41ffef");
 }
 
 TEST_CASE("mapped roof azimuths have cross-platform geometry hashes",
@@ -160,5 +160,5 @@ TEST_CASE("mapped roof azimuths have cross-platform geometry hashes",
   }
   std::ostringstream encoded;
   encoded << std::hex << digest.hash;
-  CHECK(encoded.str() == "8fa3eb8ea315fa64");
+  CHECK(encoded.str() == "39da70c89470d1f7");
 }

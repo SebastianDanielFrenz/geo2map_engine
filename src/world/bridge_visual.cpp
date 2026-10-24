@@ -23,25 +23,29 @@ double length(V a) {
 struct Builder {
   mesh::TerrainChunkMesh mesh;
   bool failed = false;
-  void beam(V a, V b, double width) {
+  void box(V a, V b, double side_width, double up_width) {
     const auto d = sub(b, a);
     const double len = length(d);
     if (len < .01)
       return;
     // Bound visual geometry independently of the physical deck's 16-bit mesh.
-    if (mesh.positions.size() / 3 + 36 > 40000) {
+    if (mesh.positions.size() / 3 + 24 > 40000) {
       failed = true;
       return;
     }
     const auto axis = mul(d, 1 / len);
-    auto side = cross(axis, std::abs(axis[2]) > .9 ? V{1, 0, 0} : V{0, 0, 1});
-    side = mul(side, width * .5 / length(side));
-    const auto up = mul(cross(axis, side), 1.0);
+    auto side = cross(V{0, 0, 1}, axis);
+    if (length(side) < .01)
+      side = cross(V{1, 0, 0}, axis);
+    side = mul(side, side_width * .5 / length(side));
+    const auto perpendicular = cross(axis, side);
+    const auto up = mul(perpendicular, up_width * .5 / length(perpendicular));
     std::array<V, 8> p;
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 8; ++i) {
+      const auto at = i < 4 ? a : b;
       p[static_cast<std::size_t>(i)] =
-          add(i < 4 ? a : b,
-              add(mul(side, (i & 1) ? 1 : -1), mul(up, (i & 2) ? 1 : -1)));
+          add(at, add(mul(side, (i & 1) ? 1 : -1), mul(up, (i & 2) ? 1 : -1)));
+    }
     constexpr int faces[6][4] = {{0, 2, 3, 1}, {4, 5, 7, 6}, {0, 1, 5, 4},
                                  {2, 6, 7, 3}, {0, 4, 6, 2}, {1, 3, 7, 5}};
     for (const auto &f : faces) {
@@ -50,10 +54,9 @@ struct Builder {
                      sub(p[static_cast<std::size_t>(f[2])],
                          p[static_cast<std::size_t>(f[0])]));
       n = mul(n, 1 / length(n));
-      for (int i : {f[0], f[1], f[2], f[0], f[2], f[3]}) {
+      const auto first = static_cast<std::uint16_t>(mesh.positions.size() / 3);
+      for (int i : {f[0], f[1], f[2], f[3]}) {
         const auto v = p[static_cast<std::size_t>(i)];
-        mesh.indices.push_back(
-            static_cast<std::uint16_t>(mesh.positions.size() / 3));
         for (auto c : v)
           mesh.positions.push_back(static_cast<float>(c));
         for (auto c : n)
@@ -61,7 +64,13 @@ struct Builder {
         mesh.land_class.push_back(
             static_cast<std::uint8_t>(LandClass::BuiltUp));
       }
+      for (auto i : {0, 1, 2, 0, 2, 3})
+        mesh.indices.push_back(static_cast<std::uint16_t>(first + i));
     }
+  }
+  void beam(V a, V b, double width) { box(a, b, width, width); }
+  void wall(V a, V b, double thickness, double height) {
+    box(a, b, thickness, height);
   }
 };
 } // namespace
@@ -75,6 +84,18 @@ BridgeFacts bridge_facts(const RoadGraphWay &way) {
       facts.inventory_id = v;
     else if (k == "bridge:structure")
       facts.structure_tag = v;
+    else if (k == "highway")
+      facts.highway_tag = v;
+    else if (k == "railway")
+      facts.railway_tag = v;
+    else if (k == "bridge")
+      facts.bridge_tag = v;
+    else if (k == "bridge:material")
+      facts.bridge_material_tag = v;
+    else if (k == "barrier")
+      facts.barrier_tag = v;
+    else if (k == "fence_type" && v == "railing" && facts.barrier_tag.empty())
+      facts.barrier_tag = "railing";
   }
   const auto &s = facts.structure_tag;
   if (s == "beam" || s == "slab")
@@ -93,6 +114,38 @@ BridgeFacts bridge_facts(const RoadGraphWay &way) {
     if (k == "bridge:movable" && v != "no" && !v.empty())
       facts.form = BridgeForm::Movable;
   facts.explicit_form = facts.form != BridgeForm::Generic;
+
+  // OSM describes bridge function and load-bearing structure, but does not
+  // imply a particular parapet from `bridge:structure`. Choose a conservative
+  // shape from the carrying way's use; a mapped barrier on that same way is a
+  // more direct statement and takes precedence.
+  const bool railway_carrying_way =
+      facts.railway_tag == "rail" || facts.railway_tag == "tram" ||
+      facts.railway_tag == "light_rail" ||
+      facts.railway_tag == "narrow_gauge" || facts.railway_tag == "subway" ||
+      facts.railway_tag == "monorail" || facts.railway_tag == "funicular";
+  if (railway_carrying_way)
+    facts.parapet_style = BridgeParapetStyle::RailwayParapet;
+  else if (facts.highway_tag == "footway" || facts.highway_tag == "cycleway" ||
+           facts.highway_tag == "path" || facts.highway_tag == "steps" ||
+           facts.highway_tag == "pedestrian" ||
+           facts.highway_tag == "bridleway" || facts.bridge_tag == "boardwalk")
+    facts.parapet_style = BridgeParapetStyle::PedestrianRailing;
+  else if (facts.highway_tag == "motorway" || facts.highway_tag == "trunk")
+    facts.parapet_style = BridgeParapetStyle::ConcreteParapet;
+  else
+    facts.parapet_style = BridgeParapetStyle::RoadGuardrail;
+  if (facts.barrier_tag == "jersey_barrier") {
+    facts.parapet_style = BridgeParapetStyle::ConcreteParapet;
+    facts.parapet_style_inferred = false;
+  } else if (facts.barrier_tag == "guard_rail") {
+    facts.parapet_style = BridgeParapetStyle::RoadGuardrail;
+    facts.parapet_style_inferred = false;
+  } else if (facts.barrier_tag == "railing" ||
+             facts.barrier_tag == "handrail") {
+    facts.parapet_style = BridgeParapetStyle::PedestrianRailing;
+    facts.parapet_style_inferred = false;
+  }
   return facts;
 }
 BridgeVisual build_bridge_visual(const RoadDeck &deck,
@@ -119,6 +172,11 @@ BridgeVisual build_bridge_visual(const RoadDeck &deck,
   Builder b;
   std::copy(std::begin(deck.mesh.origin), std::end(deck.mesh.origin),
             std::begin(b.mesh.origin));
+  double edge_offset = .22;
+  if (facts.parapet_style == BridgeParapetStyle::ConcreteParapet)
+    edge_offset = .27;
+  else if (facts.parapet_style == BridgeParapetStyle::RailwayParapet)
+    edge_offset = .25;
   const auto point = [&](double t, int side, double z) -> V {
     const double station =
         std::clamp(t, 0.0, 1.0) * static_cast<double>(rows - 1);
@@ -137,7 +195,7 @@ BridgeVisual build_bridge_visual(const RoadDeck &deck,
     outward[2] = 0;
     const auto w = length(outward);
     if (w > .01)
-      p = add(p, mul(outward, .22 / w));
+      p = add(p, mul(outward, edge_offset / w));
     p[2] += z;
     return p;
   };
@@ -194,14 +252,51 @@ BridgeVisual build_bridge_visual(const RoadDeck &deck,
   std::vector<double> rail_stations{0};
   for (const auto &interval : accepted)
     rail_stations.push_back(interval[1]);
+  const bool pedestrian =
+      facts.parapet_style == BridgeParapetStyle::PedestrianRailing;
+  const auto pedestrian_post_count =
+      static_cast<std::size_t>(std::ceil(span / .15)) + 1;
+  const auto parapet_beam_count =
+      2 * pedestrian_post_count + 4 * (rail_stations.size() - 1);
+  if (pedestrian && parapet_beam_count > 40000 / 24) {
+    out.unsupported = true;
+    return out;
+  }
   for (int side : {-1, 1}) {
-    for (std::size_t i = 0; i + 1 < rail_stations.size(); ++i) {
-      const double t = rail_stations[i], u = rail_stations[i + 1];
-      b.beam(point(t, side, 1.1), point(u, side, 1.1), .12);
-      b.beam(point(t, side, .55), point(u, side, .55), .08);
-      b.beam(point(t, side, 0), point(t, side, 1.1), .10);
+    if (facts.parapet_style == BridgeParapetStyle::ConcreteParapet ||
+        facts.parapet_style == BridgeParapetStyle::RailwayParapet) {
+      const double height =
+          facts.parapet_style == BridgeParapetStyle::RailwayParapet ? 1.45
+                                                                    : 1.0;
+      const double thickness =
+          facts.parapet_style == BridgeParapetStyle::RailwayParapet ? .3 : .34;
+      for (std::size_t i = 0; i + 1 < rail_stations.size(); ++i) {
+        const double t = rail_stations[i], u = rail_stations[i + 1];
+        b.wall(point(t, side, height * .5), point(u, side, height * .5),
+               thickness, height);
+      }
+    } else {
+      const double top = pedestrian ? 1.2 : .98;
+      const double lower = pedestrian ? .58 : .5;
+      const double rail_width = pedestrian ? .055 : .12;
+      const double post_width = pedestrian ? .065 : .10;
+      for (std::size_t i = 0; i + 1 < rail_stations.size(); ++i) {
+        const double t = rail_stations[i], u = rail_stations[i + 1];
+        b.beam(point(t, side, top), point(u, side, top), rail_width);
+        b.beam(point(t, side, lower), point(u, side, lower), rail_width * .8);
+      }
+      if (pedestrian) {
+        for (std::size_t i = 0; i < pedestrian_post_count; ++i) {
+          const double t = static_cast<double>(i) /
+                           static_cast<double>(pedestrian_post_count - 1);
+          b.beam(point(t, side, 0), point(t, side, top), post_width);
+        }
+      } else {
+        for (std::size_t i = 0; i < rail_stations.size(); ++i)
+          b.beam(point(rail_stations[i], side, 0),
+                 point(rail_stations[i], side, top), post_width);
+      }
     }
-    b.beam(point(1, side, 0), point(1, side, 1.1), .10);
   }
   const bool has_structural_form = form == BridgeForm::Truss ||
                                    form == BridgeForm::Suspension ||

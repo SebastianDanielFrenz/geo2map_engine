@@ -48,3 +48,6 @@ target_link_libraries(g2m_geographic_dem PRIVATE g2m_decode g2m_server g2m_layer
 
 add_executable(g2m_elevation_prepare ../../tools/elevation_prepare/main.cpp)
 target_link_libraries(g2m_elevation_prepare PRIVATE g2m_decode g2m_world g2m_dep_json g2m_warnings g2m_options)
+
+add_executable(g2m_appearance_preview ../../tools/appearance_preview/main.cpp)
+target_link_libraries(g2m_appearance_preview PRIVATE g2m_world g2m_dep_json g2m_warnings g2m_options)
