@@ -389,7 +389,10 @@ TEST_CASE("portal continuity (7a-1): the carved terrain across the join on the f
         const RoadGraph world = g2m_test::fixture_world(file);
         for (const bool tilted : {false, true}) {
             const DemFn dem = tilted ? DemFn(g2m_test::carve_tilted_dem) : DemFn{};
-            const CarveVerdict c = carved_axis(world, dem, served_road_completion_options());
+            // As in the Unterliederbach case: the carve of the design floor is phase 7b, so the bound is on the 7a-1 floors.
+            const CarveVerdict c = carved_axis(world, dem, g2m_test::served_7a1());
+            const CarveVerdict design = carved_axis(world, dem, served_road_completion_options());
+            std::printf("[portal carve %s %s] design floor: %zu checked, worst step excess %.3f m\n", file, tilted ? "tilted" : "flat", design.checked, design.worst);
             std::printf("[portal carve %s %s] %zu portals checked (open cuts), %zu skipped, worst step excess %.3f m\n", file, tilted ? "tilted" : "flat", c.checked, c.skipped, c.worst);
             // The previous release on the same fixture: the carve's own smoothing and the bumpy tilted DEM put steps beside a
             // portal whatever the profiles do; the anchor must not add to them.
