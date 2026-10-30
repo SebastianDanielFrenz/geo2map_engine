@@ -184,7 +184,7 @@ TEST_CASE("an end inside the tunnel network is anchored at the needed depth, not
     CHECK(f[200] == Catch::Approx(94.3).margin(1e-12));
 }
 
-TEST_CASE("Unterliederbach: Königsteiner Straße under the rail embankment (way 4812754)", "[structure]") {
+TEST_CASE("Unterliederbach: Koenigsteiner Strasse under the rail embankment (way 4812754)", "[structure]") {
     // Lowest DGM1 height across the 10 m carriageway every 1 m (g2m_structure_census --dump 4812754, store
     // rhein-main-hessen-r1); stations 4..30 and 37..45 lie under ground rail sidings on an embankment (OSM tags no bridge).
     const std::vector<double> ground{98.72, 98.83, 100.09, 100.33, 100.51, 100.69, 100.98, 101.41, 101.84, 102.22, 102.57, 102.88,
