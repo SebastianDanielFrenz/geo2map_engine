@@ -3,7 +3,7 @@
 //
 //   g2m_server --source DIR --scope SCOPE [--source-name NAME]
 //              [--derived DIR] [--derived-name NAME]
-//              [--layers terrain|roads|geometry|carved] [--world-seed N]
+//              [--layers terrain|roads|geometry|carved] [--fields] [--world-seed N]
 //              [--bind ADDR] [--port N] [--base-path /P] [--threads N]
 //              [--server-id ID] [--exit-on-stdin-eof]
 //
@@ -61,7 +61,7 @@ std::optional<T> parse_int(const std::string& s) {
 int usage(const std::string& why) {
     std::cerr << "g2m_server: " << why << "\n"
               << "usage: g2m_server --source DIR --scope SCOPE [--source-name NAME] [--derived DIR] [--derived-name NAME]\n"
-                 "                  [--layers terrain|roads|geometry|carved] [--world-seed N] [--bind ADDR] [--port N]\n"
+                 "                  [--layers terrain|roads|geometry|carved] [--fields] [--world-seed N] [--bind ADDR] [--port N]\n"
                  "                  [--base-path /P] [--threads N] [--server-id ID] [--exit-on-stdin-eof]\n";
     return 2;
 }
@@ -69,11 +69,11 @@ int usage(const std::string& why) {
 } // namespace
 
 int main(int argc, char** argv) {
-    const std::vector<std::string> bool_flags{"exit-on-stdin-eof", "help"};
+    const std::vector<std::string> bool_flags{"exit-on-stdin-eof", "help", "fields"};
     const auto args = g2m_tiler::parse_args(argc, argv, 1, bool_flags);
     if (args.flag("help")) return usage("help");
     static const char* const kKnown[] = {"source", "scope", "source-name", "derived", "derived-name", "layers", "world-seed",
-                                         "bind",   "port",  "base-path",   "threads", "server-id",    "exit-on-stdin-eof"};
+                                         "bind",   "port",  "base-path",   "threads", "server-id",    "exit-on-stdin-eof", "fields"};
     for (const auto& [k, v] : args.flags) {
         if (std::find(std::begin(kKnown), std::end(kKnown), k) == std::end(kKnown)) return usage("unknown option --" + k);
     }
@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
     }
 
     g2m::BuiltinTerrainDerivers derivers;
-    g2m::LocalReleaseParams params = g2m::builtin_local_release_params(*scope, derivers, {}, roads, geometry, carved);
+    g2m::LocalReleaseParams params = g2m::builtin_local_release_params(*scope, derivers, {}, roads, geometry, carved, /*include_classes=*/false, args.flag("fields"));
     params.world_seed = *world_seed;
     auto manifest = g2m::make_local_release(**sources, params);
     if (!manifest) {

@@ -5,6 +5,7 @@
 #include "fuzz_targets.h"
 
 #include "g2m/http/http_wire.h"
+#include "g2m/layer/field_tile.h"
 #include "g2m/layer/pack.h"
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_geom_tile.h"
@@ -314,6 +315,18 @@ void run(Target target, std::span<const std::uint8_t> data) {
                     for (std::size_t k = 0; k < n; ++k) check(std::isfinite(lanes[k].centre_t) && lanes[k].width_m >= 0.5, "xs eval: lane");
                 }
             }
+        }
+        return;
+    }
+    case Target::FieldsGeom: {
+        const auto body = body_of(data); if (!body) return;
+        const auto tile = g2m::decode_fields_geom(*body); if (!tile) return;
+        check(g2m::validate_field_tile(*tile).ok(), "fields.geom: decoded tile validates");
+        const auto enc = g2m::encode_fields_geom(*tile); check(enc.ok(), "fields.geom: re-encode");
+        const auto back = g2m::decode_fields_geom(*enc); check(back.ok() && *back == *tile, "fields.geom: round trip");
+        for (const auto& f : tile->fields) {
+            const auto hit = g2m::field_at(*tile, f.anchor);
+            check(hit.has_value() && *hit < tile->fields.size(), "fields.geom: the anchor is inside a field");
         }
         return;
     }

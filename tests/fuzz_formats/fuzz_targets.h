@@ -36,6 +36,7 @@ enum class Target {
     HttpRequest,   // g2m::http::parse_request (method byte, target line, If-None-Match lines) + header text
     HttpResponse,  // g2m::http::decode_response ("target\nstatus\nheaders\n\nbody"), then encode/decode is stable
     TerrainClass, // decode_body + decode_terrain_class (g2m.terrain.class, P2 slice 10) at a fixed key, round trip
+    FieldsGeom,   // decode_body + decode_fields_geom (g2m.fields.geom): a decoded tile validates, re-encodes to the same tile, field_at finds every anchor
 };
 
 struct TargetInfo {
@@ -47,7 +48,7 @@ inline constexpr TargetInfo kTargets[] = {
     {Target::Container, "container"}, {Target::Elev, "elev"}, {Target::Landcover, "landcover"},
     {Target::Osm, "osm"},             {Target::Pack, "pack"}, {Target::Manifest, "manifest"},
     {Target::Path, "path"},           {Target::Region, "region"}, {Target::Roadgraph, "roadgraph"}, {Target::Roadgeom, "roadgeom"},
-    {Target::RoadCrossSectionEval, "roadCrossSectionEval"}, {Target::TerrainClass, "terrainClass"},
+    {Target::RoadCrossSectionEval, "roadCrossSectionEval"}, {Target::TerrainClass, "terrainClass"}, {Target::FieldsGeom, "fieldsGeom"},
     {Target::PackDirectory, "packDirectory"}, {Target::HttpRequest, "httpRequest"}, {Target::HttpResponse, "httpResponse"},
 };
 

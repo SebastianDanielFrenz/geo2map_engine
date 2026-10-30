@@ -489,7 +489,7 @@ geo2map_engine/
                                       Dijkstra (node and point), route validators and GraphBuilder; route_scenes.h = the
                                       synthetic cross and random restricted grids
     golden/                           golden.h/.cpp + golden_g1.cpp + golden_g1c.cpp (g2m_golden, milestone G1c I6),
-                                      dump_main.cpp (g2m_golden_dump [g0|g1|g1c|...|g3c]), test_golden.cpp (g2m_golden_tests)
+                                      dump_main.cpp (g2m_golden_dump [g0|g1|g1c|...|g3c|g3f]), test_golden.cpp (g2m_golden_tests)
     fuzz/                             libFuzzer targets for g2m_decode (fuzz_zip, fuzz_tiff, fuzz_pbf) over a
                                       fuzz-instrumented copy of G2M_DECODE_SOURCES; same G2M_BUILD_FUZZERS gate and
                                       CTest `fuzz` label as fuzz_formats (WSL clang legs)
@@ -1141,6 +1141,21 @@ nodes with rank below the `RenderRoadLod` level's min_rank, or at a level withou
 terrain_classes` (precedence over `class_lookup`), `TerrainService::terrain_class` / `peek_terrain_class` (job kind 10). Library
 only: no layer, config text, release id or golden change. Tests `tests/world/test_chunk_terrain_classes.cpp`
 (`[terrain_class_window]`) and the served case in `test_terrain_service.cpp`.
+
+`g2m.fields.geom` v1 L2, body encoding 10 (farm field polygons; `docs/formats/fields_geom.md`, `docs/pipeline/fields.md`): reads
+`g2m.src.osm` only. Code `include/g2m/layer/{field_tile,field_subdivide,field_rules}.h`, `src/layer/{field_tile,field_subdivide,
+field_rules,derive_fields}.cpp`; rules `data/field_rules/de.json` (`g2m.field_rules/1`, embedded via `g2m_embed_json`, SHA-256 in the
+config hash). Blocks = closed landuse farmland/meadow/orchard/vineyard/farmyard ways and multipolygon relations; cut on a 1 m
+integer raster along splitters (tracks, paths, roads, railways, waterways, hedges, walls, tree rows) and around obstacle areas;
+sliver, keep-whole, obstacle-cap and budget rules from the file. `FieldTile` (fields touching the tile, `Owned` flag = anchor in
+tile, declines), `FieldRecord` (id = source/OSM id/piece, landuse, crop, area, row direction, flags, polygon, anchor),
+`field_at`, `match_field`/`FieldRef`; `FieldsGeomDeriver` (4 discovery stages, tile-invariant via block-keyed cover views).
+Opt-in: `BuiltinTerrainDerivers::ordered(..., include_fields)` / `builtin_local_release_params(..., include_fields)`, bake layer
+`g2m.fields.geom` (`--levels 2`), `g2m_server --fields`, `LayerOptIn::fields`, `TerrainService::fields/peek_fields/field_at/
+field_at_grid` (job kind 11). Tests `tests/layer/test_fields_geom.cpp` ([fields], [fields_kernel], [fields_derive], [fields_match],
+[fields_bake], [fields_fixture_check]), fields case in `tests/world/test_terrain_service.cpp`, golden `g3f`
+(`tests/golden/golden_g3f.cpp`, `testdata/golden/g3f_golden.txt`), fuzz target `fieldsGeom`. Tool `tools/fields_probe`
+(`g2m_fields_probe stats|png`, built with `g2m_tiler`). Not done: no consumer, no parcel source (kind 2 reserved).
 
 Junction gradient (design D42, after slice 9): the junction surface blends v_i = b_i + phi_i (p_i - b_i) + psi_i (z_i - p_i)
 instead of z_i (b base, p paved band only, z full approach surface; `junction_approach_heights` returns all three), with

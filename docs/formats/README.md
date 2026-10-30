@@ -14,6 +14,7 @@ reject anything that breaks a rule stated here.
 | [road_geom.md](road_geom.md) | `g2m.roads.geom` encoding 5: reference line, vertical profile, declines | `g2m/layer/road_geom_tile.h` |
 | [terrain_carved.md](terrain_carved.md) | `g2m.terrain.carved`: carved terrain pyramid on body encoding 1 (inputs, values, header) | `g2m/layer/terrain_carve.h` |
 | [terrain_class.md](terrain_class.md) | `g2m.terrain.class`: surface classification pyramid, body encoding 7 (257 × 257 nodes, four planes) | `g2m/layer/terrain_class.h` |
+| [fields_geom.md](fields_geom.md) | `g2m.fields.geom`: farm field polygons (OSM blocks cut along tracks, water, hedges), encoding 10 | `g2m/layer/field_tile.h` |
 | [pack.md](pack.md) | a 16×16 pack of containers with a directory of body hashes | `g2m/layer/pack.h` |
 | [release_manifest.md](release_manifest.md) | release id (rid) and the `g2m.release/1` manifest JSON | `g2m/layer/release.h` |
 | [regions.md](regions.md) | `g2m.regions/1` region definitions, ring assembly rules, `g2m.resolved_region/1` | `g2m/layer/region.h`, `g2m/core/geom/*` |

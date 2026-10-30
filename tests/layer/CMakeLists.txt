@@ -46,6 +46,7 @@ add_executable(g2m_layer_tests
   test_road_attributes.cpp
   test_road_graph.cpp
   test_road_graph_tile.cpp
+  test_fields_geom.cpp
   test_osm_paint.cpp
   test_release.cpp
   test_pack.cpp

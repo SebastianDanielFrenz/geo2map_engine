@@ -6,6 +6,7 @@
 // Test state shared with pool threads is atomics or mutex-guarded, so the file is TSan-clean.
 #include "g2m/world/terrain_service.h"
 #include "g2m/layer/terrain_class.h"
+#include "g2m/layer/field_tile.h"
 
 #include "g2m/core/hash.h"
 #include "g2m/layer/road_geom_tile.h"
@@ -135,7 +136,7 @@ struct World {
     TempDir dir;
     std::filesystem::path sources_dir() const { return dir.path() / "sources"; }
 
-    World() {
+    explicit World(bool with_field = false) {
         auto sources = TileStore::open({sources_dir(), "tiles"});
         REQUIRE(sources);
         const geo::Utm utm(geo::kGRS80);
@@ -151,6 +152,24 @@ struct World {
                                      static_cast<std::int32_t>(std::llround(p.lon * 1e7)));
                 }
                 builder.add_way(base + 10, {base + 1, base + 2}, {{"highway", "service"}, {"maxspeed", "30"}});
+                if (with_field && x == 0 && y == 0) {
+                    // A 300 m x 100 m farmland block at (200..500, 200..300) cut in two by a track at E 350.
+                    const std::pair<double, double> corners[] = {{200, 200}, {500, 200}, {500, 300}, {200, 300}};
+                    std::vector<std::int64_t> ring;
+                    std::int64_t id = 9000;
+                    for (const auto& [ce, cn] : corners) {
+                        const auto p = utm.reverse(kZone, ce, cn);
+                        builder.add_node(++id, static_cast<std::int32_t>(std::llround(p.lat * 1e7)), static_cast<std::int32_t>(std::llround(p.lon * 1e7)));
+                        ring.push_back(id);
+                    }
+                    ring.push_back(ring.front());
+                    builder.add_way(9100, ring, {{"crop", "wheat"}, {"landuse", "farmland"}});
+                    for (const double tn : {150.0, 350.0}) {
+                        const auto p = utm.reverse(kZone, 350, tn);
+                        builder.add_node(++id, static_cast<std::int32_t>(std::llround(p.lat * 1e7)), static_cast<std::int32_t>(std::llround(p.lon * 1e7)));
+                    }
+                    builder.add_way(9101, {id - 1, id}, {{"highway", "track"}});
+                }
                 const auto data = builder.build();
                 REQUIRE(data);
                 auto raw = input_tile(std::string(kSrcOsmLayer), key, *encode_src_osm(OsmTile{64, *data}));
@@ -420,6 +439,53 @@ TEST_CASE("service: terrain_class ticket and the render ClassWindow from terrain
     INFO("paved vertices " << paved << ", north-east reading differs at " << floor_vs_ne);
     CHECK(paved > 0);
     CHECK(floor_vs_ne > 0);
+}
+
+TEST_CASE("service: field polygons ticket, peek and the point query", "[world][terrain_service][fields]") {
+    World w(true);
+    {   // without the opt-in the ticket fails at once
+        auto plain = w.open();
+        CHECK(plain->fields(l2(0, 0), Priority::Render).state() == TileState::Failed);
+        CHECK(plain->peek_fields(l2(0, 0)) == nullptr);
+        CHECK_FALSE(plain->field_at_grid(0, 0));
+    }
+    TerrainServiceConfig fc = w.config("derived_fields", 2);
+    fc.layers.fields = true;
+    auto svc = w.open(fc);
+    CHECK(svc->has_layer(kFieldsGeomLayer));
+    // A level-0 key maps to its level-2 ancestor.
+    auto t = svc->fields(l0(0, 0), Priority::Render);
+    REQUIRE(t.wait_for(kLong));
+    REQUIRE(t.state() == TileState::Ready);
+    CHECK(svc->peek_fields(l2(0, 0)) == t.value());
+    const FieldTile& tile = *t.value();
+    REQUIRE(tile.fields.size() == 2);
+    CHECK(tile.fields[0].crop == "wheat");
+    CHECK(tile.fields[0].osm_id == 9100);
+    // The tile equals a decode of the raw container.
+    auto raw = svc->raw_tile(std::string(kFieldsGeomLayer), l2(0, 0), Priority::Render);
+    REQUIRE(raw.wait_for(kLong));
+    const auto view = parse_container(raw.value()->container);
+    REQUIRE(view);
+    const auto body = decode_body(view->body);
+    REQUIRE(body);
+    const auto decoded = decode_fields_geom(*body);
+    REQUIRE(decoded);
+    CHECK(*decoded == tile);
+    // Point queries: grid metres, then the session-local ones through the frame.
+    const double e0 = 0 * 1024.0, n0 = 0 * 1024.0;
+    const auto west = svc->field_at_grid(e0 + 300, n0 + 250);
+    const auto east = svc->field_at_grid(e0 + 450, n0 + 250);
+    REQUIRE(west); REQUIRE(east);
+    CHECK(west->tile->fields[west->index].piece == 0);
+    CHECK(east->tile->fields[east->index].piece == 1);
+    CHECK_FALSE(svc->field_at_grid(e0 + 350, n0 + 250));  // on the track
+    CHECK_FALSE(svc->field_at_grid(e0 + 300, n0 + 400));  // north of the block
+    const auto local = svc->field_at(300 - static_cast<double>(svc->frame().e0_m()) + e0, 250 - static_cast<double>(svc->frame().n0_m()) + n0);
+    REQUIRE(local);
+    CHECK(local->tile->fields[local->index].id == west->tile->fields[west->index].id);
+    // A tile that is not resident answers nothing and starts no work.
+    CHECK_FALSE(svc->field_at_grid(e0 + 5 * 1024 + 300, n0 + 250));
 }
 
 TEST_CASE("service: concurrent requests for one tile derive it exactly once", "[world][terrain_service][dedup]") {

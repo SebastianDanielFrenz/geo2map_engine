@@ -49,6 +49,7 @@
 
 namespace g2m {
 struct TerrainClassTile; // g2m/layer/terrain_class.h (include it to use terrain_class())
+struct FieldTile;        // g2m/layer/field_tile.h (include it to use fields())
 }
 
 namespace g2m::world {
@@ -70,6 +71,7 @@ struct LayerOptIn {
     bool geometry = true;   // g2m.roads.geom (needs roads)
     bool carved = false;    // g2m.terrain.carved; when set, height() serves it instead of g2m.terrain.height
     bool classes = false;   // g2m.terrain.class (phase 6); implies the carved layer in the release (height() still follows `carved`)
+    bool fields = false;    // g2m.fields.geom (farm field polygons); reads g2m.src.osm only, independent of the road layers
 };
 
 struct TerrainServiceConfig {
@@ -226,6 +228,9 @@ public:
     Ticket<RoadGeomTile> road_geom(const TileKey& l2, Priority priority);
     Ticket<RoadSegmentsTile> road_segments(const TileKey& l2, Priority priority);
     Ticket<OsmTile> source_osm(const TileKey& l2, Priority priority);
+    // The decoded g2m.fields.geom tile (farm field polygons; level 2, a finer key maps to its ancestor). Failed at once
+    // when the release has no fields layer (LayerOptIn::fields off).
+    Ticket<FieldTile> fields(const TileKey& l2, Priority priority);
     // Any layer's container, uncached typed decode skipped (for layers without a typed ticket, and tools).
     Ticket<RawTile> raw_tile(const std::string& layer, const TileKey& key, Priority priority);
     // Phase-3 products. Failed until the matching producer is installed.
@@ -242,6 +247,16 @@ public:
     std::shared_ptr<const RoadGeomTile> peek_road_geom(const TileKey& l2) const noexcept;
     std::shared_ptr<const RoadSegmentsTile> peek_road_segments(const TileKey& l2) const noexcept;
     std::shared_ptr<const OsmTile> peek_source_osm(const TileKey& l2) const noexcept;
+    std::shared_ptr<const FieldTile> peek_fields(const TileKey& l2) const noexcept;
+    // The field containing a point, answered from the resident fields tile (never starts work): the point is session-local
+    // metres (field_at) or UTM grid metres of the session zone (field_at_grid). nullopt when the tile is not resident
+    // or no field covers the point; `index` indexes `tile->fields`.
+    struct FieldHit {
+        std::shared_ptr<const FieldTile> tile;
+        std::size_t index = 0;
+    };
+    std::optional<FieldHit> field_at(double x, double y) const;
+    std::optional<FieldHit> field_at_grid(double easting, double northing) const;
     std::shared_ptr<const StructureSet> peek_structures(const TileKey& l2) const noexcept;
 
     // ---- point heights on resident level-0 tiles (session-local metres; nullopt when a needed tile is not

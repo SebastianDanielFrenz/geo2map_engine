@@ -3,7 +3,7 @@
 This is the one entry point. Start here if you have never seen the code.
 It shows the whole path with diagrams, then links to the detail pages.
 
-- Status date: 2026-10-05. Verified against the code of `geo2map_engine` master at that date.
+- Status date: 2026-10-31. Verified against the code of `geo2map_engine` master at 2026-10-05 plus the field polygon layer (branch `claude/field-polygons`, section 2.7).
 - Scope: `geo2map_engine` (this repo) and how its two consumers use it: `racing_game` (render + game) and `physics_sim` (terrain tiles for the physics heightfield). Both consumers are separate repos and are only described here.
 - Rule: any change that adds or changes a pipeline stage, layer, encoding, data source or consumer updates this folder in the same commit (also in `CLAUDE.md`).
 - Reading the diagrams: **green** = implemented and in use. **amber dashed** = downloaded or designed, not used yet. **grey dashed** = planned. Mermaid renders on GitHub and in most editors.
@@ -33,7 +33,7 @@ flowchart TB
   SRC["<b>1. Raw sources</b> - files on S:<br/>DGM1 1 m heights - HVBG<br/>OSM Hessen extract - Geofabrik<br/>ESA WorldCover 10 m<br/><i>downloaded, not used yet:</i> GLO-30, LoD2, DOM1, DOP20, Basis-DLM, tree data"]
   IMP["<b>2. Import</b> - g2m_tiler import<br/>resolve region to level-2 tiles<br/>import-dem, import-osm, import-landcover"]
   RAW["<b>3. Raw layers</b> - level 2, 1024 m, source store<br/>g2m.src.elev.dgm1 / g2m.src.osm / g2m.src.landcover"]
-  BAKE["<b>4. Derived layers</b> - pure derivers, g2m_tiler bake<br/>g2m.elev.base L0 / g2m.terrain.height L0-L6<br/>g2m.roads.graph L2 / g2m.roads.geom L2<br/>g2m.terrain.carved L0-L6, g2m.terrain.class L0-L6 (opt-in; consumer helpers exist, the game has not switched)<br/><i>planned:</i> buildings, trees, markings"]
+  BAKE["<b>4. Derived layers</b> - pure derivers, g2m_tiler bake<br/>g2m.elev.base L0 / g2m.terrain.height L0-L6<br/>g2m.roads.graph L2 / g2m.roads.geom L2<br/>g2m.terrain.carved L0-L6, g2m.terrain.class L0-L6 (opt-in; consumer helpers exist, the game has not switched)<br/>g2m.fields.geom L2 (opt-in; farm field polygons, no consumer yet)<br/><i>planned:</i> buildings, trees, markings"]
   SRV["<b>5. Server and cache</b> - in-process (the game), or HTTP sidecar g2m_server<br/>g2m::Server: cache, derive on miss, upstream<br/>tiles.sqlite3 + blob files, release id<br/><i>planned:</i> hosted server, CDN (G7)"]
   GAME["<b>6a. racing_game</b> WorldTerrain<br/>render chunks, road raster and grip,<br/>road carving at L0, NPC traffic"]
   PHYS["<b>6b. physics_sim</b><br/>g2m_ps_bridge G2mTerrainSource<br/>TileManager Jolt heightfield pool"]
@@ -47,6 +47,7 @@ flowchart TB
 What the diagram hides, in short:
 
 - **Two height layers.** `g2m.terrain.height` is the plain DGM1 pyramid and stays the default. `g2m.terrain.carved` (street fidelity P2 slice 9, [design](../street_fidelity/p2_junction_design.md) section 6) is the same pyramid with the roads carved in on the server: smoothed DEM, junction and approach cores, blends, deck clearance. No consumer reads it yet: `racing_game` still carves its own copy of the level-0 tile (stage "client derivations" below) until it switches; then its carve step is removed, not kept as a fallback (owner decision 2026-10-05). `g2m.terrain.class` (slice 10, section 2.4) classifies the same points under the same ownership for grip and colour. A `roads.geom` tile that fails to resolve counts as absent for both (G-1): the carved and class tiles are still served, without that tile's roads, and their headers name it with a rejected-input marker.
+- **`g2m.fields.geom` (farm field polygons, section 2.7) is opt-in and independent of the roads.** It reads `g2m.src.osm` only.
 - **`roads.graph`, `roads.geom` and `terrain.carved` are opt-in.** They are only added to a release when asked for, so the release id of terrain-only releases did not change when they were added. Asking for `terrain.carved` adds both road layers; asking for `terrain.class` adds `terrain.carved` too (a carved-only release keeps its identity, D49).
 - **Some things never travel over the wire.** Render meshes, LOD selection, the road colour raster and physics surface ids are computed in the client from tiles.
 
@@ -155,6 +156,22 @@ Details: [client_side.md](client_side.md).
 | Status | In-process in the game. G6: protocol v1 over HTTP (`g2m_http`: `HttpTransport` = an `ITransport` client, `HttpServer` = a front end for any `ITransport`; binding in [../protocol/README.md](../protocol/README.md)) and the sidecar `apps/g2m_server` (one local release over a read-only source store, offline by construction, 127.0.0.1 by default; same release id as the in-process server for the same store and opt-ins). Not wired into racing_game. No served byte or release id changed. `g2m_cli` does not exist yet. Offline mode returns 503 degraded instead of touching the network. |
 | Tests | `tests/server/test_server.cpp`, `test_tile_store.cpp`, `test_protocol.cpp`, `test_client_cache.cpp`, `tests/layer/test_release.cpp`, `test_pack.cpp`; `tests/http/test_http_wire.cpp`, `test_http_server.cpp` (`g2m_http_tests`: HTTP vs in-process byte-identical round trip of every endpoint and status, status mapping, malformed requests, concurrency); fuzz targets `packDirectory`, `httpRequest`, `httpResponse`. |
 
+### 2.7 Farm fields: `g2m.fields.geom`
+
+| | |
+|---|---|
+| Inputs | `g2m.src.osm`: the target's own level-2 tile; `additional_inputs_for` (four discovery stages) names the tiles covering each block's bounding box plus the widest cut, and the tile of every open chain end of a multipolygon relation. |
+| Code | `include/g2m/layer/{field_tile,field_subdivide,field_rules}.h`, `src/layer/{field_tile,field_subdivide,field_rules,derive_fields}.cpp`; rules `data/field_rules/de.json` (embedded, SHA-256 in the config hash); wiring `builtin_release.h` (`include_fields`), `bake.cpp`, `apps/g2m_server --fields`, `TerrainService` (`LayerOptIn::fields`, `fields()`, `peek_fields`, `field_at`). |
+| Output | `g2m.fields.geom` v1, encoding 10 ([fields_geom.md](../formats/fields_geom.md)), level 2: per tile every field touching it (id, OSM source, piece, land use, `crop=*`, area, row direction, flags, outline with holes, anchor) plus declined blocks. |
+| Method | OSM `landuse=farmland/meadow/orchard/vineyard/farmyard` ways and multipolygon relations are cut along tracks, paths, roads, railways, ditches, streams, hedges, walls and tree rows and around water, wood, buildings and other land use, on a 1 m integer raster; small slivers are dropped; uncut blocks keep the exact OSM outline. All thresholds in `de.json`. |
+| Ids | source (2 bits), OSM id (46 bits), piece (16 bits); stable across re-bakes as far as OSM allows; `match_field` finds a saved field again. What breaks an id: [fields.md](fields.md). |
+| Config hash | `g2m.fields.geom/1 enc=10 impl=2 rules=<SHA-256 of de.json> raster=cell-centre-scanline-evenodd ... stages=4`. |
+| Tests | `tests/layer/test_fields_geom.cpp`, `tests/world/test_terrain_service.cpp` (fields case); golden `g3f_golden.txt`; fuzz target `fieldsGeom`. |
+| Consumers | None yet. `racing_game` or the fork enables the layer (`LayerOptIn::fields`, bake layer name, or `g2m_server --fields`), reads `fields()`/`field_at`, stores the polygon copy and `FieldRef` in its saves. |
+| Parcel data | Seam designed (source kind 2, reserved), not used. Hessen reference parcels are CC BY 4.0 per a third-party listing: [fields.md](fields.md). |
+
+Details: [fields.md](fields.md).
+
 ---
 
 ## 3. Layer dependencies
@@ -172,6 +189,7 @@ flowchart TD
   RG["g2m.roads.graph - L2"]
   RM["g2m.roads.geom - L2"]
   TC["g2m.terrain.class - L0 to L6 - P2 slice 10"]
+  FLD["g2m.fields.geom - L2 - farm fields"]
   CARVE["g2m.terrain.carved L0 - smoothed and carved"]
   CARVE1["g2m.terrain.carved L1 to L6"]
   BLD["buildings from LoD2 - planned"]
@@ -180,6 +198,7 @@ flowchart TD
   DEM -->|"one L2 ancestor tile, 16 L0 tiles per source tile"| EB
   EB -->|"same key, byte-identical"| H0
   H0 -->|"4 children of the level below"| H1
+  OSM -->|"own tile + the tiles covering each block, 4 discovery stages"| FLD
   OSM -->|"own tile + 8 neighbours, 128 m halo"| RG
   RG -->|"same key"| RM
   EB -->|"every L0 tile near a road, margin 65 m"| RM
@@ -194,7 +213,7 @@ flowchart TD
 
   classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
   classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
-  class OSM,DEM,LC,EB,H0,H1,RG,RM,CARVE,CARVE1 done;
+  class OSM,DEM,LC,EB,H0,H1,RG,RM,CARVE,CARVE1,FLD done;
   class TC,BLD,TRE plan;
 ```
 
@@ -204,6 +223,7 @@ Tile-level rules worth remembering:
 - The terrain pyramid needs all four children even for a tile at the data edge. A missing child counts as NoData, never as an error.
 - `roads.geom` is the only built-in layer whose input list depends on the data (`additional_inputs_for`), in two discovery stages (D35): stage 1 names the DEM tiles under the complete ways and the `roads.graph` tiles holding every way incident to their nodes; stage 2, once those are resolved, names the DEM along every bridge incident to those nodes (65 m margin) and the `roads.graph` tiles of its nodes, so the far end of a bridge span is always an input, and (D48) the elev.base and `roads.graph` tiles of a 205 m square around every node of those bridges, which bound the 200 m abutment walk. Stage 1 also names (D57) the `roads.graph` tiles every segment of a tile way passes through, so every road crossing a tile way without a shared node (an underpass) is complete in the crossing graph. Other derivers use one stage.
 - A `terrain.carved` L0 tile (and a `terrain.class` L0 tile, which also reads the land cover level-2 tiles holding its 257 x 257 nodes) reads its own and its 8 neighbouring `elev.base` tiles and every `roads.geom` tile within 192 m (one typically, at most four). Each junction is stored only in the `roads.geom` tile holding its smallest node id; the 192 m radius is what makes that sufficient ([design section 5](../street_fidelity/p2_junction_design.md#5-tile-invariance)).
+- `g2m.fields.geom` is the second layer (after `roads.geom`) whose input list depends on the data: stage 1 names the tiles covering every block of the tile (bounding box + widest cut), later stages the tile of each open relation chain end. A field is the same record in every tile it touches ([fields.md](fields.md)).
 - A tile in the 1 km halo of the region may have no DGM1 coverage: 85 such tiles were skipped at import (`import_report_home-2026-09r1.json`).
 
 ---
@@ -267,7 +287,7 @@ Files are under `S:\claude_code\geo2map_data\downloads\` (not in git). The full 
 | DGM1, 1 m terrain heights | HVBG Hessen | dl-de/zero-2.0 | Optional (we keep it) | `downloads/dgm1/PKT_*.zip` (8 files, 8.5 GB) | `import-dem` -> `g2m.src.elev.dgm1` | **Used** |
 | DGM1, 1 m terrain heights (Mannheim/Viernheim strip) | LGL Baden-Wuerttemberg | dl-de/by-2.0 | **Required**: "Datenquelle: LGL, www.lgl-bw.de" | `downloads/lgl_bw_dgm1/dgm1_32_*_2_bw.zip` (59 files) | `import-dem --bw-data` -> `g2m.src.elev.dgm1` (merged with Hessen at the border) | **Used** (corridor region) |
 | OSM Regierungsbezirk Karlsruhe extract | Geofabrik / OpenStreetMap | ODbL 1.0 | **Required** | `downloads/karlsruhe-regbez-latest.osm.pbf` | `import-osm` (second `--pbf`), merged with the Hessen extract | **Used** (corridor region) |
-| OSM Hessen extract | Geofabrik / OpenStreetMap | ODbL 1.0 | **Required**: (c) OpenStreetMap contributors; share-alike for derived databases (affects served packs, G7) | `downloads/hessen-latest.osm.pbf` | `import-osm` -> `g2m.src.osm`; roads, grip, colours | **Used** |
+| OSM Hessen extract | Geofabrik / OpenStreetMap | ODbL 1.0 | **Required**: (c) OpenStreetMap contributors; share-alike for derived databases (affects served packs, G7) | `downloads/hessen-latest.osm.pbf` | `import-osm` -> `g2m.src.osm`; roads, grip, colours, farm fields (`g2m.fields.geom`) | **Used** |
 | ESA WorldCover 2021 v200 | ESA | CC BY 4.0 | **Required** | `downloads/ESA_WorldCover_10m_2021_v200_N48E006_Map.tif` | `import-landcover` -> `g2m.src.landcover` | **Used** |
 | Copernicus GLO-30 DEM tiles N49 and N50 | Copernicus / ESA | Copernicus DEM licence | **Required** (DLR, Airbus, EU, ESA text in SOURCES.md) | `downloads/Copernicus_DSM_COG_10_N49_00_E008_00_DEM.tif`, `..._N50_...` | Planned fallback for DGM1 gaps | Downloaded, not used |
 | HVBG LoD2 3D buildings | HVBG | **dl-de/by-2.0** | **Required** (HVBG source line, SOURCES.md) | `downloads/hvbg_lod2/` (1.2 GB) | Planned: buildings (street fidelity P4) | Downloaded, not used |
@@ -277,6 +297,7 @@ Files are under `S:\claude_code\geo2map_data\downloads\` (not in git). The full 
 | Frankfurt Baumkataster | Stadt Frankfurt | dl-de/by-2.0 | **Required** | `downloads/frankfurt_baumkataster/` | Planned: trees (P5) | Downloaded, not used |
 | Thuenen dominant tree species | Thuenen Institute | CC BY 4.0 | **Required** (citation with DOI in SOURCES.md) | `downloads/thuenen_tree_species/` | Planned: trees (P5, P6) | Downloaded, not used |
 | Copernicus HRL tree cover and leaf type | Copernicus Land Monitoring Service / EEA | Free and open (Regulation (EU) 1159/2013) | **Required** (EU, Copernicus, EEA) | `downloads/copernicus_hrl/` | Planned: trees (P5) | Downloaded, not used |
+| Hessen reference parcels (InVeKoS Feldblöcke, FLIK) | Land Hessen (geoportal.hessen.de, WFS) | CC BY 4.0 per a third-party listing (source.coop `de_he`); confirm at the source | **Required**: "(c) Land Hessen, CC BY 4.0" | not downloaded | Seam for `g2m.fields.geom` (source kind Parcel) | Researched 2026-10-31, not used |
 | DWD phenology | Deutscher Wetterdienst | GeoNutzV | **Required**: source reference | `downloads/dwd_phenology/` | Planned: seasons (P6) | Downloaded, not used |
 
 Attribution status in the game: the `racing_game` manifest lists only the DGM1 attribution today. OSM, WorldCover and the others are not in a credits screen yet (R5 is not done). See [open questions](#9-open-questions-and-contradictions).
@@ -397,11 +418,15 @@ g2m_tiler bake --store STORE_DIR --scope SCOPE --derived DERIVED_DIR `
 
 `--store` must be a finished, `--pin`ned scope. The result does not depend on `--jobs`. Without `bake`, a consumer derives tiles on demand through `g2m::Server` into its own derived store (`racing_game` does this for the home region, store `S:\claude_code\geo2map_cache\home-r1\baked`). Levels a layer does not have are skipped (`roads.*` exist only at level 2). Naming `g2m.roads.graph` in `--layers` adds the road graph deriver to the release; naming `g2m.roads.geom` adds both; naming `g2m.terrain.carved` adds the carved deriver and both road derivers; naming `g2m.terrain.class` adds the class deriver and everything carved needs (`src/import/bake.cpp`: `include_roads` / `include_geometry` / `include_carved` / `include_classes`). Adding them changes the release id; terrain-only bakes keep the old one.
 
+Farm fields: `--layers g2m.fields.geom --levels 2` (level 2 only; the layer has no other level). Rhein-Main-Hessen, 2173 tiles: 68 s with `--jobs 6`.
+
 ### 7.4 Probes
 
 ```powershell
 g2m_osm_tag_probe --pbf F --region REGIONS.json#NAME --out-md F --out-json F
 g2m_road_probe STORE_DIR SCOPE utm32n/2/455/5421 out.csv [--exceptions] [--profiles]
+g2m_fields_probe stats DERIVED_DIR RELEASE_HEX [fields.csv]
+g2m_fields_probe png DERIVED_DIR RELEASE_HEX SOURCE_DIR SCOPE out.png [--tile X,Y] [--tiles N] [--mpp M]
 ```
 
 Both are under `G2M_BUILD_APPS`. See `tools/osm_tag_probe` and `tools/road_probe/README.md`. The probes never write to the tile cache.
@@ -481,6 +506,7 @@ These are listed, not resolved. Each needs an owner decision or a check.
 | Topic | Document |
 |---|---|
 | This overview | `docs/pipeline/README.md` |
+| Farm fields | [fields.md](fields.md), [../formats/fields_geom.md](../formats/fields_geom.md) |
 | Detail pages | [raw_layers.md](raw_layers.md), [terrain.md](terrain.md), [roads.md](roads.md), [client_side.md](client_side.md) |
 | Byte formats | [../formats/README.md](../formats/README.md): [tile_container](../formats/tile_container.md), [src_elev](../formats/src_elev.md), [src_landcover](../formats/src_landcover.md), [src_osm](../formats/src_osm.md), [pack](../formats/pack.md), [release_manifest](../formats/release_manifest.md), [regions](../formats/regions.md), [protocol](../formats/protocol.md), [cache_db](../formats/cache_db.md), [road_graph](../formats/road_graph.md), [road_geom](../formats/road_geom.md) |
 | G3 road pipeline | [../g3_road_pipeline.md](../g3_road_pipeline.md), [../g3_profile_foundation.md](../g3_profile_foundation.md), [../g3_reference_lines.md](../g3_reference_lines.md) |

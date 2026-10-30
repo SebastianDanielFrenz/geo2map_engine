@@ -16,3 +16,7 @@ endif()
 # G3 geometry diagnostics over an existing immutable source store.
 add_executable(g2m_road_probe ../../tools/road_probe/main.cpp)
 target_link_libraries(g2m_road_probe PRIVATE g2m_server g2m_warnings g2m_options)
+
+# Farm field census and picture over a baked g2m.fields.geom store (docs/pipeline/fields.md).
+add_executable(g2m_fields_probe ../../tools/fields_probe/main.cpp)
+target_link_libraries(g2m_fields_probe PRIVATE g2m_server g2m_warnings g2m_options)
