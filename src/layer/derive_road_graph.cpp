@@ -88,6 +88,19 @@ Result<RoadGraphTile> select_road_graph_tile(const RoadGraph& graph, const TileK
     return result;
 }
 
+DroppedRestrictions drop_overlong_restrictions(std::vector<TurnRestriction>& restrictions) {
+    DroppedRestrictions dropped;
+    std::set<std::int64_t> relations;
+    const auto overlong = [&](const TurnRestriction& r) {
+        if (r.via_ways.size() <= kRoadGraphMaxViaWays) return false;
+        ++dropped.rules; relations.insert(r.relation_id);
+        return true;
+    };
+    restrictions.erase(std::remove_if(restrictions.begin(), restrictions.end(), overlong), restrictions.end());
+    dropped.relations = relations.size();
+    return dropped;
+}
+
 ContentHash RoadGraphDeriver::config_hash() const {
     return Sha256::of("g2m.roads.graph/1 complete-ways default-RoadStyle halo=128 midpoint-mm-owner raw-nine-neighbours node-tags=1 enc=6 restrictions=1 via-way=1");
 }
@@ -170,9 +183,16 @@ Result<DeriveResult> RoadGraphDeriver::derive(const DeriveRequest& request) cons
         }
         restrictions = std::move(unique);
     }
+    // A rule longer than the format allows is left out and counted (its tile still derives).
+    const auto dropped = drop_overlong_restrictions(restrictions);
     auto tile = select_road_graph_tile(*graph, request.target, restrictions); if (!tile) return tile.error();
     auto body = encode_road_graph(*tile); if (!body) return body.error();
     auto bytes = encode_body(*body); if (!bytes) return bytes.error();
-    return DeriveResult{std::move(*bytes), VerticalDatum::None, 0};
+    DeriveResult result{std::move(*bytes), VerticalDatum::None, 0, {}};
+    if (dropped.rules) {
+        result.diagnostics.emplace_back("restrictions_dropped_over_via_ways", dropped.rules);
+        result.diagnostics.emplace_back("relations_dropped_over_via_ways", dropped.relations);
+    }
+    return result;
 }
 } // namespace g2m

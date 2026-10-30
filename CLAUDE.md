@@ -7,7 +7,9 @@ This file only maps what exists and how to build, test and run it.
   for the milestones).
 - **Standing rule:** any change that adds or changes a pipeline stage, layer,
   encoding, data source or consumer updates `docs/pipeline/` in the same
-  commit. Start reading there: `docs/pipeline/README.md`.
+  commit. Start reading there: `docs/pipeline/README.md`. Its illustrated
+  companion for terrain and roads is `docs/pipeline/terrain_and_roads.html`
+  (text twin `terrain_and_roads.md`, the one to grep).
 - Milestone state: **G0 done**. G0 covers the library skeleton, deterministic
   math, geodesy, tile keys, rasters, hashes and golden infrastructure.
   **G1a done**: the layer model, the tile formats, releases, the SQLite tile
@@ -208,7 +210,9 @@ geo2map_engine/
                                       caller's RoadSeparation), StructureSet + build_structure_set(RoadGeomTile)
     road_ribbons.h                   (phase 3a) RoadRibbonVertex/RoadRibbonTile, build_road_ribbons(geometry,
                                       key, ground fn, lift) incl. junction surfaces and markings,
-                                      add_junction_surfaces, road_priority_rank (StVO 18(3) rank)
+                                      add_junction_surfaces, road_priority_rank (StVO 18(3) rank), lane_arrow_glyphs
+                                      (turn:lanes token -> ArrowGlyph bits via parse_turn_token, G2M-024)
+                                      RoadRibbonOptions{drape = Lattice (G2M-025), tolerances}, RibbonDrape
     buildings.h                      (phase 3b) Building/BuildingPoint/BuildingGround/BuildingParams,
                                       extract_buildings, BuildingSet + build_building_set(OsmTile, ground)
     view_streamer.h                  (phase 3b) render LOD around a focus: ViewChunk (mesh + class ids, carve
@@ -228,6 +232,7 @@ geo2map_engine/
                                       (IHeightTileFetch; blocks on the caller, which is a loader thread),
                                       product<T>(kind, key, ...) + ProductContext for caller producers
   src/world/                          g2m_world implementation: road_structures.cpp, road_ribbons.cpp (phase 3a,
+                                      lattice_drape.{h,cpp} internal: drape on the terrain triangulation, G2M-025,
                                       ported from racing_game 0c027dc + 945455a, libm -> det), buildings.cpp,
                                       view_streamer.cpp, ring_streamer.cpp (phase 3b, from racing_game 5a3baed),
                                       terrain_service.cpp, job_scheduler.{h,cpp}
@@ -302,8 +307,23 @@ geo2map_engine/
                                       fill_miss_count(). static_assert(ps::SurfaceId == uint16_t) guards the
                                       LUT's value type. The uniform (flat SurfaceId) constructor and its
                                       fill_tile path are unchanged
-    src/                               version.cpp, g2m_terrain_source.cpp
-    tests/                             g2m_bridge_tests (bridge-release leg only): test_smoke.cpp (links
+      deck_installer.h                DeckKey/DeckCandidate/DeckInstaller (terrain migration plan 6.3/6.6 phase 9),
+                                      moved unchanged from racing_game's rg::DeckInstaller: off-thread shape build
+                                      (ps::World::create_shape), install on the sim thread in strict (way_id, start,
+                                      end) order, so BodyIds follow install order only. Options{workers, before_build},
+                                      update / update_legacy / wait_until_installed / stats / bodies kept. Plus
+                                      make_deck_mesh_shape and select_decks (the game's sync_road_decks selection loop:
+                                      bbox distance, required vs prefetch, key order, class surface). Needs a pin with
+                                      World::create_shape (the committed physics_sim.pin predates it)
+      surface_binding.h               SurfaceNames, bind_class_surfaces, bind_road_surfaces: the game's
+                                      resolve_grip_surface and class/road LUT blocks, messages and the <255 check verbatim
+      physics_terrain.h               PhysicsTerrain: PhysicsTileGrid + ResidentHeightSet + HeightTileLoader +
+                                      PhysicsTerrainStreamer + G2mTerrainSource with the game's destruction order;
+                                      install / update (non-blocking gate + interest points, vanished ids released) /
+                                      retry_failed / prime_ticks / check_primed. No blocking loop, progress, tracing
+                                      or cancel (those stay in the game)
+    src/                               version.cpp, g2m_terrain_source.cpp, deck_installer.cpp, surface_binding.cpp, physics_terrain.cpp
+    tests/                             g2m_bridge_tests (bridge-release leg only): [ps_bridge] (phase 9): test_ps_bridge_decks.cpp (install sequence of the corridor deck set, pinned to what racing_game's own deck_installer.cpp produces, 1 vs 10 workers), test_ps_bridge_surfaces.cpp (LUTs vs the game's, fixtures/game_surfaces.json), test_ps_bridge_terrain.cpp (PhysicsTerrain smoke); test_smoke.cpp (links
                                       against ps_core/Jolt and g2m_phys), test_g2m_terrain_source.cpp
                                       (contract: samples even/tile_size 255/key_offset+origin round-trip/
                                       fill_tile never resizes; fill_tile zero-alloc under
@@ -362,7 +382,9 @@ geo2map_engine/
                                       release_manifest, regions, protocol, cache_db
   docs/pipeline/                      THE human entry point: README.md (overview + layer-dependency + runtime-sequence + roadmap
                                       Mermaid diagrams, per-stage tables, data sources, runbook, glossary, open questions) and
-                                      raw_layers.md, terrain.md, roads.md, client_side.md
+                                      raw_layers.md, terrain.md, roads.md, client_side.md; terrain_and_roads.html (illustrated
+                                      terrain + road steps, cross-sections, owner repo per step, physics seam) + its text twin
+                                      terrain_and_roads.md
   docs/street_fidelity/               plan.md (street-level fidelity sources/architecture/phases P0-P8), p1_cross_section_design.md
                                       (P1 design); moved from out/ (out/ keeps one-line stubs)
   third_party/musl_math/              musl libm v1.2.5 port, namespace g2m::musl (OBJECT library, compiled into g2m_core)
@@ -504,6 +526,8 @@ geo2map_engine/
     setup_dev_env.ps1                 verify (-CheckOnly) or install the toolchain
     tsan_suppressions.txt             TSan suppressions, loaded only by the linux-tsan test preset (SQLite wal-index header reads)
     refgen/                           g2m_refgen: GeographicLib reference-value generator (G2M_BUILD_REFGEN=ON only)
+    ribbon_census/                    g2m_ribbon_census (G2M-025): drapes the ribbons of a site or box both ways (point / lattice) and probes every triangle against the terrain mesh; vertices, triangles, build ms, per-class terrain-above tallies
+    xs_probe/                         g2m_xs_probe (G2M-025): join-aware cross-section dump of OSM ways, and a lane-change census
     osm_tag_probe/                    street-fidelity plan P0: g2m_osm_tag_probe, OSM tag-coverage report (road classes, crossings/signals, buildings, trees) for a regions.json region cut by admin boundaries. Library g2m_osm_tag_probe_lib (tag_probe.* pure aggregation + md/json writers, scan.* three PBF passes over a ResolvedRegion), exe under G2M_BUILD_APPS, home_probe_region.json (Main-Taunus, Hochtaunus, Frankfurt), test tests/unit/test_osm_tag_probe.cpp [osm][probe]. Run: `g2m_osm_tag_probe --pbf F --region REGIONS.json#NAME --out-md F --out-json F`; deterministic (sorted maps). Snapshot: docs/osm_tag_coverage_home.md
 ```
 
@@ -578,6 +602,13 @@ end of `CMakeLists.txt`):
   `refgen/refgen_meshes.cpp`, target `g2m_world_mesh_refgen` only with
   `-DG2M_WORLD_MESH_REFGEN_DIR=<dir>`), plus the game's two junction-surface
   tests. g2m_world_tests links `g2m_decode` and reads the OSM fixtures.
+  `test_road_arrows.cpp` (`[arrows]`, G2M-024): the turn:lanes token table, the ribbon of the real trunk_link
+  179708586 (through|slight_right|merge_to_left) and the converging merge_to_right|merge_to_left pair, lane
+  independence, junction guide lines; six recorded sabotages. `tools/road_census/main.cpp` (`g2m_road_census`,
+  built with g2m_tiler: `arrows STORE SCOPE X0 X1 Y0 Y1` / `way ... IDS` / `bow ... FACTOR MARGIN_M [IDS]`, G2M-024's chord-bound census) is the region census.
+  The 55 pinned cases build with `RibbonDrape::PointSampled` (the game's drape). `test_ribbon_drape.cpp` (`[ribbon_drape]`, G2M-025): pieces on the exact
+  terrain triangle surface, watertight strip, no crack on a shared edge cut on one side only, tile seam equality, nodes-only ground reads, tolerance bound,
+  NoData drop, bump no edge sees, deck-to-ground ramp, ribbons never below the terrain by more than 1 cm, decks untouched; six recorded sabotages in the file header.
   Phase 3b (`buildings`, `view_streamer`, `ring_streamer`): tests
   `test_buildings.cpp` (`[buildings]`; synthetic tag scene + every fixture tile
   with buildings == `building_pins.inc`), `test_view_streamer.cpp`
@@ -751,7 +782,7 @@ end of `CMakeLists.txt`):
   - build dirs are `out/build/<preset>`.
 - WSL (clang + lld):
   - `linux-release`, `linux-asan-ubsan`, `linux-tsan`;
-  - build dirs are `~/build/geo2map_engine/<preset>`, never under `/mnt/s`;
+  - build dirs are `~/build/<checkout dir name>/<preset>` (`geo2map_engine` for the main checkout, `geo2map_ciwsl` for that worktree), never under `/mnt/s`; the WSL legs run in the checkout that runs `ci.ps1` (`/mnt/<drive>/...` derived from `$repoRoot`);
   - `linux-tsan` symbolizes with `/usr/bin/addr2line` and loads
     `tools/tsan_suppressions.txt`.
 
@@ -829,10 +860,10 @@ Regenerate the reference values (WSL only; commands also in
 `tools/refgen/CMakeLists.txt`):
 
 ```bash
-cmake -S . -B ~/build/geo2map_engine/refgen -G Ninja -DCMAKE_BUILD_TYPE=Release \
+cmake -S . -B ~/build/$(basename "$PWD")/refgen -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_COMPILER=clang++ -DG2M_BUILD_TESTS=OFF -DG2M_BUILD_REFGEN=ON
-cmake --build ~/build/geo2map_engine/refgen --target g2m_refgen
-~/build/geo2map_engine/refgen/tools/refgen/g2m_refgen testdata/geodesy
+cmake --build ~/build/$(basename "$PWD")/refgen --target g2m_refgen
+~/build/$(basename "$PWD")/refgen/tools/refgen/g2m_refgen testdata/geodesy
 ```
 
 `testdata/geodesy/*.txt` holds one record per line, with hex doubles and each
@@ -910,7 +941,7 @@ fill_tile_from reads only the captured view. prefetch_inputs_current compares
 lookup state plus height and road pointer identities for the tile's complete
 L0 footprint; unrelated residency changes do not invalidate a build.
 make_terrain_config accepts optional prefetch margin and ticket cap (zero/off
-by default). Bridge physics pin is b90a531.
+by default). Bridge physics pin is b833db4 (physics_sim master; was b90a531, which predates World::create_shape).
 
 Snapshot tests cover replacement/eviction lifetime, owner purge, concurrent
 read/fill against live mutation, relevant height/road invalidation, zero
@@ -951,6 +982,15 @@ width ramps, absorber offsets Ramps/Hold/Transition, ramp clipping to the stretc
 `lateral_point(reference, s, t)`. Second committed fixture `testdata/fixtures/osm/hoechst_a66.osm.pbf`
 (see testdata/fixtures/README.md). Test: `test_road_joins.cpp` (synthetic joins, design F1-F10/H1-H7,
 edge continuity over every degree-2 join of both fixtures, context invariance).
+Slice 4b (vault G2M-028, owner site 4): merge lanes and exits at a node of degree three. `classify_merge_node` (in
+`road_cross_section_join.cpp`; needs `RoadReferenceBuilder::arms(node)`, `RoadNodeArm{way_id, ref, leaves_node}`) finds a one-way `*_link`
+that meets two one-way carriageways with balanced counted lanes; `resolve_cross_section` then gives the through pair a synthesized
+lane-add / lane-drop join and the link an `OffsetMode::Ramps` landing on the added lane's centre line plus `JoinKind::Landing` (5,
+`neighbour_way_id` = the single arm, `raw_delta_mm` = the landing; roads.geom encoding 10 since the JoinKind and JunctionDecline domains grew; encoding 9 still decodes). Rules: `MergeLaneRules`
+(`RoadRules::merge_lane`, `de.json` `merge_lane`, all [assumed], RAA model [unverified]; the loader checks the landing curvature). The ribbon
+builder (`road_ribbons.cpp`) marks the zone: the through carriageway's edge on the link's side broken (flags 64/128), the link's facing edge
+dropped (512/1024), over the landing length. Tests: `test_road_merge_lane.cpp` M1-M6 (sabotages S1-S8 in its header), the loader case in
+`test_road_rules.cpp`, `tests/world/test_merge_markings.cpp` MK1-MK3. Tool: `g2m_xs_probe --merge-census E0 N0 E1 N1 [--merge-rules on|off] [list]`.
 Slice 5: `roads.geom` encoding 6 (`kRoadGeomEncoding`; 5 still decodes, `RoadGeomTile::encoding`): section 1 is the
 roads.graph encoding-5 payload, section 2 unchanged, section 3 one cross-section record per entry
 (`RoadGeomEntry::cross_section` / `cross_section_decline`, built by `build_road_geom_tile` via
@@ -1003,7 +1043,7 @@ and `build_node_junctions(...)` (offset-intersect-trim per design 3.3-3.8, pure,
 sorted by azimuth, three rings (RoadBed, Paved, Outer) from the P1 `carve_footprint`/`lateral_point` edges as integer-mm polylines,
 corners by exact int64 segment intersection (`geom::orient`/`segments_intersect`), trims from the Outer layer, bow-tie repair by
 1 m extension rounds of the involved approaches (`junction.bowtie_rounds`), convex-hull fallback with `JunctionFlags::HullFallback`,
-reach cap (`ReachExceeded`), declines `ClusterTooLarge/ReachExceeded/SingleApproach/Degenerate/Underground`, per-approach status
+reach cap (`ReachExceeded`), declines `ClusterTooLarge/ReachExceeded/SingleApproach/Degenerate/Underground/MergeLane` (G2M-028: a node where a merge ramp lands), per-approach status
 (Used/NoProfile/NoCrossSection/Tunnel...). A node is built only when the tile holds every approach of it (else skipped, counted).
 `junction_ring_valid` is the simple-and-counter-clockwise check. Test: `test_road_junction.cpp` (X/T/Y/fork/star scenes, Hoechst
 and Frankfurt fixture census, multi-tile identity). Sabotages: swapping left/right in `edge_t` fails the corner/trim checks;
@@ -1175,9 +1215,27 @@ constant grade between its portal samples (DEM floor below, or when steeper than
 with the game's mesh code). Tests `[tunnel]` in test_road_completion.cpp (tile edge invariance + controls, fixture measurement)
 and test_road_rules.cpp.
 
+Reference-line chord bound (vault G2M-024): `de.json` block `reference` (`ReferenceRules{chord_half_width_percent 100,
+chord_margin_mm 3000}`, both [assumed], 0/0 = off, integers 0..1000 / 0..100000, required). `build_road_geom_tile` writes
+them into `ReferenceFitLimits::chord_half_width_factor/chord_margin_m` (whatever the caller set); `road_reference.cpp`
+`fit_geometry` refuses a clothoid whose perpendicular distance from its node-pair chord exceeds factor x half the way's width
++ margin (falls to `rounded()`), the smoothing refit passes bound - half corridor; `fit_stretch` keeps the unbounded fit when
+the bounded one is unfittable (`RoadReferenceLine::chord_bound_relaxed`, OR-ed by `fit()`). roads.geom config text gains
+`reference-chord=G2M-024/100/3000` (the roads.geom release id and the de.json rules hash moved). Census: lines > 3 m from the
+OSM polyline 16435 -> 5432, > 10 m 4699 -> 5, max 31.99 -> 16.9 m, 11039 stretches changed, motorway/trunk 0 changed;
+`g2m_road_census bow STORE SCOPE X0 X1 Y0 Y1 FACTOR MARGIN_M [WAY...]`. Tests `tests/layer/test_road_chord_bound.cpp`
+(`[chord]`: the two-node track between bending ways 26.8/19.9/15.8 m -> 0, the 150 degree hairpin 23 -> 0.67 m, motorway R
+400 m bit-identical, relaxed hairpin on a primary road, limits validation, injection through the built tile; sabotages: check
+removed, factor/margin not injected, rescue removed, bound x0.1 - a same-parameter distance instead of the perpendicular one
+is indistinguishable on every case tried) and the `reference` block cases in test_road_rules.cpp (`[reference]`).
+`test_road_junction.cpp` D34 runs its census with the bound off (the shipped bound straightens a bowed way at the junction
+whose offset rings did not nest). Re-recorded for the moved reference lines: goldens g3c (21 of 26 lines), g3d (7 of 9), g3j
+(19 of 73), g3xs (19 of 27) - with the bound off (0/0) all four pass unchanged, so the bound is the whole cause - and 32
+cases of `road_mesh_pins.inc`.
+
 Underpass decks (design D53-D58, owner decision 2026-10-15, racing_game PR #5): `data/road_rules/de.json` block `underpass`
 (`UnderpassRules`: enabled, min_depth 1 m, window 50 m, sag radius 300 m, max span 80 m, abutment 2 m, depth tol 0.1 m,
-lower margin 1 m, end clearance 1 m; de.json SHA `2fe0826f...dfa0`). `include/g2m/layer/road_underpass.h`
+lower margin 1 m, end clearance 1 m; de.json SHA `acd18c88...e0b5` since G2M-024 (was `8543303a...ca4a` after D65, `2fe0826f...dfa0` before)). `include/g2m/layer/road_underpass.h`
 `RoadUnderpassFinder` (spans per ground stretch: crossing of a lower-layer/tunnel way without a shared node, rims from the
 upper hull of the window minus a 300 m sag, deck = lower footprint + depression + abutments clipped to the rims; mask =
 rim chord over the span, applied via `RoadProfileLimits::underpass` in strict/Retry and GroundCompleted) and
@@ -1325,4 +1383,4 @@ Slice 4 (2026-10-14): guidance manoeuvre list (`route_guidance.h`, `g2m_route_te
 (2026-10-14): client map tiles at three LODs from level-2 roads.graph tiles (`route_map.h`, `"[map]"`; fixture
 tiles <= 22 KiB, < 5 ms). Owner rules from PR #2: turn costs final at the defaults; every map and render-road LOD
 parameter is a runtime setting the game passes in, with per-LOD/per-level cache keys (docs/routing_design.md 6.1,
-tests `"[lod_settings]"`). Slice 3 (2026-10-16): `roads.graph` encoding 6 carries the turn restrictions a tile holds (`include/g2m/layer/road_restriction.h`, `RoadGraphTile::restrictions`, deriver extracts them from the 9 src.osm inputs; roads.geom still embeds encoding 5); `RoutingGraph` applies via-way rules with ghost search states (`state_count()`, `arcs()` = real arcs), `assemble_region` returns graph + merged restrictions. Release ids of roads.graph and roads.geom changed (terrain unchanged); tests `test_via_way.cpp`, `test_route_restrictions.cpp`, `tests/route/via_reference.h`. Next: real home-store runs.
+tests `"[lod_settings]"`). Slice 3 (2026-10-16): `roads.graph` encoding 6 carries the turn restrictions a tile holds (`include/g2m/layer/road_restriction.h`, `RoadGraphTile::restrictions`, deriver extracts them from the 9 src.osm inputs; roads.geom still embeds encoding 5); `RoutingGraph` applies via-way rules with ghost search states (`state_count()`, `arcs()` = real arcs), `assemble_region` returns graph + merged restrictions. Release ids of roads.graph and roads.geom changed (terrain unchanged); tests `test_via_way.cpp`, `test_route_restrictions.cpp`, `tests/route/via_reference.h`. Next: real home-store runs. Home-store run (2026-10-20): 9 of 2173 level-2 tiles failed with "restriction via ways" (relation 12421749, 34 via ways, the only one over the limit of 16 in the region); `drop_overlong_restrictions` (`road_graph_tile.h`) now leaves such rules out of the tile and `DeriveResult::diagnostics` counts them (no encoding or release-id change; `tools/restriction_probe` = `g2m_restriction_probe STORE SCOPE [--derive]`).

@@ -314,7 +314,7 @@ TEST_CASE("Hoechst A 66 tile: painted envelope equals the carve footprint along 
         for (double s = 2.0; s <= ref.length_m - 2.0; s += 0.61) {
             const auto f = carve_footprint(xs, s);
             for (double t = f.outer_right - 1.5; t <= f.outer_left + 1.5; t += 0.23) {
-                if (std::abs(t - f.paved_left) < 0.05 || std::abs(t - f.paved_right) < 0.05) continue;
+                if (std::abs(t - f.paved_left) < 0.06 || std::abs(t - f.paved_right) < 0.06) continue;   // 0.06: a landed merge ramp (G2M-028) puts a probe 0.0500 m off an edge
                 const auto p = lateral_point(ref, s, t); REQUIRE(p);
                 const geom::PointMm pm{static_cast<std::int64_t>(std::llround(p->x * 1000.0)), static_cast<std::int64_t>(std::llround(p->y * 1000.0))};
                 std::uint8_t land = 0, surface = 0;

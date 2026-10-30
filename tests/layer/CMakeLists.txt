@@ -31,6 +31,7 @@ add_executable(g2m_layer_tests
   test_landcover_classifier.cpp
   test_road_cross_section.cpp
   test_road_joins.cpp
+  test_road_merge_lane.cpp
   test_road_api.cpp
   test_road_surface.cpp
   test_road_junction.cpp
@@ -40,6 +41,7 @@ add_executable(g2m_layer_tests
   test_road_features.cpp
   test_road_profile.cpp
   test_road_reference.cpp
+  test_road_chord_bound.cpp
   test_vertical_profile.cpp
   test_road_dem_sampler.cpp
   test_road_dem_dependencies.cpp
@@ -55,8 +57,8 @@ add_executable(g2m_layer_tests
   test_terrain_carve.cpp
   test_terrain_class.cpp
   test_road_underpass.cpp
-  test_rail_geom.cpp
   test_road_overpass.cpp
+  test_rail_geom.cpp
   test_junction_gradient.cpp
   test_portal_continuity.cpp
   test_junction_dump.cpp

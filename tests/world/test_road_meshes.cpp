@@ -49,6 +49,9 @@ g2m::world::RoadSeparation separation_of(const g2m_mesh_test::MeshCase& c) {
     return s;
 }
 
+// The 55 pinned cases are the game's point-sampled drape (racing_game a8a1b13); the lattice drape (G2M-025) has its own tests.
+static g2m::world::RoadRibbonOptions point_sampled() { g2m::world::RoadRibbonOptions o; o.drape = g2m::world::RibbonDrape::PointSampled; return o; }
+
 TEST_CASE("Structure decks and road ribbons match the recorded fixture meshes", "[world][road_structures][road_ribbons]") {
     const auto& all = cases();
     REQUIRE(all.size() == std::size(kPins));
@@ -72,7 +75,7 @@ TEST_CASE("Structure decks and road ribbons match the recorded fixture meshes", 
         CHECK(set.decks.size() == pin.decks);
         CHECK(h.value() == pin.deck_hash);
         CHECK(refs.value() == pin.deck_ref_hash);
-        const auto ribbon = g2m::world::build_road_ribbons(c.tile, c.key, [&](double e, double n) { return g2m_mesh_test::case_ground(c, e, n); }, c.lift, separation);
+        const auto ribbon = g2m::world::build_road_ribbons(c.tile, c.key, [&](double e, double n) { return g2m_mesh_test::case_ground(c, e, n); }, c.lift, separation, point_sampled());
         CHECK(ribbon.key == c.key);
         CHECK(ribbon.vertices.size() == pin.ribbon_vertices);
         CHECK(ribbon.indices.size() == pin.ribbon_indices);
@@ -354,7 +357,7 @@ TEST_CASE("print the mesh pin lines", "[.][regen]") {
             tunnels += !d->inferred && d->tunnel_floor;
             bridges += !d->inferred && !d->tunnel_floor;
         }
-        const auto ribbon = g2m::world::build_road_ribbons(c.tile, c.key, [&](double e, double n) { return g2m_mesh_test::case_ground(c, e, n); }, c.lift, separation);
+        const auto ribbon = g2m::world::build_road_ribbons(c.tile, c.key, [&](double e, double n) { return g2m_mesh_test::case_ground(c, e, n); }, c.lift, separation, point_sampled());
         std::printf("{\"%s\", %zu, 0x%016llxull, 0x%016llxull, %zu, %zu, 0x%016llxull},  // %d %d %d\n", c.name.c_str(), set.decks.size(),
             static_cast<unsigned long long>(h.value()), static_cast<unsigned long long>(refs.value()), ribbon.vertices.size(), ribbon.indices.size(),
             static_cast<unsigned long long>(g2m_mesh_test::hash_ribbon(ribbon)), bridges, tunnels, inferred);

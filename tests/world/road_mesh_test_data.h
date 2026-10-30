@@ -18,6 +18,7 @@
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/road_graph_tile.h"
+#include "g2m/layer/road_rules.h"
 
 #include <algorithm>
 #include <cmath>
@@ -166,7 +167,9 @@ inline void fixture_cases(std::vector<MeshCase>& out, const std::string& name, c
     for (const auto& key : keys) {
         const auto probe = g2m::select_road_graph_tile(*world, key);
         if (!probe || probe->owned_edges.empty()) continue;
-        auto tile = g2m_test::served_geometry_in_tile(*world, key);
+        // The pins are racing_game 945455a's output, which knows no merge lane (vault G2M-028): the fixtures are built without it.
+        static const g2m::RoadRules no_merge = [] { auto r = g2m::builtin_road_rules_de(); r.merge_lane.enabled = false; return r; }();
+        auto tile = g2m_test::served_geometry_in_tile(*world, key, {}, &no_merge);
         if (!tile) throw std::runtime_error(name + ": geometry: " + tile.error().message);
         const std::string base = name + "." + std::to_string(key.x) + "." + std::to_string(key.y);
         if (separated) {

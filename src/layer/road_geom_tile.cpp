@@ -65,7 +65,7 @@ Result<void> validate_cross_section(const RoadCrossSection& xs, double length_m)
     max_start = std::max<std::int64_t>(max_start, o.start_length_mm); max_end = std::max<std::int64_t>(max_end, o.end_length_mm);
     if (max_start + max_end > limit) return invalid("ramp lengths exceed the stretch");
     for (const auto* j : {&xs.start_join, &xs.end_join}) {
-        if (static_cast<unsigned>(j->kind) > 4) return invalid("join kind");
+        if (static_cast<unsigned>(j->kind) > 5) return invalid("join kind");
         if ((j->kind == JoinKind::None) != (j->neighbour_way_id == 0)) return invalid("join record");
         if (j->kind == JoinKind::None && j->raw_delta_mm != 0) return invalid("join record");
     }
@@ -311,6 +311,9 @@ Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const Road
     // the limits, and names the decks served afterwards.
     std::optional<RoadUnderpassFinder> finder;
     RoadProfileLimits profile_limits = limits;
+    // G2M-024: the chord bound of the reference fits is de.json's reference block (zero = off), whatever the caller set.
+    profile_limits.reference.chord_half_width_factor = static_cast<double>(rules.reference.chord_half_width_percent) / 100.0;
+    profile_limits.reference.chord_margin_m = static_cast<double>(rules.reference.chord_margin_mm) / 1000.0;
     if (underpass.enabled && rules.underpass.enabled) {
         const RoadGraph& crossings = underpass.crossings ? *underpass.crossings : context ? *context : graph.graph;
         if (underpass.crossings) { const auto ok = contains_tile_ways(crossings); if (!ok) return invalid("crossing graph lacks a tile way"); }
@@ -376,14 +379,14 @@ Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const Road
 }
 Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
     const auto graph_valid = validate_road_graph_tile(tile.source); if (!graph_valid) return graph_valid.error();
-    if (tile.encoding != kRoadGeomEncoding && tile.encoding != kRoadGeomEncodingTunnels && tile.encoding != kRoadGeomEncodingJunctions &&
-        tile.encoding != kRoadGeomEncodingPrevious && tile.encoding != kRoadGeomEncodingLegacy) return invalid("encoding");
-    // `current`: encodings 9, 8 and 7 (junctions, furniture, provenance); provenance 4 (TunnelFloor) only in 9 and 8;
-    // underpass decks only in 9.
-    const bool legacy = tile.encoding == kRoadGeomEncodingLegacy,
-        current = tile.encoding == kRoadGeomEncoding || tile.encoding == kRoadGeomEncodingTunnels || tile.encoding == kRoadGeomEncodingJunctions;
-    const unsigned max_provenance = tile.encoding == kRoadGeomEncoding || tile.encoding == kRoadGeomEncodingTunnels ? 4 : 3;
-    if (tile.encoding != kRoadGeomEncoding && !tile.underpasses.empty()) return invalid("underpass decks before encoding 9");
+    if (tile.encoding != kRoadGeomEncoding && tile.encoding != kRoadGeomEncodingUnderpass && tile.encoding != kRoadGeomEncodingTunnels &&
+        tile.encoding != kRoadGeomEncodingJunctions && tile.encoding != kRoadGeomEncodingPrevious && tile.encoding != kRoadGeomEncodingLegacy) return invalid("encoding");
+    // `current`: encodings 10 to 7 (junctions, furniture, provenance); provenance 4 (TunnelFloor) only in 10 to 8;
+    // underpass decks only in 10 and 9.
+    const bool legacy = tile.encoding == kRoadGeomEncodingLegacy, with_decks = has_underpass_section(tile.encoding),
+        current = with_decks || tile.encoding == kRoadGeomEncodingTunnels || tile.encoding == kRoadGeomEncodingJunctions;
+    const unsigned max_provenance = with_decks || tile.encoding == kRoadGeomEncodingTunnels ? 4 : 3;
+    if (!with_decks && !tile.underpasses.empty()) return invalid("underpass decks before encoding 9");
     if (tile.entries.size() > kMaxEntries) return invalid("entry budget");
     if (legacy && !tile.features.empty()) return invalid("legacy tile carries features");
     if (!current && (!tile.junctions.empty() || !tile.furniture.empty())) return invalid("encoding 6/5 tile carries junctions or furniture");
@@ -495,15 +498,15 @@ Result<void> validate_road_geom_tile(const RoadGeomTile& tile) {
     return validate_underpasses(tile);
 }
 Result<TileBody> encode_road_geom(const RoadGeomTile& tile) {
-    if (tile.encoding != kRoadGeomEncoding && tile.encoding != kRoadGeomEncodingTunnels && tile.encoding != kRoadGeomEncodingJunctions &&
-        tile.encoding != kRoadGeomEncodingPrevious)
-        return make_error(ErrorCode::InvalidArgument, "roads.geom: only encodings 9, 8, 7 and 6 are written");
+    if (tile.encoding != kRoadGeomEncoding && tile.encoding != kRoadGeomEncodingUnderpass && tile.encoding != kRoadGeomEncodingTunnels &&
+        tile.encoding != kRoadGeomEncodingJunctions && tile.encoding != kRoadGeomEncodingPrevious)
+        return make_error(ErrorCode::InvalidArgument, "roads.geom: only encodings 10, 9, 8, 7 and 6 are written");
     if (tile.encoding == kRoadGeomEncodingJunctions) for (const auto& o : tile.origins) if (o.provenance == ProfileProvenance::TunnelFloor)
         return make_error(ErrorCode::InvalidArgument, "roads.geom: encoding 7 cannot carry a tunnel floor");
     if (tile.encoding == kRoadGeomEncodingPrevious) for (const auto& o : tile.origins) if (o.provenance != ProfileProvenance::Strict)
         return make_error(ErrorCode::InvalidArgument, "roads.geom: encoding 6 cannot carry a completed profile");
     const auto valid = validate_road_geom_tile(tile); if (!valid) return valid.error();
-    // Encodings 6 to 9 embed the encoding-5 graph section (with node tags), byte for byte.
+    // Encodings 6 to 10 embed the encoding-5 graph section (with node tags), byte for byte.
     const auto graph = encode_road_graph(tile.source, kRoadGraphEncodingTags); if (!graph) return graph.error();
     ByteWriter w; w.varint(tile.entries.size());
     for (const auto& entry : tile.entries) {
@@ -597,8 +600,8 @@ Result<TileBody> encode_road_geom(const RoadGeomTile& tile) {
     body.sections.push_back({5, SectionCodec::Zstd, jw.take()});
     body.sections.push_back({6, SectionCodec::Zstd, uw.take()});
     body.sections.push_back({7, SectionCodec::Zstd, pw.take()});
-    if (tile.encoding != kRoadGeomEncoding) return body;
-    // Section 8 (encoding 9, D56): underpass decks; stations in integer mm, the lower ways as ascending deltas.
+    if (!has_underpass_section(tile.encoding)) return body;
+    // Section 8 (encodings 9 and 10, D56): underpass decks; stations in integer mm, the lower ways as ascending deltas.
     ByteWriter dw; dw.varint(tile.underpasses.size());
     for (const auto& u : tile.underpasses) {
         const auto start = static_cast<std::uint64_t>(std::llround(u.start_m * 1000.0)), end = static_cast<std::uint64_t>(std::llround(u.end_m * 1000.0));
@@ -613,13 +616,14 @@ Result<TileBody> encode_road_geom(const RoadGeomTile& tile) {
     return body;
 }
 Result<RoadGeomTile> decode_road_geom(const TileBody& body) {
-    if ((body.encoding != kRoadGeomEncoding && body.encoding != kRoadGeomEncodingTunnels && body.encoding != kRoadGeomEncodingJunctions &&
-         body.encoding != kRoadGeomEncodingPrevious && body.encoding != kRoadGeomEncodingLegacy) || body.encoding_version != 1)
+    if ((body.encoding != kRoadGeomEncoding && body.encoding != kRoadGeomEncodingUnderpass && body.encoding != kRoadGeomEncodingTunnels &&
+         body.encoding != kRoadGeomEncodingJunctions && body.encoding != kRoadGeomEncodingPrevious && body.encoding != kRoadGeomEncodingLegacy) ||
+        body.encoding_version != 1)
         return make_error(ErrorCode::Unsupported, "roads.geom: encoding/version");
-    const bool legacy = body.encoding == kRoadGeomEncodingLegacy,
-        current = body.encoding == kRoadGeomEncoding || body.encoding == kRoadGeomEncodingTunnels || body.encoding == kRoadGeomEncodingJunctions;
-    const unsigned max_provenance = body.encoding == kRoadGeomEncoding || body.encoding == kRoadGeomEncodingTunnels ? 4 : 3;
-    const std::size_t section_count = legacy ? 2 : body.encoding == kRoadGeomEncoding ? 8 : current ? 7 : 4;
+    const bool legacy = body.encoding == kRoadGeomEncodingLegacy, with_decks = has_underpass_section(body.encoding),
+        current = with_decks || body.encoding == kRoadGeomEncodingTunnels || body.encoding == kRoadGeomEncodingJunctions;
+    const unsigned max_provenance = with_decks || body.encoding == kRoadGeomEncodingTunnels ? 4 : 3;
+    const std::size_t section_count = legacy ? 2 : with_decks ? 8 : current ? 7 : 4;
     if (body.sections.size() != section_count) return invalid("sections");
     for (std::size_t i = 0; i < section_count; ++i) if (body.sections[i].type != i + 1) return invalid("sections");
     for (const auto& section : body.sections) if (section.data.size() > kMaxSectionRawSize) return invalid("section size");
@@ -696,7 +700,7 @@ Result<RoadGeomTile> decode_road_geom(const TileBody& body) {
             x.anchor = {ab, static_cast<AnchorEdge>(ae), static_cast<PlacementSource>(as)}; x.offset.mode = static_cast<OffsetMode>(om);
             if (!s31(x.offset.start_mm) || !u31(x.offset.start_length_mm) || !s31(x.offset.end_mm) || !u31(x.offset.end_length_mm)) return invalid("offset");
             for (auto* j : {&x.start_join, &x.end_join}) {
-                const auto jk = c.u8(); if (!c.ok() || jk > 4) return invalid("join kind");
+                const auto jk = c.u8(); if (!c.ok() || jk > 5) return invalid("join kind");
                 j->kind = static_cast<JoinKind>(jk); j->neighbour_way_id = c.svarint(); if (!s31(j->raw_delta_mm)) return invalid("join delta");
             }
             if (!c.ok()) return invalid("truncated cross-section");
@@ -786,7 +790,7 @@ Result<RoadGeomTile> decode_road_geom(const TileBody& body) {
         }
         if (!pr.at_end()) return invalid("truncated or trailing provenance bytes");
     }
-    if (body.encoding == kRoadGeomEncoding) {
+    if (has_underpass_section(body.encoding)) {
         ByteReader dr(body.sections[7].data);
         const auto underpass_count = dr.varint(); if (!dr.ok() || underpass_count > kMaxUnderpasses || underpass_count > dr.remaining() / 6) return invalid("underpass count");
         for (std::uint64_t i = 0; i < underpass_count; ++i) {

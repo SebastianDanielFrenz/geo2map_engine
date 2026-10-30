@@ -22,13 +22,22 @@ add_executable(g2m_bridge_tests
   test_residency.cpp
   test_determinism.cpp
   test_seam_crossing.cpp
+  test_ps_bridge_decks.cpp
+  test_ps_bridge_surfaces.cpp
+  test_ps_bridge_terrain.cpp
 )
 # g2m_mesh: build_chunk for the render-vs-Jolt comparison. g2m_world:
 # sample_height_exact / sample_height_bilinear against the same Jolt surface. g2m_fixture_release
 # (tests/support): the PKT DGM1 fixture release for the fixture/residency
 # tests - it links Catch2 itself (REQUIRE inside make_fixture_release).
 target_link_libraries(g2m_bridge_tests PRIVATE
-  g2m_ps_bridge g2m_mesh g2m_world g2m_fixture_release g2m_test_catch_main g2m_warnings g2m_options)
+  g2m_ps_bridge g2m_mesh g2m_world g2m_layers g2m_decode g2m_fixture_release g2m_test_catch_main g2m_warnings g2m_options)
+
+# Phase 9 (g2m::ps_bridge deck installer, surface binding, PhysicsTerrain): the deck tests build their set from
+# tests/world/road_mesh_test_data.h (the committed OSM corridor fixtures) and tests/support.
+target_include_directories(g2m_bridge_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests/world)
+target_compile_definitions(g2m_bridge_tests PRIVATE G2M_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+  G2M_BRIDGE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 include(Catch)
 catch_discover_tests(g2m_bridge_tests ADD_TAGS_AS_LABELS DISCOVERY_MODE PRE_TEST)

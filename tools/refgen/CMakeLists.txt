@@ -11,10 +11,11 @@
 # (WSL), never with MSVC/clang-cl, where long double is plain double
 # (main.cpp static_asserts this).
 #
-#   cmake -S . -B ~/build/geo2map_engine/refgen -G Ninja -DCMAKE_BUILD_TYPE=Release \
+#   cmake -S . -B ~/build/$(basename "$PWD")/refgen -G Ninja -DCMAKE_BUILD_TYPE=Release \
 #         -DCMAKE_CXX_COMPILER=clang++ -DG2M_BUILD_TESTS=OFF -DG2M_BUILD_REFGEN=ON
-#   cmake --build ~/build/geo2map_engine/refgen --target g2m_refgen
-#   ~/build/geo2map_engine/refgen/tools/refgen/g2m_refgen testdata/geodesy
+#   cmake --build ~/build/$(basename "$PWD")/refgen --target g2m_refgen
+#   ~/build/$(basename "$PWD")/refgen/tools/refgen/g2m_refgen testdata/geodesy
+#   (build dir per checkout: $(basename "$PWD") is the checkout's directory name)
 
 set(GEOGRAPHICLIB_PRECISION 3 CACHE STRING "GeographicLib: long double" FORCE)
 set(BUILD_SHARED_LIBS OFF)

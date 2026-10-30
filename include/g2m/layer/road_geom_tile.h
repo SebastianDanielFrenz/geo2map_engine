@@ -6,9 +6,14 @@
 #include <optional>
 namespace g2m {
 inline constexpr std::string_view kRoadGeomLayer = "g2m.roads.geom";
+// Encoding 10 (merge lanes and exits, decision G2M-028): the byte layout of encoding 9. The value domains grew: JoinKind 5
+// (Landing) in the cross-section joins and JunctionDecline 6 (MergeLane) in section 5, so an encoding-9 decoder rejects
+// such a tile. The deriver writes 10.
+inline constexpr std::uint16_t kRoadGeomEncoding = 10;
 // Encoding 9 (underpass decks, decisions D53-D58): encoding 8 plus section 8, the underpass deck spans of ground
-// stretches over a lower road in a DEM cutting (RoadGeomTile::underpasses). The deriver writes 9.
-inline constexpr std::uint16_t kRoadGeomEncoding = 9;
+// stretches over a lower road in a DEM cutting (RoadGeomTile::underpasses). Still decoded, and written when
+// RoadGeomTile::encoding asks for it.
+inline constexpr std::uint16_t kRoadGeomEncodingUnderpass = 9;
 // Encoding 8 (terrain migration phase 4, decision D47): the byte layout of encoding 7, with provenance 4 (TunnelFloor)
 // allowed in section 7 and a profile on a tunnel stretch carrying it. Still decoded, and written when
 // RoadGeomTile::encoding asks for it (a tile without underpass decks).
@@ -23,6 +28,8 @@ inline constexpr std::uint16_t kRoadGeomEncodingJunctions = 7;
 inline constexpr std::uint16_t kRoadGeomEncodingPrevious = 6;
 // The previous body format (profiles only, no cross-sections); still decoded, never written.
 inline constexpr std::uint16_t kRoadGeomEncodingLegacy = 5;
+// The encodings that carry section 8 (the underpass decks): 9 and 10.
+inline constexpr bool has_underpass_section(std::uint16_t encoding) { return encoding == kRoadGeomEncoding || encoding == kRoadGeomEncodingUnderpass; }
 struct RoadGeomEntry {
     std::int64_t way_id = 0;
     RoadStretch stretch;
@@ -202,7 +209,7 @@ struct RoadGeomTile {
     // (adjust_features_for_junctions), which only the owner tile holds, so a consumer applies them with the junctions
     // it has loaded. Sorted by (entry_index, station bits, node_id).
     std::vector<ProfileFeature> features;
-    // 9 for everything built with the underpass pass, else 8; 7, 6 or 5 for a decoded older body. 8 has no underpass
+    // 10 for everything built with the underpass pass, else 8; 9 for a decoded body without merge lanes; 7, 6 or 5 for a decoded older body. 8 has no underpass
     // decks; 7 has no tunnel floors; 6 has no junctions, furniture
     // or origins; 5 also no cross-sections or features (consumers fall back to the symmetric RoadAttributes::width_mm path).
     std::uint16_t encoding = kRoadGeomEncodingTunnels;

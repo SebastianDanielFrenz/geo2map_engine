@@ -310,14 +310,18 @@ TEST_CASE("T3: a repairable bow-tie is repaired by trim extension; without the r
     const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
     const auto builder = RoadReferenceBuilder::make(*world); REQUIRE(builder);
     {
-        auto g0 = g2m_test::geometry_in_tile(*world, TileKey{g2m_test::kZone32N, 2, 455, 5421}); REQUIRE(g0);
+        // Node 527505 is an exit with a merge lane since G2M-028 (a MergeLane decline); this case is about the ring builder, so the
+        // merge-lane rules are off here.
+        auto no_merge = builtin_road_rules_de(); no_merge.merge_lane.enabled = false;
+        g2m_test::GeomOptions go; go.rules = &no_merge;
+        auto g0 = g2m_test::geometry_in_tile_with(*world, TileKey{g2m_test::kZone32N, 2, 455, 5421}, go); REQUIRE(g0);
         JunctionBuildStats s0;
-        const auto capped = build_node_junction(*g0, *builder, 527505, builtin_road_rules_de(), &s0); REQUIRE(capped);
+        const auto capped = build_node_junction(*g0, *builder, 527505, no_merge, &s0); REQUIRE(capped);
         CHECK(capped->decline == JunctionDecline::None);
         CHECK(s0.bowtie_rounds == 0); CHECK(s0.hull_fallbacks == 0);
         JunctionBuildOptions no_caps; no_caps.corner_caps = false;
         JunctionBuildStats s1;
-        REQUIRE(build_node_junction(*g0, *builder, 527505, builtin_road_rules_de(), &s1, no_caps));
+        REQUIRE(build_node_junction(*g0, *builder, 527505, no_merge, &s1, no_caps));
         CHECK(s1.bowtie_rounds == 1);   // the slice-3 behaviour
     }
     constexpr std::int64_t kNode = 2152308547;
@@ -825,7 +829,7 @@ struct ClusterCensus {
 // Every L2 tile of the fixture, its junctions built WITH clustering. A record is counted in the tile of its owner node.
 // Every build of the same record (owner, decline kind) in another tile must be identical after normalising entry
 // indices; every junction node of a built tile must be covered by a record of its owner's tile.
-ClusterCensus cluster_census_of(const std::string& pbf, const JunctionBuildOptions& options = {}) {
+ClusterCensus cluster_census_of(const std::string& pbf, const JunctionBuildOptions& options = {}, const RoadRules* rules = nullptr) {
     const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + pbf);
     const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
     const auto builder = RoadReferenceBuilder::make(*world); REQUIRE(builder);
@@ -844,7 +848,8 @@ ClusterCensus cluster_census_of(const std::string& pbf, const JunctionBuildOptio
     for (const auto& key : keys) {
         const auto probe = select_road_graph_tile(*world, key);
         if (!probe || probe->owned_edges.empty()) continue;
-        auto g = g2m_test::geometry_in_tile(*world, key); REQUIRE(g);
+        g2m_test::GeomOptions geom; geom.rules = rules;
+        auto g = g2m_test::geometry_in_tile_with(*world, key, geom); REQUIRE(g);
         ++c.tiles;
         JunctionBuildStats stats;
         auto js = build_road_junctions(*g, *builder, builtin_road_rules_de(), &stats, options); REQUIRE(js);
@@ -938,9 +943,14 @@ TEST_CASE("D34: simple offset rings that do not nest take the all-layer hull, wh
     // D21 handed slice 8 two junctions of frankfurt_hoechst (5 vertices, worst 352 mm outside) whose offset rings are
     // simple but not nested. The builder now sends them to the all-layer hull; with the rule off (the sabotage) the
     // census finds the violations again.
-    const auto with = cluster_census_of("frankfurt_hoechst.osm.pbf");
+    // G2M-024: the reference-line chord bound straightens a bowed fit of one of that junction's ways, so with the
+    // shipped rules its offset rings nest on their own and the case never arises. The census therefore runs with the
+    // bound switched off (the rules of before G2M-024), which is the fixture this test was written against.
+    RoadRules unbounded = builtin_road_rules_de();
+    unbounded.reference.chord_half_width_percent = 0; unbounded.reference.chord_margin_mm = 0;
+    const auto with = cluster_census_of("frankfurt_hoechst.osm.pbf", {}, &unbounded);
     JunctionBuildOptions off; off.hull_when_not_nested = false;
-    const auto without = cluster_census_of("frankfurt_hoechst.osm.pbf", off);
+    const auto without = cluster_census_of("frankfurt_hoechst.osm.pbf", off, &unbounded);
     std::printf("[D34] frankfurt_hoechst: nesting hulls %zu (all tiles' builds), hulls among owned records %zu (rule off: %zu), nesting violations %zu in %zu records (rule off: %zu in %zu, worst %.0f mm)\n",
         with.nesting_hulls, with.hulls, without.hulls, with.nested_bad, with.nested_junctions, without.nested_bad, without.nested_junctions, without.nested_worst_mm);
     CHECK(with.nesting_hulls > 0);

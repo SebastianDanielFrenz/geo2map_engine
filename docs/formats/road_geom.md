@@ -1,11 +1,20 @@
-# g2m.roads.geom encoding 9 / version 1
+# g2m.roads.geom encoding 10 / version 1
 
 Level-2 baked geometry, explicitly selected. Complete original topology and
 midpoint ownership are retained. Every canonical graph stretch has exactly
 one accepted parametric profile or explicit declined outcome. A geometry tile
 does not promise every road is driveable; consumers must inspect declines.
 
-Encoding 9 (underpass decks, decisions D53-D58, the deriver writes it since
+Encoding 10 (merge lanes and exits, decision G2M-028) has the byte layout of
+encoding 9; the value domains grew: JoinKind 5 (Landing, a merge ramp's end
+beside the added lane) in the cross-section joins of section 3, JunctionDecline
+6 (MergeLane, a node where a ramp lands has no patch) in section 5, and the
+ribbon flag bits 64/128 (broken edge) and 512/1024 (hidden edge) the renderer
+sets near them. An encoding-9 decoder rejects a tile that uses them; the
+deriver writes 10. Encoding 9 still decodes and is written when a tile asks for
+it. The decoder requires exactly sections 1 to 8 for encodings 9 and 10.
+
+Encoding 9 (underpass decks, decisions D53-D58, the deriver wrote it from
 2026-10-15) is encoding 8 plus section 8: the spans of ground stretches that
 pass over a lower road in a cutting and are served as decks (the profile there
 is the rim chord, not the DEM). Encoding 8 still decodes (no section 8, no
@@ -38,7 +47,7 @@ written. The decoder requires exactly sections 1 to 7 in that order for encoding
 | 5 | Zstd | junctions owned by this tile (encoding 7) |
 | 6 | Zstd | junction furniture: crossings, stop and give-way lines, signals (encoding 7) |
 | 7 | Zstd | profile provenance, one record per entry (encoding 7) |
-| 8 | Zstd | underpass decks on ground entries (encoding 9) |
+| 8 | Zstd | underpass decks on ground entries (encodings 9 and 10) |
 
 Sections 1-4 of an encoding-7 body have the encoding-6 format byte for byte;
 their content differs where the completion tier (design 6.6) gives a declined
@@ -132,7 +141,7 @@ varint junction_count                         <= 65536
 per junction (ascending by owner node id; for one owner a single-node record precedes its ClusterTooLarge record):
   svarint owner_node_id                       == nodes[0]
   u16 flags                                   1 Cluster, 2 OnStructure, 4 HullFallback, 8 Partial, 16 RaisedTable; other bits 0
-  u16 decline                                 0 None, 1 ClusterTooLarge, 2 ReachExceeded, 3 SingleApproach, 4 Degenerate, 5 Underground
+  u16 decline                                 0 None, 1 ClusterTooLarge, 2 ReachExceeded, 3 SingleApproach, 4 Degenerate, 5 Underground, 6 MergeLane
   varint node_count                           1..4096; svarint node_id each, strictly ascending
   varint approach_count                       1..4096
   per approach: varint entry_index, u8 at_end (0/1), u8 status (0 Used, 1 NoProfile, 2 NoCrossSection, 3 Tunnel), binary64 trim_m
@@ -183,7 +192,7 @@ TunnelFloor) and `u16
 strict_decline_code` (0 for Strict; for a completed profile the ErrorCode of the
 strict pass's decline, 1..ReadOnly).
 
-## Section 8: underpass decks (encoding 9)
+## Section 8: underpass decks (encodings 9 and 10)
 
 `varint count` (at most 65536), then per deck: `varint entry_index`, `varint
 start_mm`, `varint length_mm` (the deck is [start, start + length] in integer

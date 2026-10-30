@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrain and Roads</title>
+<style>
+:root{
+  --g2m:#1f6fb2; --g2m-bg:#e3eef8;
+  --rg:#c4621c; --rg-bg:#fbeadc;
+  --mv:#7d3fb8; --mv-bg:#efe4fa;
+  --seam:#2f2f2f;
+  --ink:#1b1b1b; --muted:#5b5b5b; --line:#c9c9c9; --paper:#ffffff; --soft:#f6f6f4;
+  --ground:#8f7a55; --ground-bg:#e9dfc8; --asph:#4c4c52; --deck:#7b7b80; --air:#ffffff;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --g2m:#6fb0ea; --g2m-bg:#16293b; --rg:#f0a066; --rg-bg:#3a2516; --mv:#c39af0; --mv-bg:#2c1f3d;
+    --seam:#d8d8d8; --ink:#ececec; --muted:#a8a8a8; --line:#444; --paper:#151515; --soft:#1e1e1e;
+    --ground:#c8b48c; --ground-bg:#3a3326; --asph:#9a9aa2; --deck:#b0b0b6; --air:#151515;
+  }
+}
+:root[data-theme="dark"]{
+  --g2m:#6fb0ea; --g2m-bg:#16293b; --rg:#f0a066; --rg-bg:#3a2516; --mv:#c39af0; --mv-bg:#2c1f3d;
+  --seam:#d8d8d8; --ink:#ececec; --muted:#a8a8a8; --line:#444; --paper:#151515; --soft:#1e1e1e;
+  --ground:#c8b48c; --ground-bg:#3a3326; --asph:#9a9aa2; --deck:#b0b0b6; --air:#151515;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:28px;margin:0 0 4px}
+h2{font-size:21px;margin:40px 0 8px;padding-top:8px;border-top:2px solid var(--line)}
+h3{font-size:16px;margin:20px 0 4px}
+p{margin:6px 0 10px}
+.sub{color:var(--muted);margin:0 0 16px}
+code,.a{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-size:12.5px}
+.a{color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:13px;border:1.5px solid}
+.chip.g{border-color:var(--g2m);background:var(--g2m-bg)}
+.chip.r{border-color:var(--rg);background:var(--rg-bg)}
+.chip.m{border-color:var(--mv);background:var(--mv-bg)}
+.chip.s{border:2px dashed var(--seam);background:var(--soft)}
+.stages{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;margin:10px 0}
+.st{border-left:5px solid;border-radius:6px;padding:8px 10px;background:var(--soft)}
+.st.g{border-color:var(--g2m)} .st.r{border-color:var(--rg)} .st.m{border-color:var(--mv)} .st.s{border-left:5px dashed var(--seam)}
+.st b{display:block;font-size:14px}
+.st .a{display:block;margin-top:4px;word-break:break-word}
+figure{margin:14px 0;overflow-x:auto}
+figcaption{color:var(--muted);font-size:13px;margin-top:4px}
+svg{max-width:100%;height:auto;display:block}
+svg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--ink)}
+.xs{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.card{border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--paper)}
+.card h3{margin-top:0}
+.card dl{margin:6px 0 0;display:grid;grid-template-columns:76px 1fr;gap:2px 8px;font-size:13px}
+.card dt{color:var(--muted)} .card dd{margin:0}
+.tag{display:inline-block;padding:0 6px;border-radius:4px;font-size:12px;border:1px solid}
+.tag.g{border-color:var(--g2m);color:var(--g2m)} .tag.r{border-color:var(--rg);color:var(--rg)} .tag.m{border-color:var(--mv);color:var(--mv)}
+table{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0}
+th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+th{background:var(--soft)}
+.note{border-left:4px solid var(--mv);background:var(--mv-bg);padding:8px 12px;border-radius:4px;margin:10px 0}
+.warn{border-left:4px solid var(--rg);background:var(--rg-bg);padding:8px 12px;border-radius:4px;margin:10px 0}
+nav ol{columns:2;margin:6px 0 0;padding-left:20px}
+@media (max-width:640px){nav ol{columns:1}}
+@media print{
+  body{font-size:11pt} main{max-width:none;padding:0}
+  h2{break-before:auto} .card,.st,figure{break-inside:avoid}
+  a{color:inherit;text-decoration:none}
+}
+</style>
+</head>
+<body>
+<main>
+<h1>Terrain and roads</h1>
+<p class="sub">How geo2map builds the ground and lays roads on it, and which repo runs each step. Status 2026-10-20: geo2map main 407380b, racing_game codex/powertrain-swaps 326f2df, plus the open PRs named where they change a step. Text twin for agents: <code>terrain_and_roads.md</code>. Central pipeline doc: <code>README.md</code>. Move plan: <code>../terrain_migration_plan.md</code> section 6.</p>
+
+<div class="legend">
+  <span class="chip g">geo2map</span>
+  <span class="chip r">racing_game, stays in the game</span>
+  <span class="chip m">in the game today, moving to geo2map</span>
+  <span class="chip s">physics seam (geo2map data becomes physics_sim objects)</span>
+</div>
+<p class="a">Anchors: <code>g2m:</code> geo2map, <code>rg:</code> racing_game, <code>rg#46:</code> a racing_game PR branch, <code>g2m#20:</code> a geo2map PR branch. "Unverified" marks a statement taken from a comment I did not trace in code.</p>
+
+<nav><ol>
+<li><a href="#overview">Overview</a></li>
+<li><a href="#terrain">Terrain steps</a></li>
+<li><a href="#roads">Road steps</a></li>
+<li><a href="#outputs">Physics ground, collision decks, render meshes</a></li>
+<li><a href="#seam">The physics seam</a></li>
+<li><a href="#xs">Cross-sections</a></li>
+</ol></nav>
+
+<div class="warn"><b>The key fact today.</b> The game does not read the served carve yet. It fetches raw <code>g2m.terrain.height</code>, smooths it with its own Gaussian and carves roads with its own <code>RoadSurfacePatch</code>. Physics and render both use that game-carved tile. <code>g2m.terrain.carved</code> is ready but has no consumer. Switching the game over is migration phase 7.</div>
+
+<h2 id="overview">1. Overview</h2>
+<figure>
+<svg viewBox="0 0 1060 560" role="img" aria-label="Pipeline overview">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+  </defs>
+  <!-- band labels -->
+  <text x="10" y="22" font-size="13" font-weight="700" fill="var(--muted)">SERVER: geo2map derivers, cached tiles, part of the release id</text>
+  <text x="10" y="232" font-size="13" font-weight="700" fill="var(--muted)">CLIENT: inside the game process</text>
+  <text x="10" y="482" font-size="13" font-weight="700" fill="var(--muted)">OUTPUTS</text>
+  <line x1="10" y1="212" x2="1050" y2="212" stroke="var(--line)" stroke-dasharray="4 4"/>
+  <line x1="10" y1="462" x2="1050" y2="462" stroke="var(--line)" stroke-dasharray="4 4"/>
+  <!-- server row -->
+  <g font-size="12">
+    <rect x="10" y="34" width="150" height="46" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="20" y="53">src.elev.dgm1</text><text x="20" y="70" fill="var(--muted)">L2, 1 m DEM</text>
+    <rect x="190" y="34" width="150" height="46" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="200" y="53">elev.base L0</text><text x="200" y="70" fill="var(--muted)">256 m, 1 m cells</text>
+    <rect x="370" y="34" width="170" height="46" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="380" y="53">terrain.height L0-L6</text><text x="380" y="70" fill="var(--muted)">mean-of-4 pyramid</text>
+    <rect x="10" y="110" width="150" height="46" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="20" y="129">src.osm</text><text x="20" y="146" fill="var(--muted)">OSM extract</text>
+    <rect x="190" y="110" width="150" height="46" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="200" y="129">roads.graph L2</text><text x="200" y="146" fill="var(--muted)">128 m halo</text>
+    <rect x="370" y="110" width="170" height="46" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="380" y="129">roads.geom L2 enc 9</text><text x="380" y="146" fill="var(--muted)">line, profile, decks</text>
+    <rect x="590" y="72" width="190" height="46" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="600" y="91">terrain.carved L0-L6</text><text x="600" y="108" fill="var(--muted)">smooth + carve, unused</text>
+    <rect x="590" y="134" width="190" height="46" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="600" y="153">terrain.class L0-L6</text><text x="600" y="170" fill="var(--muted)">257 nodes, role, surface</text>
+    <rect x="830" y="110" width="210" height="46" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5" stroke-dasharray="5 3"/>
+    <text x="840" y="129">rail.geom L2 (opt-in)</text><text x="840" y="146" fill="var(--muted)">g2m#22, in review</text>
+  </g>
+  <g stroke="var(--muted)" stroke-width="1.4" fill="none" marker-end="url(#ar)">
+    <path d="M160,57 H188"/><path d="M340,57 H368"/><path d="M160,133 H188"/><path d="M340,133 H368"/>
+    <path d="M540,57 C565,57 565,90 588,92"/><path d="M540,133 C565,133 565,100 588,100"/><path d="M540,140 C565,140 565,157 588,157"/>
+    <path d="M85,156 C85,190 800,190 935,158"/>
+  </g>
+  <!-- client row -->
+  <g font-size="12">
+    <rect x="10" y="246" width="250" height="88" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="20" y="266" font-weight="700">g2m_world</text>
+    <text x="20" y="284">TerrainService, tickets, view chunks</text>
+    <text x="20" y="300">ribbons, decks (StructureSet)</text>
+    <text x="20" y="316">buildings, RingStreamer</text>
+    <rect x="280" y="246" width="300" height="88" rx="6" fill="var(--mv-bg)" stroke="var(--mv)" stroke-width="1.5"/>
+    <text x="290" y="266" font-weight="700">rg::WorldTerrain (game facade)</text>
+    <text x="290" y="284">smoothing + RoadSurfacePatch carve</text>
+    <text x="290" y="300">completion copy, route surfaces</text>
+    <text x="290" y="316">layer resolution (#51), rail meshes (#52)</text>
+    <rect x="600" y="246" width="200" height="88" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="610" y="266" font-weight="700">g2m_phys</text>
+    <text x="610" y="284">255 m physics grid</text>
+    <text x="610" y="300">resident heights, loader</text>
+    <text x="610" y="316">streamer and start gate</text>
+    <rect x="820" y="246" width="230" height="88" rx="6" fill="var(--rg-bg)" stroke="var(--rg)" stroke-width="1.5"/>
+    <text x="830" y="266" font-weight="700">Godot glue (stays)</text>
+    <text x="830" y="284">RgTerrainView upload, colours</text>
+    <text x="830" y="300">road/building/rail_stream.gd</text>
+    <text x="830" y="316">surface materials</text>
+  </g>
+  <!-- seam box -->
+  <rect x="440" y="350" width="610" height="96" rx="8" fill="var(--soft)" stroke="var(--seam)" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="452" y="370" font-size="13" font-weight="700">PHYSICS SEAM (section 5)</text>
+  <g font-size="12">
+    <rect x="452" y="380" width="180" height="56" rx="5" fill="var(--g2m-bg)" stroke="var(--g2m)"/>
+    <text x="460" y="398">g2m_ps_bridge</text><text x="460" y="414" fill="var(--muted)">G2mTerrainSource</text><text x="460" y="429" fill="var(--muted)">363 lines, shared</text>
+    <rect x="642" y="380" width="190" height="56" rx="5" fill="var(--mv-bg)" stroke="var(--mv)"/>
+    <text x="650" y="398">DeckInstaller, deck select</text><text x="650" y="414" fill="var(--muted)">surface binding, gate</text><text x="650" y="429" fill="var(--muted)">~525 logic lines (game)</text>
+    <rect x="842" y="380" width="198" height="56" rx="5" fill="var(--rg-bg)" stroke="var(--rg)"/>
+    <text x="850" y="398">Session policy</text><text x="850" y="414" fill="var(--muted)">interest points, progress</text><text x="850" y="429" fill="var(--muted)">~460 glue lines</text>
+  </g>
+  <g stroke="var(--muted)" stroke-width="1.4" fill="none" marker-end="url(#ar)">
+    <path d="M480,80 C470,170 360,200 140,244"/>
+    <path d="M685,118 C690,200 450,210 430,244"/>
+    <path d="M685,180 C690,210 690,220 700,244"/>
+    <path d="M430,334 V348"/><path d="M700,334 V378"/>
+    <path d="M135,334 C135,390 300,400 450,408"/>
+  </g>
+  <!-- outputs -->
+  <g font-size="12">
+    <rect x="10" y="494" width="330" height="56" rx="6" fill="var(--soft)" stroke="var(--line)"/>
+    <text x="20" y="514" font-weight="700">Physics ground</text><text x="20" y="532" fill="var(--muted)">ps heightfield tiles, 255 m, game-carved heights</text>
+    <rect x="360" y="494" width="330" height="56" rx="6" fill="var(--soft)" stroke="var(--line)"/>
+    <text x="370" y="514" font-weight="700">Collision decks</text><text x="370" y="532" fill="var(--muted)">one static MeshShape body per deck</text>
+    <rect x="710" y="494" width="340" height="56" rx="6" fill="var(--soft)" stroke="var(--line)"/>
+    <text x="720" y="514" font-weight="700">Render meshes</text><text x="720" y="532" fill="var(--muted)">chunks, ribbons, decks, buildings, rail</text>
+  </g>
+  <g stroke="var(--muted)" stroke-width="1.4" fill="none" marker-end="url(#ar)">
+    <path d="M540,446 C500,470 300,470 200,492"/><path d="M740,446 V470 C740,480 560,480 525,492"/><path d="M935,334 C1000,400 1000,470 900,492"/>
+  </g>
+</svg>
+<figcaption>The served carve and class layers exist. Today only the class tile has a consumer (render ClassWindow, physics class mode). The game still makes its own carved heights in the facade, and that is what physics and render use.</figcaption>
+</figure>
+
+<h2 id="terrain">2. Terrain steps</h2>
+<figure>
+<svg viewBox="0 0 1060 220" role="img" aria-label="Terrain steps">
+  <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker></defs>
+  <!-- raw profile -->
+  <g font-size="12">
+    <text x="10" y="18" font-weight="700">T1-T3 raw DGM1</text>
+    <polyline points="10,90 30,84 45,92 60,80 75,88 90,78 105,85 120,76 135,83 150,74 165,82 180,72 200,80" fill="none" stroke="var(--ground)" stroke-width="2"/>
+    <text x="10" y="112" fill="var(--muted)">1 m cells, 1/256 m ints</text>
+    <text x="10" y="128" fill="var(--muted)">deck gaps interpolated</text>
+    <text x="250" y="18" font-weight="700">T4 smoothing</text>
+    <polyline points="250,86 280,85 310,83 340,81 370,79 400,77 440,76" fill="none" stroke="var(--ground)" stroke-width="2"/>
+    <text x="250" y="112" fill="var(--g2m)">served: integer kernel, strength 35</text>
+    <text x="250" y="128" fill="var(--mv)">game: Gaussian 2 m, 0.35, 1 pass</text>
+    <text x="490" y="18" font-weight="700">T5 carve</text>
+    <path d="M490,70 C520,72 535,88 560,90 H620 C645,90 660,72 690,70" fill="none" stroke="var(--ground)" stroke-width="2"/>
+    <rect x="560" y="86" width="60" height="5" fill="var(--asph)"/>
+    <text x="565" y="104" font-size="11" fill="var(--muted)">road bed</text>
+    <text x="490" y="122" fill="var(--g2m)">served: cores, blend 3-15 m, D42, D59</text>
+    <text x="490" y="138" fill="var(--mv)">game: RoadSurfacePatch, L0-L2 only</text>
+    <text x="760" y="18" font-weight="700">T6 class + T7/T8 outputs</text>
+    <g fill="none" stroke="var(--line)">
+      <path d="M760,40 h120 v80 h-120 z"/><path d="M790,40 v80 M820,40 v80 M850,40 v80 M760,60 h120 M760,80 h120 M760,100 h120"/>
+    </g>
+    <rect x="790" y="60" width="30" height="60" fill="var(--asph)" opacity=".6"/>
+    <rect x="820" y="60" width="30" height="60" fill="var(--g2m)" opacity=".25"/>
+    <text x="890" y="56">class nodes 257 x 257</text>
+    <text x="890" y="74" fill="var(--muted)">role / surface / rank</text>
+    <text x="890" y="100">physics tile 255 m,</text>
+    <text x="890" y="116" fill="var(--muted)">256 x 256 shared borders</text>
+  </g>
+  <g stroke="var(--muted)" fill="none" stroke-width="1.4" marker-end="url(#ar2)"><path d="M205,80 H245"/><path d="M445,78 H485"/><path d="M700,72 H752"/></g>
+  <g font-size="11.5" fill="var(--muted)">
+    <text x="10" y="176">g2m:src/layer/derive_terrain.cpp:45, :131</text>
+    <text x="250" y="160">g2m:src/layer/terrain_carve.cpp:82</text>
+    <text x="250" y="176">rg:core/src/terrain_smoothing.cpp</text>
+    <text x="490" y="160">g2m:src/layer/terrain_carve.cpp:1135</text>
+    <text x="490" y="176">rg:core/src/road_surface.cpp (228 lines)</text>
+    <text x="760" y="160">g2m:src/layer/terrain_class.cpp:234</text>
+    <text x="760" y="176">g2m:include/g2m/phys/physics_grid.h</text>
+  </g>
+</svg>
+</figure>
+<div class="stages">
+  <div class="st g"><b>T1 Raw DGM1</b><code>g2m.src.elev.dgm1</code> at L2: 1024 m tiles of 1 m samples, DHHN2016 heights. This is bare earth, so bridge decks are removed and the gap is interpolated. That leaves a hump under every overpass.<span class="a">g2m:src/layer/src_elev.cpp</span></div>
+  <div class="st g"><b>T2 Base elevation</b><code>g2m.elev.base</code> L0: 256 m, 256 x 256, 1 m cells, cell-registered, row 0 south. Int32 in 1/256 m.<span class="a">g2m:src/layer/derive_terrain.cpp:45</span></div>
+  <div class="st g"><b>T3 Served levels</b><code>g2m.terrain.height</code> L0-L6. L0 is elev.base. Each level above is the mean of 4, rounded half to even. Cells are 1, 2, 4 ... 64 m. No roads. This is what the game fetches.<span class="a">g2m:src/layer/derive_terrain.cpp:131</span></div>
+  <div class="st m"><b>T4 Smoothing (game copy)</b>A Gaussian with radius 2 m, strength 0.35 and 1 pass, at every level. The served carve has its own integer port. Phase 7 deletes the game copy.<span class="a">rg:core/src/terrain_smoothing.cpp, world_terrain.cpp:248</span></div>
+  <div class="st g"><b>T5 Served carve</b><code>g2m.terrain.carved</code> L0, per 1 m cell:
+    <br>1. junction cores (D42) beat approach cores, and the lowest core wins;
+    <br>2. otherwise the strongest blend, 3-15 m wide and widened to 1:1.5;
+    <br>3. the ground stays 0.55 m under decks, ramped over 4 m;
+    <br>4. steep walls at underpass decks (D59).
+    <br>Bridges and tunnels are never carved, except D65 short cuts (g2m#20).<span class="a">g2m:src/layer/terrain_carve.cpp:743, :860, :1135</span></div>
+  <div class="st m"><b>T5 Game carve</b><code>RoadSurfacePatch</code> works on 1 m segments of paved and tunnel profiles. The best road wins by score, RoadSeparation applies at 2.5 m, a 0.35 transition blend runs between roads, crown and verge drop come from the cross-section, and the rg#46 tie-in applies. It runs only up to L2. It does carve tunnels (line 46).<span class="a">rg:core/src/road_surface.cpp:46, :141-199; world_terrain.cpp:229-281</span></div>
+  <div class="st g"><b>T6 Class</b><code>g2m.terrain.class</code> L0-L6, 257 x 257 nodes, built from the carve ownership plus land cover. L1-L6 use a rank-max over 3 x 3.<span class="a">g2m:src/layer/terrain_class.cpp:234, terrain_carve.cpp:879</span></div>
+  <div class="st m"><b>T6 Route stamping (game)</b>Stamps unpaved strips, walkways and standalone paths into the served L0 class tile. A 0.45 m height gate applies, and paved beats walkway beats other.<span class="a">rg:core/src/route_surface_mesh.cpp:376, world_terrain.cpp:841</span></div>
+  <div class="st g"><b>T7 Physics tile</b>A 255 m tile with 256 x 256 node-registered samples, filled from the resident 256 m tiles. The heightfield is never holed (suppression off).<span class="a">g2m:include/g2m/phys/fill_physics_heights.h:47, bridges/physics_sim/src/g2m_terrain_source.cpp:113, :166</span></div>
+  <div class="st g"><b>T8 Render chunks</b>LOD chunks from <code>ViewStreamer</code>. They share one surface with Jolt: the 1 m lattice with each cell split on the anti-diagonal. Colours come from the game's table.<span class="a">g2m:src/mesh/terrain_chunk.cpp:210; rg:core/src/terrain_colours.cpp</span></div>
+</div>
+
+<h2 id="roads">3. Road steps</h2>
+<figure>
+<svg viewBox="0 0 1060 150" role="img" aria-label="Road steps">
+  <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker></defs>
+  <g font-size="11.5">
+    <rect x="5" y="20" width="115" height="54" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/><text x="12" y="40" font-weight="700">R1 graph</text><text x="12" y="58" fill="var(--muted)">OSM ways, nodes</text>
+    <rect x="135" y="20" width="115" height="54" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/><text x="142" y="40" font-weight="700">R2 line + bands</text><text x="142" y="58" fill="var(--muted)">lanes, widths</text>
+    <rect x="265" y="20" width="115" height="54" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/><text x="272" y="40" font-weight="700">R3 profile</text><text x="272" y="58" fill="var(--muted)">DEM fit, 5 m</text>
+    <rect x="395" y="20" width="115" height="54" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/><text x="402" y="40" font-weight="700">R4 completion</text><text x="402" y="58" fill="var(--muted)">bridges, tunnels</text>
+    <rect x="525" y="20" width="115" height="54" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/><text x="532" y="40" font-weight="700">R5 carve</text><text x="532" y="58" fill="var(--muted)">imprint (T5)</text>
+    <rect x="655" y="20" width="115" height="54" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/><text x="662" y="40" font-weight="700">R6 decks</text><text x="662" y="58" fill="var(--muted)">StructureSet</text>
+    <rect x="785" y="20" width="130" height="54" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/><text x="792" y="40" font-weight="700">R7 ribbons</text><text x="792" y="58" fill="var(--muted)">paint, junctions</text>
+    <rect x="930" y="20" width="125" height="54" rx="6" fill="var(--mv-bg)" stroke="var(--mv)" stroke-width="1.5"/><text x="937" y="40" font-weight="700">R8-R9 game</text><text x="937" y="58" fill="var(--muted)">routes, layers</text>
+    <rect x="395" y="92" width="115" height="44" rx="6" fill="var(--mv-bg)" stroke="var(--mv)" stroke-width="1.5"/><text x="402" y="110" font-weight="700">game copy</text><text x="402" y="126" fill="var(--muted)">completion copy</text>
+    <rect x="525" y="92" width="115" height="44" rx="6" fill="var(--mv-bg)" stroke="var(--mv)" stroke-width="1.5"/><text x="532" y="110" font-weight="700">game carve</text><text x="532" y="126" fill="var(--muted)">used today</text>
+    <rect x="785" y="92" width="270" height="44" rx="6" fill="var(--mv-bg)" stroke="var(--mv)" stroke-width="1.5"/><text x="792" y="110" font-weight="700">R11 rail meshes and decks (rg#52)</text><text x="792" y="126" fill="var(--muted)">from rail.geom (g2m#22)</text>
+  </g>
+  <g stroke="var(--muted)" fill="none" stroke-width="1.4" marker-end="url(#ar3)">
+    <path d="M120,47 H133"/><path d="M250,47 H263"/><path d="M380,47 H393"/><path d="M510,47 H523"/><path d="M640,47 H653"/><path d="M770,47 H783"/><path d="M915,47 H928"/>
+    <path d="M452,74 V90"/><path d="M582,74 V90"/>
+  </g>
+</svg>
+</figure>
+<div class="stages">
+  <div class="st g"><b>R1 OSM road graph</b><code>g2m.roads.graph</code> L2: a 128 m halo, complete ways, midpoint ownership, node tags, restrictions.<span class="a">g2m:src/layer/derive_road_graph.cpp:103</span></div>
+  <div class="st g"><b>R2 Reference line, lanes, widths</b>A smooth line per stretch, plus cross-section bands (lanes, shoulders, verges, sidewalks, cycle lanes) from the tags and <code>de.json</code>. g2m#21 bounds the line to its OSM chord (G2M-024).<span class="a">g2m:src/layer/road_reference.cpp:284, road_cross_section.cpp</span></div>
+  <div class="st g"><b>R3 Vertical profile</b>Fitted to DEM samples every 5 m within class grade and curvature limits. A stretch that cannot be fitted is declined. Bridges and tunnels go on to R4.<span class="a">g2m:src/layer/vertical_profile.cpp:30, road_profile.cpp</span></div>
+  <div class="st g"><b>R4 Completion</b>
+    <br>Bridges: abutment walk of up to 200 m with a 205 m margin (D48), plus anchors (D47).
+    <br>TunnelFloor: follows the DEM at 5 m, at most 30 %, radius at least 20 m. From 200 m length it is a straight grade (D52).
+    <br>Ground ease (D43) and a 20 m retry.
+    <br>Underpass decks D53-D63: at most 80 m, 2 m abutments.
+    <br>g2m#20 adds D64 (mask the overpass hump) and D65 (cuts of at most 80 m with a 1-8 m hump).<span class="a">g2m:src/layer/road_completion.cpp:155, :311, :383; road_underpass.cpp:472</span></div>
+  <div class="st m"><b>R4 Game copy</b><code>complete_road_profiles</code> and the 20 m retry still run on the served geometry, but only for entries the server left without a profile. Deleting them waits for the real-store probe.<span class="a">rg:core/src/road_structures.cpp:56-161; world_terrain.cpp:369-381</span></div>
+  <div class="st g"><b>R6 Structures and decks</b>Decks for bridges, tunnel floors, underpass decks, inferred roofs (an upper road of rank 5 or more over a tunnel) and approach decks. 5 vertices per 1 m, a 0.5 m slab and fascia sides.<span class="a">g2m:src/world/road_structures.cpp:242, :228</span></div>
+  <div class="st g"><b>R7 Ribbons and markings</b>Carriageway, verge, bands, lane paint, arrows, junction patches. Draped on the game-carved ground by bilinear sampling. The drape branch (d436eb1, G2M-025) drapes on the terrain triangulation, which removes up to 0.4 m of terrain poke-through (2.8 m at a cloverleaf).<span class="a">g2m:src/world/road_ribbons.cpp:353</span></div>
+  <div class="st m"><b>R8 Route surfaces</b>Unpaved roads and sidewalk/cycle bands as 1 m strips. OSM foot and cycle paths that are not in the graph.<span class="a">rg:core/src/route_surface_mesh.cpp:150, :294</span></div>
+  <div class="st m"><b>R9 Layer resolution (rg#51)</b>Rank: verge &lt; walkway &lt; unpaved &lt; carriageway &lt; junction patch. Lower triangles are cut within 0.25 m height. Where two carriageways overlap, more lanes win. Decals are lifted 25 mm.<span class="a">rg#51:core/src/surface_layers.cpp (223 lines)</span></div>
+  <div class="st g"><b>R10 Junction surface</b><code>junction_height_m</code> (D42): one surface for every incoming road. The approach relief fades over 3-15 m. Used by the served carve.<span class="a">g2m:src/layer/road_junction.cpp:1014, :1386</span></div>
+  <div class="st m"><b>R10 Game tie-in (rg#46)</b>A narrower road meeting a wider one at more than 30 degrees takes the wider road's crowned surface. It applies at grade only (up to 0.5 m gap, fading out by 1.0 m). It misses a third road at the same node.<span class="a">rg#46:core/src/road_surface.cpp (+53)</span></div>
+  <div class="st m"><b>R11 Rail (rg#52)</b>Builds deck slab, ballast, parapets and rails from <code>g2m.rail.geom</code>. A collision deck is built per bridge span only where it clears the ground by 5 m.<span class="a">rg#52:core/src/rail_meshes.cpp (440), world_terrain.cpp rail_decks_near</span></div>
+</div>
+
+<h2 id="outputs">4. Physics ground, collision decks, render meshes</h2>
+<figure>
+<svg viewBox="0 0 1060 250" role="img" aria-label="Three outputs">
+  <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker></defs>
+  <g font-size="12">
+    <text x="10" y="18" font-weight="700">Physics ground</text>
+    <rect x="10" y="28" width="160" height="34" rx="5" fill="var(--mv-bg)" stroke="var(--mv)"/><text x="18" y="50">game-carved tile</text>
+    <rect x="10" y="74" width="160" height="34" rx="5" fill="var(--seam)" opacity=".08"/><rect x="10" y="74" width="160" height="34" rx="5" fill="none" stroke="var(--seam)" stroke-dasharray="5 3"/><text x="18" y="96">HeightTileSharedFetch</text>
+    <rect x="10" y="120" width="160" height="34" rx="5" fill="var(--g2m-bg)" stroke="var(--g2m)"/><text x="18" y="142">loader, resident, gate</text>
+    <rect x="10" y="166" width="160" height="34" rx="5" fill="var(--g2m-bg)" stroke="var(--g2m)"/><text x="18" y="188">G2mTerrainSource</text>
+    <rect x="10" y="212" width="160" height="34" rx="5" fill="var(--soft)" stroke="var(--line)"/><text x="18" y="234">ps heightfield 255 m</text>
+    <text x="370" y="18" font-weight="700">Collision decks</text>
+    <rect x="370" y="28" width="180" height="34" rx="5" fill="var(--g2m-bg)" stroke="var(--g2m)"/><text x="378" y="50">build_road_decks</text>
+    <rect x="370" y="74" width="180" height="34" rx="5" fill="var(--mv-bg)" stroke="var(--mv)"/><text x="378" y="96">published_decks_ (facade)</text>
+    <rect x="370" y="120" width="180" height="34" rx="5" fill="none" stroke="var(--seam)" stroke-dasharray="5 3"/><text x="378" y="142">sync_road_decks select</text>
+    <rect x="370" y="166" width="180" height="34" rx="5" fill="none" stroke="var(--seam)" stroke-dasharray="5 3"/><text x="378" y="188">DeckInstaller (2 threads)</text>
+    <rect x="370" y="212" width="180" height="34" rx="5" fill="var(--soft)" stroke="var(--line)"/><text x="378" y="234">static MeshShape bodies</text>
+    <rect x="565" y="74" width="150" height="34" rx="5" fill="var(--mv-bg)" stroke="var(--mv)"/><text x="573" y="96">rail decks (rg#52)</text>
+    <text x="760" y="18" font-weight="700">Render meshes</text>
+    <rect x="760" y="28" width="290" height="34" rx="5" fill="var(--g2m-bg)" stroke="var(--g2m)"/><text x="768" y="50">chunks, ribbons, decks, buildings</text>
+    <rect x="760" y="74" width="290" height="34" rx="5" fill="var(--mv-bg)" stroke="var(--mv)"/><text x="768" y="96">route surfaces, layers, rail, roofs</text>
+    <rect x="760" y="120" width="290" height="34" rx="5" fill="var(--rg-bg)" stroke="var(--rg)"/><text x="768" y="142">colours, upload, materials, .gd streams</text>
+    <rect x="760" y="166" width="290" height="34" rx="5" fill="var(--soft)" stroke="var(--line)"/><text x="768" y="188">Godot RenderingServer</text>
+  </g>
+  <g stroke="var(--muted)" fill="none" stroke-width="1.4" marker-end="url(#ar4)">
+    <path d="M90,62 V72"/><path d="M90,108 V118"/><path d="M90,154 V164"/><path d="M90,200 V210"/>
+    <path d="M460,62 V72"/><path d="M460,108 V118"/><path d="M460,154 V164"/><path d="M460,200 V210"/><path d="M640,108 C640,130 600,137 552,137"/>
+    <path d="M905,62 V72"/><path d="M905,108 V118"/><path d="M905,154 V164"/>
+  </g>
+</svg>
+</figure>
+<table>
+<tr><th>Output</th><th>Heights come from</th><th>Grip / surface</th><th>Anchors</th></tr>
+<tr><td>Physics ground</td><td>Game-carved tile today, served carved after phase 7</td><td>Uniform, road raster (RoadValueLut) or class (SurfaceIdTable)</td><td class="a">rg:core/src/terrain_mode.cpp:26; g2m:bridges/physics_sim/src/g2m_terrain_source.cpp:113</td></tr>
+<tr><td>Collision decks</td><td>Deck mesh = profile (bridge, tunnel floor, underpass, roof, approach), rail spans with at least 5 m clearance</td><td>physics.road_surfaces paved / unpaved name</td><td class="a">rg:core/src/session.cpp:1089-1129; deck_installer.cpp</td></tr>
+<tr><td>Render</td><td>Chunks = carved heights; ribbons drape on carved ground; decks = their mesh</td><td>Class ids, game colour table, flags</td><td class="a">rg:core/src/world_terrain.cpp:467-559; godot_ext/src/rg_terrain_view.cpp:711</td></tr>
+</table>
+<p>Decks are required within the physics radius + 255 m and built ahead for a further 600 m, at 16 installs per tick. A deck exists only after the game has derived that L2 road surface, so the start-up gate implicitly waits for road derivation.</p>
+
+<h2 id="seam">5. The physics seam</h2>
+<p>This is where geo2map data becomes physics_sim objects. Rule G2M-001: geo2map core never depends on physics_sim. Only the opt-in bridge <code>bridges/physics_sim</code> (<code>g2m_ps_bridge</code>) sees ps types.</p>
+<figure>
+<svg viewBox="0 0 1060 300" role="img" aria-label="Physics seam">
+  <rect x="6" y="6" width="1048" height="288" rx="10" fill="var(--soft)" stroke="var(--seam)" stroke-width="2" stroke-dasharray="8 5"/>
+  <text x="20" y="30" font-size="14" font-weight="700">Physics seam: lines measured 2026-10-20</text>
+  <g font-size="12">
+    <rect x="20" y="44" width="250" height="110" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5"/>
+    <text x="30" y="64" font-weight="700">S1 g2m_ps_bridge (exists)</text>
+    <text x="30" y="82">G2mTerrainSource (3 modes)</text>
+    <text x="30" y="98">prefetch, make_terrain_config</text>
+    <text x="30" y="114" fill="var(--muted)">363 lines, already game-free</text>
+    <text x="30" y="140" class="a" fill="var(--muted)">g2m_terrain_source.cpp</text>
+    <rect x="290" y="44" width="370" height="230" rx="6" fill="var(--mv-bg)" stroke="var(--mv)" stroke-width="1.5"/>
+    <text x="300" y="64" font-weight="700">In the game, reusable logic (about 525 lines)</text>
+    <text x="300" y="86">S6 DeckInstaller + make_deck_mesh_shape: 371</text>
+    <text x="312" y="102" fill="var(--muted)">off-thread shapes, fixed DeckKey order, budget, wait</text>
+    <text x="300" y="124">S5 deck selection: about 30 of 41</text>
+    <text x="312" y="140" fill="var(--muted)">required vs prefetch radius, surface per land class</text>
+    <text x="300" y="162">S3 surface binding: about 60</text>
+    <text x="312" y="178" fill="var(--muted)">names to SurfaceTable ids, &lt; 255 check, kind table</text>
+    <text x="300" y="200">S4 gate and priming: about 70</text>
+    <text x="312" y="216" fill="var(--muted)">retry failed, prime ticks, residency checks</text>
+    <text x="300" y="238">S2 stack: about 40 of 71; S8 rail decks: about 60</text>
+    <text x="300" y="262" fill="var(--muted)">rg:core/src/session.cpp, deck_installer.*</text>
+    <rect x="680" y="44" width="360" height="110" rx="6" fill="var(--rg-bg)" stroke="var(--rg)" stroke-width="1.5"/>
+    <text x="690" y="64" font-weight="700">In the game, stays (about 460 lines)</text>
+    <text x="690" y="84">interest points (player, parked car, follow)</text>
+    <text x="690" y="100">progress atomics, tracing, env overrides</text>
+    <text x="690" y="116">cancel, error text, timeouts policy</text>
+    <text x="690" y="132">S7 facade fetch adapter (goes in phase 8)</text>
+    <rect x="680" y="170" width="360" height="104" rx="6" fill="var(--g2m-bg)" stroke="var(--g2m)" stroke-width="1.5" stroke-dasharray="5 3"/>
+    <text x="690" y="190" font-weight="700">Recommendation (a): grow g2m_ps_bridge</text>
+    <text x="690" y="208">DeckInstaller, deck selection, surface binding,</text>
+    <text x="690" y="224">PhysicsTerrain stack, step-driven start gate</text>
+    <text x="690" y="240">no Godot, no rg types; geo2map core untouched</text>
+    <text x="690" y="258" fill="var(--muted)">plan phase 9, size M, no release-id change</text>
+  </g>
+</svg>
+</figure>
+
+<h2 id="xs">6. Cross-sections</h2>
+<p>Each card says which code sets the heights, and where the result is drawn and collided. "Today" means the game-carved ground. After phase 7 the served carve replaces it, and the deck path stays the same.</p>
+<div class="xs">
+
+<div class="card"><h3>X1 Road on ground</h3>
+<svg viewBox="0 0 340 120" role="img" aria-label="Road on ground">
+  <path d="M0,60 C40,58 70,64 100,76 H240 C270,64 300,58 340,60 V120 H0 Z" fill="var(--ground-bg)" stroke="var(--ground)" stroke-width="1.5"/>
+  <path d="M0,52 C60,48 120,46 170,46 C220,46 280,48 340,52" fill="none" stroke="var(--ground)" stroke-dasharray="4 3"/>
+  <path d="M120,76 Q170,72 220,76" fill="none" stroke="var(--asph)" stroke-width="5"/>
+  <text x="140" y="68" font-size="10">crown</text><text x="225" y="44" font-size="10" fill="var(--muted)">raw DEM</text>
+  <text x="70" y="96" font-size="10" fill="var(--muted)">blend 3-15 m</text><text x="248" y="96" font-size="10" fill="var(--muted)">verge 0.06 m</text>
+</svg>
+<dl><dt>heights</dt><dd><span class="tag g">profile R3/R4</span> then the carve. Today <span class="tag m">road_surface.cpp</span>, later <span class="tag g">terrain_carve.cpp</span></dd>
+<dt>drawn</dt><dd>ribbon on the carved ground + terrain chunk</dd>
+<dt>collides</dt><dd>heightfield with carved heights, grip by class or road raster</dd></dl></div>
+
+<div class="card"><h3>X2 Bridge over road</h3>
+<svg viewBox="0 0 340 120" role="img" aria-label="Bridge over road">
+  <path d="M0,40 H60 C90,40 110,92 130,94 H210 C230,92 250,40 280,40 H340 V120 H0 Z" fill="var(--ground-bg)" stroke="var(--ground)" stroke-width="1.5"/>
+  <rect x="40" y="30" width="260" height="8" fill="var(--deck)"/><rect x="40" y="27" width="260" height="3" fill="var(--asph)"/>
+  <path d="M140,94 H200" stroke="var(--asph)" stroke-width="5"/>
+  <path d="M120,40 V94" stroke="var(--rg)" stroke-dasharray="3 3"/><text x="88" y="66" font-size="10" fill="var(--rg)">&gt;= 0.55 m</text>
+  <text x="44" y="22" font-size="10">deck mesh = collision body</text><text x="146" y="110" font-size="10" fill="var(--muted)">lower road</text>
+</svg>
+<dl><dt>heights</dt><dd>deck: <span class="tag g">bridge fit, walk 200 m</span>, mesh <span class="tag g">road_structures.cpp:242</span>. Ground under the deck clamped to top - 0.55 m over a 4 m ramp (game <span class="tag m">:221</span>, served <span class="tag g">:860</span>)</dd>
+<dt>drawn</dt><dd>deck mesh (rg_terrain_view.cpp:711) + lower ribbon</dd>
+<dt>collides</dt><dd>deck MeshShape body, lower road on the heightfield</dd></dl></div>
+
+<div class="card"><h3>X3 Road under bridge</h3>
+<svg viewBox="0 0 340 120" role="img" aria-label="Road under bridge">
+  <path d="M0,86 C80,86 120,70 170,68 C220,70 260,86 340,86 V120 H0 Z" fill="none" stroke="var(--ground)" stroke-dasharray="4 3"/>
+  <text x="140" y="62" font-size="10" fill="var(--muted)">DEM hump (removed deck)</text>
+  <path d="M0,90 H340 V120 H0 Z" fill="var(--ground-bg)" stroke="var(--ground)" stroke-width="1.5"/>
+  <path d="M60,90 H280" stroke="var(--asph)" stroke-width="5"/>
+  <rect x="110" y="20" width="120" height="8" fill="var(--deck)"/><text x="112" y="14" font-size="10">upper bridge deck</text>
+  <text x="70" y="108" font-size="10" fill="var(--g2m)">D64 masks the hump (g2m#20)</text>
+</svg>
+<dl><dt>heights</dt><dd>lower road from its own profile. <span class="tag g">D64</span> masks the bare-earth hump instead of declining the way. Grade separation: game RoadSeparation 2.5 m / served "lowest core wins" (equivalence unverified)</dd>
+<dt>drawn</dt><dd>lower ribbon on the carved ground, deck above</dd>
+<dt>collides</dt><dd>heightfield below. Rail spans (rg#52) collide only with at least 5 m clearance</dd></dl></div>
+
+<div class="card"><h3>X4 Short tunnel / open cut</h3>
+<svg viewBox="0 0 340 120" role="img" aria-label="Open cut">
+  <path d="M0,78 C60,78 90,40 120,30 H220 C250,40 280,78 340,78 V120 H0 Z" fill="none" stroke="var(--ground)" stroke-dasharray="4 3"/>
+  <path d="M0,78 H120 L126,78 V80 H214 V78 L220,78 H340 V120 H0 Z" fill="var(--ground-bg)" stroke="var(--ground)" stroke-width="1.5"/>
+  <path d="M120,30 L126,78 M220,30 L214,78" stroke="var(--ground)"/>
+  <path d="M40,80 H300" stroke="var(--asph)" stroke-width="5"/>
+  <text x="140" y="24" font-size="10" fill="var(--muted)">bank, 1-8 m hump</text><text x="128" y="100" font-size="10" fill="var(--g2m)">D65 chord, at most 80 m</text>
+</svg>
+<dl><dt>heights</dt><dd><span class="tag g">TunnelFloor</span>. With D65 the floor is the portal chord and the served carve cuts the bank. Today the game carves every tunnel anyway (road_surface.cpp:46)</dd>
+<dt>drawn</dt><dd>tunnel-floor deck mesh + the cut ground</dd>
+<dt>collides</dt><dd>floor deck + the cut heightfield</dd></dl></div>
+
+<div class="card"><h3>X5 Long tunnel</h3>
+<svg viewBox="0 0 340 120" role="img" aria-label="Long tunnel">
+  <path d="M0,80 C60,80 80,20 170,14 C260,20 280,80 340,80 V120 H0 Z" fill="var(--ground-bg)" stroke="var(--ground)" stroke-width="1.5"/>
+  <path d="M40,82 L300,74" stroke="var(--asph)" stroke-width="5"/>
+  <path d="M60,82 C100,80 130,75 170,74 C210,75 240,78 300,74" fill="none" stroke="var(--mv)" stroke-dasharray="4 3"/>
+  <text x="110" y="66" font-size="10" fill="var(--mv)">game: hill cut to the floor</text>
+  <text x="20" y="104" font-size="10" fill="var(--g2m)">served: hill kept; floor straight from 200 m (D52)</text>
+</svg>
+<dl><dt>heights</dt><dd><span class="tag g">TunnelFloor</span>, straight from 200 m, else the DEM at 5 m and at most 30 %. A roof deck is added where a higher road of rank 5 or more crosses</dd>
+<dt>drawn</dt><dd>floor deck + roof deck + terrain (carved today)</dd>
+<dt>collides</dt><dd>floor + roof decks + heightfield. <b>Open:</b> with the served carve the heightfield (never holed) lies over the floor deck. Plan Q6</dd></dl></div>
+
+<div class="card"><h3>X6 Junction with crown</h3>
+<svg viewBox="0 0 340 120" role="img" aria-label="Junction">
+  <path d="M0,70 H340 V120 H0 Z" fill="var(--ground-bg)" stroke="var(--ground)" stroke-width="1.5"/>
+  <path d="M30,72 Q170,60 310,72" fill="none" stroke="var(--asph)" stroke-width="6"/>
+  <path d="M170,63 L210,40 L320,30" fill="none" stroke="var(--asph)" stroke-width="3"/>
+  <text x="34" y="92" font-size="10">wider road, crowned</text><text x="226" y="26" font-size="10">side road</text>
+  <text x="34" y="108" font-size="10" fill="var(--g2m)">D42 surface for every arm</text><text x="190" y="108" font-size="10" fill="var(--mv)">rg#46 tie-in (interim)</text>
+</svg>
+<dl><dt>heights</dt><dd>served <span class="tag g">junction_height_m (D42)</span>, relief fades over 3-15 m. Today <span class="tag m">best-road rule + rg#46 tie-in</span>, at grade only</dd>
+<dt>drawn</dt><dd>junction patch (rank 4 in rg#51) + markings</dd>
+<dt>collides</dt><dd>heightfield with carved heights</dd></dl></div>
+
+<div class="card"><h3>X7 Verge and walkway</h3>
+<svg viewBox="0 0 340 120" role="img" aria-label="Verge and walkway">
+  <path d="M0,70 H40 C60,70 70,76 90,76 H250 C270,76 280,70 300,70 H340 V120 H0 Z" fill="var(--ground-bg)" stroke="var(--ground)" stroke-width="1.5"/>
+  <path d="M110,76 Q170,72 230,76" fill="none" stroke="var(--asph)" stroke-width="5"/>
+  <path d="M90,77 H110 M230,77 H250" stroke="var(--ground)" stroke-width="4"/>
+  <path d="M300,69 H335" stroke="var(--line)" stroke-width="5"/>
+  <text x="80" y="96" font-size="10" fill="var(--muted)">verge</text><text x="296" y="60" font-size="10">walkway</text>
+  <text x="150" y="96" font-size="10">carriageway</text>
+</svg>
+<dl><dt>heights</dt><dd>verge drop 0.06 m (game, smoothstep over the shoulder; served <span class="tag g">road_verge_m</span>). Bands follow the cross-section crown, standalone paths follow the ground</dd>
+<dt>drawn</dt><dd>ribbon verges + <span class="tag m">route surfaces R8</span>, cut by rank <span class="tag m">R9</span></dd>
+<dt>collides</dt><dd>heightfield. Grip from <span class="tag m">stamp_route_surface_classes</span>: paved &gt; walkway &gt; unpaved, 0.45 m gate</dd></dl></div>
+
+</div>
+
+<div class="note"><b>What changes next.</b> Section 6 of <code>terrain_migration_plan.md</code> lists 38 game pieces: 23 move and 15 stay. It adds phases 9-14. Phase 9 is the physics seam adapter, phase 10 deletes the game's completion copy, phase 11 moves route surfaces and layer resolution into <code>g2m_world</code>, phase 12 serves the route classes, phase 13 moves the rail meshes and phase 14 the roof tessellation. Phase 7 (carve switch) needs the tunnel decision first.</div>
+</main>
+</body>
+</html>
