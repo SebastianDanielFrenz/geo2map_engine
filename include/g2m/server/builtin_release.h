@@ -14,6 +14,7 @@
 #include "g2m/server/server.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace g2m {
@@ -25,6 +26,8 @@ namespace g2m {
 // g2m.elev.base), and any future entry reading one of these two must be
 // appended after it.
 struct BuiltinTerrainDerivers {
+    BuiltinTerrainDerivers() = default;
+    explicit BuiltinTerrainDerivers(std::string elevation_source) : elev(std::move(elevation_source)) {}
     ElevBaseDeriver elev;
     TerrainHeightDeriver height;
     RoadGraphDeriver roads;

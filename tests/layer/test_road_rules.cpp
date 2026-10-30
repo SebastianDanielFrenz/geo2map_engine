@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "8543303a6f630f588d135f6a44ae4571ec7f996fe970ad8f33b1b7c6a7fcca4a");
+    CHECK(to_hex(digest) == "42f310beba4023da5542a6c22145cd6881d442a45e499822ac7015af090afd50");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -202,16 +202,17 @@ TEST_CASE("The junction and furniture blocks are strict", "[layer][road_rules][j
 
 TEST_CASE("The tunnel block: the straight-grade threshold of long tunnels (owner ruling 2026-10-15)", "[layer][road_rules][tunnel]") {
     CHECK(builtin_road_rules_de().tunnel.straight_grade_min_length_m == 200);
-    const std::string from = "\"tunnel\": { \"straight_grade_min_length_m\": 200 }";
-    CHECK_FALSE(load_text(mutated(from, "\"tunnelx\": { \"straight_grade_min_length_m\": 200 }")));          // the block is required
-    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { }")));                                                 // and its key
-    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 200, \"bogus\": 1 }")));
-    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": -1 }")));
-    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 100001 }")));
-    CHECK_FALSE(load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 200.5 }")));         // integer metres
-    const auto never = load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 0 }"));       // 0 = never
+    // Only the key/value pair is mutated, so the block's other keys (cut_*) may change without touching this test.
+    const std::string key = "\"straight_grade_min_length_m\": 200";
+    CHECK_FALSE(load_text(mutated("\"tunnel\": {", "\"tunnelx\": {")));                                       // the block is required
+    CHECK_FALSE(load_text(mutated(key + ", ", "")));                                                         // and its key
+    CHECK_FALSE(load_text(mutated(key, key + ", \"bogus\": 1")));
+    CHECK_FALSE(load_text(mutated(key, "\"straight_grade_min_length_m\": -1")));
+    CHECK_FALSE(load_text(mutated(key, "\"straight_grade_min_length_m\": 100001")));
+    CHECK_FALSE(load_text(mutated(key, "\"straight_grade_min_length_m\": 200.5")));                          // integer metres
+    const auto never = load_text(mutated(key, "\"straight_grade_min_length_m\": 0"));                        // 0 = never
     REQUIRE(never); CHECK(never->tunnel.straight_grade_min_length_m == 0);
-    const auto other = load_text(mutated(from, "\"tunnel\": { \"straight_grade_min_length_m\": 350 }"));
+    const auto other = load_text(mutated(key, "\"straight_grade_min_length_m\": 350"));
     REQUIRE(other); CHECK(other->tunnel.straight_grade_min_length_m == 350);
     CHECK(other->junction == builtin_road_rules_de().junction);
 }
@@ -232,4 +233,52 @@ TEST_CASE("The underpass block: the deck rules of untagged grade-separated cross
     const auto off = load_text(mutated(from, "\"underpass\": { \"enabled\": false,"));
     REQUIRE(off); CHECK_FALSE(off->underpass.enabled);
     CHECK(off->tunnel == builtin_road_rules_de().tunnel);
+}
+
+TEST_CASE("The reference block: the chord bound of the reference lines (G2M-024)", "[layer][road_rules][reference]") {
+    const auto& r = builtin_road_rules_de().reference;
+    CHECK(r.chord_half_width_percent == 100); CHECK(r.chord_margin_mm == 3000);
+    CHECK(embedded_text().find("\"reference\": \"Vault G2M-024") != std::string::npos);   // the source tag
+    const std::string from = "\"reference\": { \"chord_half_width_percent\": 100, \"chord_margin_mm\": 3000 }";
+    CHECK_FALSE(load_text(mutated(from, "\"referencex\": { \"chord_half_width_percent\": 100, \"chord_margin_mm\": 3000 }")));  // required
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 100 }")));                         // both keys
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 100, \"chord_margin_mm\": 3000, \"bogus\": 1 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": -1, \"chord_margin_mm\": 3000 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 1001, \"chord_margin_mm\": 3000 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 100, \"chord_margin_mm\": 100001 }")));
+    CHECK_FALSE(load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 100, \"chord_margin_mm\": 3000.5 }")));  // integers only
+    const auto off = load_text(mutated(from, "\"reference\": { \"chord_half_width_percent\": 0, \"chord_margin_mm\": 0 }"));
+    REQUIRE(off); CHECK(off->reference.chord_half_width_percent == 0); CHECK(off->reference.chord_margin_mm == 0);   // 0 and 0 = off
+    CHECK(off->underpass == builtin_road_rules_de().underpass);
+}
+
+TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add landing (G2M-028)", "[layer][road_rules][road_merge_lane]") {
+    const auto& ml = builtin_road_rules_de().merge_lane;
+    CHECK(ml.enabled);
+    CHECK(ml.max_through_deflection_deg == 35); CHECK(ml.max_ramp_angle_deg == 60); CHECK(ml.direction_probe_m == 10);
+    CHECK(ml.landing_m_per_m == 12); CHECK(ml.landing_min_m == 30); CHECK(ml.landing_max_m == 80); CHECK(ml.max_landing_offset_mm == 8000);
+    const std::string from = "\"merge_lane\": { \"enabled\": true,";
+    CHECK_FALSE(load_text(mutated(from, "\"merge_lanex\": { \"enabled\": true,")));        // the block is required
+    CHECK_FALSE(load_text(mutated(from, "\"merge_lane\": { \"enabled\": 1,")));            // a boolean
+    CHECK_FALSE(load_text(mutated(from, "\"merge_lane\": { \"bogus\": 1, \"enabled\": true,")));
+    CHECK_FALSE(load_text(mutated("\"max_through_deflection_deg\": 35", "\"max_through_deflection_deg\": 0")));
+    CHECK_FALSE(load_text(mutated("\"max_through_deflection_deg\": 35", "\"max_through_deflection_deg\": 90")));
+    CHECK_FALSE(load_text(mutated("\"max_ramp_angle_deg\": 60", "\"max_ramp_angle_deg\": 90")));
+    CHECK_FALSE(load_text(mutated("\"max_ramp_angle_deg\": 60", "\"max_ramp_angle_deg\": 60.5")));   // integer degrees
+    CHECK_FALSE(load_text(mutated("\"direction_probe_m\": 10", "\"direction_probe_m\": 0")));
+    CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1001")));
+    CHECK_FALSE(load_text(mutated("\"landing_min_m\": 30", "\"landing_min_m\": 81")));             // above landing_max_m
+    CHECK_FALSE(load_text(mutated("\"max_landing_offset_mm\": 8000", "\"max_landing_offset_mm\": 20001")));
+    // The landing S-ramp must not be sharper than min_edge_radius_m of the link classes: 4 W / a^2 <= 1 / R.
+    CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1")));          // 8 m over 30 m: radius far under 60 m
+    const auto off = load_text(mutated(from, "\"merge_lane\": { \"enabled\": false,"));
+    REQUIRE(off); CHECK_FALSE(off->merge_lane.enabled);
+    CHECK(off->underpass == builtin_road_rules_de().underpass);
+    // A disabled block is not checked against the curvature bound (nothing lands).
+    auto sharp = mutated(from, "\"merge_lane\": { \"enabled\": false,");
+    const std::string rate = "\"landing_m_per_m\": 12";
+    const auto at = sharp.find(rate);
+    REQUIRE(at != std::string::npos);
+    sharp.replace(at, rate.size(), "\"landing_m_per_m\": 1");
+    CHECK(load_text(sharp));
 }

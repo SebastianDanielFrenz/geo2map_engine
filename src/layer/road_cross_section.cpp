@@ -134,19 +134,8 @@ struct Resolver {
 std::uint16_t parse_turn(std::string_view piece, bool& unknown) {
     std::uint16_t mask = 0;
     for (auto token : split(piece, ';')) {
-        token = trim(token);
-        if (token.empty() || token == "none") mask |= kTurnNone;
-        else if (token == "through") mask |= kTurnThrough;
-        else if (token == "left") mask |= kTurnLeft;
-        else if (token == "slight_left") mask |= kTurnSlightLeft;
-        else if (token == "sharp_left") mask |= kTurnSharpLeft;
-        else if (token == "right") mask |= kTurnRight;
-        else if (token == "slight_right") mask |= kTurnSlightRight;
-        else if (token == "sharp_right") mask |= kTurnSharpRight;
-        else if (token == "reverse") mask |= kTurnReverse;
-        else if (token == "merge_to_left") mask |= kTurnMergeToLeft;
-        else if (token == "merge_to_right") mask |= kTurnMergeToRight;
-        else unknown = true;
+        const auto bit = parse_turn_token(token);
+        if (bit) mask |= *bit; else unknown = true;
     }
     return unknown ? 0 : mask;
 }
@@ -183,6 +172,23 @@ CrossSectionBand make_band(LaneKind kind, std::int32_t width_mm, bool paved) {
     return b;
 }
 } // namespace
+
+// The one table of turn:lanes value tokens (OSM wiki Key:turn): road_cross_section.h.
+std::optional<std::uint16_t> parse_turn_token(std::string_view token) {
+    token = trim(token);
+    if (token.empty() || token == "none") return kTurnNone;
+    if (token == "through") return kTurnThrough;
+    if (token == "left") return kTurnLeft;
+    if (token == "slight_left") return kTurnSlightLeft;
+    if (token == "sharp_left") return kTurnSharpLeft;
+    if (token == "right") return kTurnRight;
+    if (token == "slight_right") return kTurnSlightRight;
+    if (token == "sharp_right") return kTurnSharpRight;
+    if (token == "reverse") return kTurnReverse;
+    if (token == "merge_to_left") return kTurnMergeToLeft;
+    if (token == "merge_to_right") return kTurnMergeToRight;
+    return std::nullopt;
+}
 
 Result<CrossSectionBase> resolve_cross_section_base(const RoadGraphWay& way, const RoadRules& rules) {
     const auto attrs = resolve_road_attributes(way);

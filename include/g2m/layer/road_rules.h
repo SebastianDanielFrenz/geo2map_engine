@@ -108,10 +108,36 @@ struct UnderpassRules {
     bool overpass = true;                // D64: mask the hump under an upper bridge (not in de.json: the tests' sabotage switch)
     friend bool operator==(const UnderpassRules&, const UnderpassRules&) = default;
 };
+// Reference-line fitting (vault G2M-024). The clothoid of a knot pair takes its end headings from the neighbouring ways (join
+// bisectors), so on a short or sparsely mapped way it can bow far away from the polyline the mapper drew (a 215 m track
+// bowing 15 m across the road beside it). A fitted segment may leave its chord by at most
+//   chord_half_width_percent / 100 * (half the way's resolved width) + chord_margin_mm
+// else the stretch takes the rounded straight/arc fallback (the unbounded fit when even that is infeasible). Both 0 = no
+// bound. Feeds ReferenceFitLimits::chord_half_width_factor / chord_margin_m in build_road_geom_tile.
+struct ReferenceRules {
+    std::int32_t chord_half_width_percent = 0;
+    std::int32_t chord_margin_mm = 0;
+    friend bool operator==(const ReferenceRules&, const ReferenceRules&) = default;
+};
 // Constants the junction block is validated against (design 5.2, 5.3): the widest carve blend and the radius
 // of roads.geom tiles a carved L0 tile reads.
 inline constexpr std::int32_t kCarveBlendMaxM = 15;
 inline constexpr std::int32_t kCarverRadiusM = 192;
+
+// Merge lanes and lane drops at a node of degree three (vault G2M-028). A one-way link that merges into a one-way
+// carriageway at a node where the carriageway gains a lane (or leaves it where it loses one) is a parallel lane in
+// the OSM data: the two through ways meet in a lane-add / lane-drop join and the link lands on the centre line of
+// the added lane instead of the way line. enabled = false: such a node stays a plain junction as before.
+struct MergeLaneRules {
+    bool enabled = false;
+    std::int32_t max_through_deflection_deg = 0;  // the through arms (merge: the arriving one of the two, diverge: the leaving one) bend less than this
+    std::int32_t max_ramp_angle_deg = 0;          // and the link meets the single arm at less than this
+    std::int32_t direction_probe_m = 0;           // an arm's direction is read to the first node this far away (or the way's last)
+    std::int32_t landing_m_per_m = 0;             // lateral landing shift length per metre of landing offset
+    std::int32_t landing_min_m = 0, landing_max_m = 0;
+    std::int32_t max_landing_offset_mm = 0;       // a landing farther off the link's own line is not made
+    friend bool operator==(const MergeLaneRules&, const MergeLaneRules&) = default;
+};
 
 struct RoadTaperRules {
     std::int32_t lane_add_m = 0;      // length of a counted lane that starts or ends
@@ -146,6 +172,8 @@ struct RoadRules {
     FurnitureRules furniture;
     TunnelRules tunnel;
     UnderpassRules underpass;
+    ReferenceRules reference;
+    MergeLaneRules merge_lane;
     std::vector<RoadClassRules> classes;      // ascending highway value
     ContentHash content_sha256{};             // SHA-256 of the JSON bytes the rules were loaded from
 
@@ -160,7 +188,10 @@ struct RoadRules {
 // 0..20000 mm, tapers consistent with min_edge_radius_m, junction and furniture
 // blocks (P2) with every length in (0, 200] m and the cluster caps consistent
 // with reach_max_m and the carver radius, and the tunnel block (straight-grade
-// threshold 0..100000 m, 0 = never).
+// threshold 0..100000 m, 0 = never), the reference block (chord_half_width_percent 0..1000, chord_margin_mm 0..100000)
+// and the merge_lane block (G2M-028; angles 1..89 degrees, landing shift length
+// per metre 1..1000 with min <= max in 1..2000 m, maximum landing offset 1..20000 mm, and the landing S-ramp
+// curvature bound 4 W / a^2 <= 1 / min_edge_radius_m of every link class at the largest offset).
 Result<RoadRules> load_road_rules(std::span<const std::byte> json);
 // The embedded data/road_rules/de.json, parsed once. A corrupt build aborts.
 const RoadRules& builtin_road_rules_de();

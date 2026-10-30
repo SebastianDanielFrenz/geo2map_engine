@@ -20,8 +20,15 @@ set(G2M_WORLD_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/job_scheduler.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/terrain_service.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_structures.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/bridge_visual.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_ribbons.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/road_paint.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/lattice_drape.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/buildings.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/building_mesh.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dsm_ground.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/elevation_ground.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/elevation_blend.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/view_streamer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ring_streamer.cpp
   CACHE INTERNAL "g2m_world sources"
@@ -33,3 +40,4 @@ target_link_libraries(g2m_world
   PUBLIC  g2m_client g2m_mesh g2m_phys g2m_server
   PRIVATE g2m_warnings g2m_options Threads::Threads
 )
+

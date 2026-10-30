@@ -35,7 +35,7 @@ int osm_layer(const RoadGraphWay& w) {
     return 0;
 }
 
-std::shared_ptr<const RoadDeck> deck(const RoadProfile& profile, std::int64_t id, std::uint32_t start_ref, double from, double to,
+std::shared_ptr<RoadDeck> deck(const RoadProfile& profile, std::int64_t id, std::uint32_t start_ref, double from, double to,
                                      bool inferred, const std::optional<RoadCrossSection>& xs = {}) {
     if (to - from < .5 || to - from > 1000) return {};
     auto output = std::make_shared<RoadDeck>();
@@ -243,7 +243,11 @@ std::vector<std::shared_ptr<const RoadDeck>> build_road_decks(const RoadGeomTile
     std::vector<std::shared_ptr<const RoadDeck>> result;
     for (const auto& entry : geometry.entries)
         if (entry.profile && (entry.profile->attributes.bridge || entry.profile->attributes.tunnel)) {
-            if (auto d = deck(*entry.profile, entry.way_id, entry.stretch.start_ref, 0, entry.profile->reference.length_m, false, entry.cross_section)) result.push_back(std::move(d));
+            if (auto d = deck(*entry.profile, entry.way_id, entry.stretch.start_ref, 0, entry.profile->reference.length_m, false, entry.cross_section)) {
+                if (const auto* way = find_way(geometry.source.graph, entry.way_id))
+                    d->appearance = build_bridge_visual(*d, bridge_facts(*way));
+                result.push_back(std::move(d));
+            }
         }
     // Underpass decks (roads.geom encoding 9, D56): the served span of a ground stretch over a lower road in a DEM
     // cutting, carrying the stretch's own (masked) profile; inferred like a roof.

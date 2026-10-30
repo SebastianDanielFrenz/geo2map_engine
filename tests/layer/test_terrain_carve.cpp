@@ -735,6 +735,33 @@ TEST_CASE("carve T17: the deriver serves carve_terrain_tile at L0 and the mean-o
             auto no_centre = inputs;
             for (auto& in : no_centre) if (in.ref.layer == kElevBaseLayer && in.ref.key == child) in.header.reset();
             const auto missing = deriver.derive({child, 0, no_centre}); REQUIRE_FALSE(missing); CHECK(missing.error().code == ErrorCode::NotFound);
+            auto unspecified = inputs;
+            for (auto& in : unspecified)
+                if (in.ref.layer == kElevBaseLayer || in.ref.layer == kRoadGeomLayer)
+                    in.header->datum = VerticalDatum::Unspecified;
+            const auto unknown_datum = deriver.derive({child, 0, unspecified}); REQUIRE(unknown_datum);
+            CHECK(unknown_datum->datum == VerticalDatum::Unspecified);
+            auto no_height_datum = unspecified;
+            for (auto& in : no_height_datum)
+                if (in.ref.layer == kElevBaseLayer) { in.header->datum = VerticalDatum::None; break; }
+            CHECK_FALSE(deriver.derive({child, 0, no_height_datum}));
+            auto mixed_known = inputs;
+            std::sort(mixed_known.begin(), mixed_known.end(), [](const auto& a, const auto& b) { return a.ref < b.ref; });
+            std::vector<std::size_t> elevation_indices;
+            for (std::size_t i = 0; i < mixed_known.size(); ++i) {
+                if (mixed_known[i].ref.layer == kElevBaseLayer) {
+                    elevation_indices.push_back(i);
+                    mixed_known[i].header->datum = VerticalDatum::Unspecified;
+                } else if (mixed_known[i].ref.layer == kRoadGeomLayer) {
+                    mixed_known[i].header->datum = VerticalDatum::Unspecified;
+                }
+            }
+            REQUIRE(elevation_indices.size() >= 3);
+            mixed_known[elevation_indices.front()].header->datum = VerticalDatum::DHHN2016;
+            mixed_known[elevation_indices.back()].header->datum = VerticalDatum::EGM2008;
+            CHECK_FALSE(deriver.derive({child, 0, mixed_known}));
+            std::reverse(mixed_known.begin(), mixed_known.end());
+            CHECK_FALSE(deriver.derive({child, 0, mixed_known}));
             auto egm = inputs;
             for (auto& in : egm) if (in.ref.layer == kRoadGeomLayer) in.header->datum = VerticalDatum::EGM2008;
             CHECK_FALSE(deriver.derive({child, 0, egm}));

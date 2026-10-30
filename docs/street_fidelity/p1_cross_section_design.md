@@ -564,7 +564,8 @@ was wrong; it is not a reason to change the algorithm.
 | H7 link, ambiguous tokens | 8602212 (2) → 155798159 (3, `left\|left\|right`) | both sides qualify → no explicit placement → default right, Inferred |
 
 The A 66 main-line ways at degree-3 nodes, such as 23658569 → junction, have
-`JoinKind::None` at that end; their turn lanes stay full width to the junction.
+`JoinKind::None` at that end; their turn lanes stay full width to the junction. (Exception since
+G2M-028: a degree-3 node that is a merge lane or an exit, section 4.8.)
 
 ### 4.7 Count-group mismatch across class changes
 
@@ -584,6 +585,58 @@ The A 66 main-line ways at degree-3 nodes, such as 23658569 → junction, have
   - the join kind is `InferredAlignment` unless |Δ| < 1 mm.
 - This also covers oneway ↔ two-way joins, which are rare and are mapping errors
   or carriageway splits.
+
+### 4.8 Merge lanes and exits at a node of degree three (G2M-028)
+
+OSM models a merge (Einfaedelungs-) or exit (Ausfaedelungsstreifen) lane as its own way beside the carriageway, sharing its end
+node with the link: the node has degree three, so 4.1-4.7 (degree two only) saw no join. The through ways kept full width to the node
+and the link ended on the way axis, across the added lane (owner site 4: B 8 west of Hoechst, way 173934122 with `placement=right_of:1`,
+`none|none|merge_to_left`, 100.9 m, beside the one-lane trunk_link 334715987).
+
+**Classification** (`classify_merge_node`, `road_cross_section_join.cpp`; a pure function of the three ways' tags, the node positions
+and the rules, symmetric in the arms, so each of the three stretches resolved in any tile reaches the same verdict):
+
+- the node has exactly three arms of three distinct ways, each a one-way carriageway driven along its refs (`oneway=yes`, not -1) with at
+  least one counted lane; one or two of them leave the node (merge: two arrive, one leaves; exit: one arrives, two leave);
+- the *single arm* S is the one alone in its direction; of the other two, the *through arm* T is the one whose direction (read to the
+  first node `direction_probe_m` away or the way's last node) deviates less from S's, at most `max_through_deflection_deg`; the other is
+  the ramp R, whose highway must end in `_link` and which meets S at most `max_ramp_angle_deg`;
+- lanes balance: counted(S) = counted(T) + counted(R);
+- T and S (upstream = the arriving one) resolve as a join (4.2-4.4) that does not split into direction groups; the counted bands of
+  the wide side with join width 0 are one contiguous group of counted(R) lanes, and no matched lane lies beyond it on R's side.
+
+**Effects.**
+
+1. T and S get a synthesized join partner (`JoinKind::LaneChange`): the added bands ramp in from zero width (merge: at S's start) or out
+   to zero (exit: at S's end) over the class taper `lane_add_m` / `lane_drop` (4.2), clipped to the stretch length (4.5).
+2. R lands on the centre line of the added lane group: `landing = round(target / cos(phi))` with `target` = the group's centre seen from
+   S's way line plus S's join correction and `phi` the angle between R's and S's travel directions. It is an `OffsetMode::Ramps` end
+   (merge) or start (exit) offset of length `a = clamp(landing_m_per_m * |landing|, landing_min_m, landing_max_m)`; R's join record is
+   `JoinKind::Landing` (5) with `neighbour_way_id` = S and `raw_delta_mm` = the landing. A stretch whose offset is already `Hold` or
+   `Transition` keeps it (no landing); a landing above `max_landing_offset_mm` or `cos(phi) <= 0` is not made.
+3. Marking (renderer, `road_ribbons.cpp`): over the landing length from the node, T's edge line on R's side is one broken line (flag
+   64 / 128, 6 m / 6 m on fast roads) and R's own facing edge line is dropped (flag 512 / 1024). S keeps its solid outer edge; the lane
+   line between its matched lanes and the added lane is the ordinary dashed lane line.
+4. Junction (`road_junction.cpp`): a single node whose approach ends in a `Landing` join gets no patch, `JunctionDecline::MergeLane` (6).
+   The three carriageways meet in their joins and the link ends off the node; a ring of the three would fold over the added lane
+   (hull fallback and a 0.14 m approach-to-node height mismatch in the fixtures). A node whose ramp could not land (a Hold or Transition
+   offset, an offset over the cap) keeps its junction.
+
+**Values** (`merge_lane` block of `de.json`; the model is the RAA parallel lane [unverified, the RAA text was not fetched], every number
+is [assumed]): 35 / 60 deg, probe 10 m, 12 m of landing per metre of offset (1:12), 30 m / 80 m bounds, 8 m offset cap. The loader
+checks 4 W / a^2 <= 1 / `min_edge_radius_m` for every `*_link` class at the cap and where the minimum length stops binding.
+
+**Fixture F11 (site 4).** Node 1666243373 (E 465790.04, N 5552365.81), A = 194653318 (2 lanes, arrives), B = 173934122 (3 lanes,
+leaves), R = 334715987 (trunk_link, 1 lane, arrives). Result: A `end_join` LaneChange (B); B `start_join` LaneChange (A), lane 3 ramps
+in over 50.4 m (the 60 m `trunk` lane_add is clipped by the 100.9 m stretch, `kXsTaperShortenedStart`); R's last stretch (72.3 m) has
+a Ramps end offset -5.476 m over 65.7 m and `end_join` Landing (B). Tests: `test_road_merge_lane.cpp` M1-M6, `test_merge_markings.cpp`.
+
+**Home region census** (E 455-490 km, N 5540-5585 km, 1575 tiles, home-2026-09r1; `g2m_xs_probe --merge-census`): 42 405 nodes of
+degree three, 405 with the lane balance and a link (178 merges, 227 exits). Before: 0 got a taper or landing. After: 182 land (75 merges,
+107 exits); 134 of the candidates have a lane-add/drop taper on a through arm (56 of them without a landing because the ramp's own
+stretch has no reference fit or keeps a Hold/Transition offset); the other 167 fail the geometry rules (interchange link pairs and
+coincidental balances). Degree-two lane-count changes are unchanged: 1875 nodes, 333 with a LaneChange join (the rest differ in direction
+groups, 4.7, or have no join).
 
 ## 5. Country rules as data (`de.json`)
 
