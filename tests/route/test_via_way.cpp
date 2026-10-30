@@ -216,7 +216,7 @@ TEST_CASE("A* and A* + ALT equal the history reference on random grids with via-
                     for (auto v : rule.via_ways) std::printf(" %lld", (long long)v);
                     std::printf(" T%lld\n", (long long)rule.to_way);
                 }
-                for (auto a : r->arcs) std::printf("  arc way %lld %lld->%lld\n", (long long)g->arcs()[a].way_id, (long long)g->nodes()[g->arcs()[a].from].osm_id, (long long)g->nodes()[g->arcs()[a].to].osm_id);
+                for (auto arc_id : r->arcs) std::printf("  arc way %lld %lld->%lld\n", (long long)g->arcs()[arc_id].way_id, (long long)g->nodes()[g->arcs()[arc_id].from].osm_id, (long long)g->nodes()[g->arcs()[arc_id].to].osm_id);
             }
             REQUIRE(r->reachable == expect.reachable);
             REQUIRE(r->cost_ms == expect.cost_ms);

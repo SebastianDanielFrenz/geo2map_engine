@@ -186,8 +186,8 @@ inline g2m::Result<g2m::RoadGeomTile> geometry_in_tile_with(const g2m::RoadGraph
 }
 // The tile RoadGeomDeriver serves (slice 8): context graph, the served completion options, the underpass decks (D53).
 inline g2m::Result<g2m::RoadGeomTile> served_geometry_in_tile(const g2m::RoadGraph& world, const g2m::TileKey& key,
-        const std::function<double(double, double)>& height_m = {}) {
-    GeomOptions o; o.height_m = height_m; o.completion = g2m::served_road_completion_options(); o.underpass = true;
+        const std::function<double(double, double)>& height_m = {}, const g2m::RoadRules* rules = nullptr) {
+    GeomOptions o; o.height_m = height_m; o.completion = g2m::served_road_completion_options(); o.underpass = true; o.rules = rules;
     return geometry_in_tile_with(world, key, o);
 }
 

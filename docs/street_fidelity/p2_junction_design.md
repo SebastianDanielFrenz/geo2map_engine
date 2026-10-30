@@ -227,6 +227,7 @@ enum class JunctionDecline : std::uint16_t {
     SingleApproach = 3,   // fewer than two used approaches
     Degenerate = 4,       // even the hull fallback has < 3 non-collinear vertices
     Underground = 5,      // every approach is a tunnel
+    MergeLane = 6,        // a merge ramp lands on the node (JoinKind::Landing, G2M-028): no patch
 };
 struct RoadJunction {
     std::vector<std::int64_t> nodes;            // ascending OSM ids; nodes.front() is the owner node

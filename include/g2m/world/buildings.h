@@ -27,6 +27,9 @@ struct Building {
     bool relation = false;
     double height = 0, min_height = 0, base = 0, bottom = 0;
     std::string height_source, colour, type; // "height" | "building:levels" | "fallback"; building:colour; building=*
+    // Appearance facts, separate from the unchanged footprint/height contract.
+    std::string roof_shape, roof_colour, roof_material, roof_orientation, roof_direction, material;
+    double roof_height = 0, levels = 0;
     std::vector<std::vector<BuildingPoint>> outers, inners;
 };
 // Ground height (absolute metres) at absolute UTM (e, n); nullopt = no ground there.

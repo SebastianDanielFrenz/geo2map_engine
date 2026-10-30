@@ -1,0 +1,88 @@
+{
+  "format": "physics_sim.surfaces/1",
+  "description": "Game-owned surface table. Grass grip doubled at owner request; other values retained from physics_sim 976e8d7. 2026-10-06 (S1, owner O-2): concrete, paving_stones, sett, cobblestone, gravel, compacted and sand added as own named entries, named like the classes of physics_sim's surface_conditions/default.json so wet grip applies; SurfaceIds are alphabetical, so every id after 'asphalt' moved (the ids are never stored, only names are).",
+  "fields": {
+    "lambda_mu": "Pacejka-style friction scale relative to dry asphalt = 1.0.",
+    "crr": "Rolling-resistance coefficient (dimensionless, F_roll = crr * N)."
+  },
+  "surfaces": {
+    "asphalt": {
+      "display_name": "Dry asphalt",
+      "lambda_mu": 1.0,
+      "crr": 0.013,
+      "source": "Reference surface (lambda_mu=1.0 by definition). Crr for dry asphalt/concrete roads: Wong, Theory of Ground Vehicles, 5th ed., Table 1.3 (typical range 0.010-0.015; midpoint used)."
+    },
+    "kerb": {
+      "display_name": "Painted concrete kerb",
+      "lambda_mu": 0.9,
+      "crr": 0.013,
+      "source": "Painted concrete: base Crr as asphalt (Wong Table 1.3); lambda_mu reduced ~10% from dry asphalt for the paint film, especially when wet -- illustrative test-ground estimate, not a measured value."
+    },
+    "grass": {
+      "display_name": "Dry grass on firm soil",
+      "lambda_mu": 0.6,
+      "crr": 0.08,
+      "source": "Owner handling adjustment: doubled previous lambda_mu=0.42 to 0.84 (RACE-002), reduced to 0.63 on 2026-10-05 (owner: \"a bit too grippy now\"), then to 0.6 on 2026-10-12 (owner decision: one uniform grass value for now, equal to dirt 0.6; to be judged by driving); this is an asphalt-relative tyre friction scale, not measured absolute grass friction. Cenek/Jamieson/McLarin, Frictional Characteristics of Roadside Grass Types, Table 4: locked-wheel car braking dry clover/rye-grass mu=0.21/0.36/0.38, wet=0.17/0.21/0.24. These braking measurements do not establish driven-wheel peak acceleration. https://saferroadsconference.com/wp-content/uploads/2016/05/Peter-Cenek-Frictional-Characteristics-Roadside-Grass-Types.pdf"
+    },
+    "dirt": {
+      "display_name": "Dry compact dirt / gravel road",
+      "lambda_mu": 0.6,
+      "crr": 0.04,
+      "source": "Wong, Theory of Ground Vehicles, Table 1.3: dry, hard-packed dirt/gravel road, mu ~ 0.55-0.65, Crr ~ 0.03-0.05; midpoints used (plausible published range)."
+    },
+    "low_mu": {
+      "display_name": "Polished ice (unstudded tyre)",
+      "lambda_mu": 0.1,
+      "crr": 0.01,
+      "source": "Generic vehicle-dynamics references (e.g. SAE / SAE-adjacent tables cited by Milliken, Race Car Vehicle Dynamics, ch. 1) give unstudded-tyre-on-ice peak mu ~ 0.05-0.15; midpoint used. Crr assumed close to dry asphalt (smooth, hard surface) -- plausible range, not a specific measurement."
+    },
+    "field": {
+      "display_name": "Cultivated field / tilled soil",
+      "lambda_mu": 0.5,
+      "crr": 0.09,
+      "source": "Wong, Theory of Ground Vehicles, Table 1.3: tilled/cultivated soil bracketed between firm dirt and loose soil, mu ~ 0.45-0.55, Crr ~ 0.08-0.10; midpoints used (plausible published range). Used by terrain.py's surface rules for the procedural farmland, not by any mesh here."
+    },
+    "concrete": {
+      "display_name": "Dry concrete road",
+      "lambda_mu": 1.0,
+      "crr": 0.013,
+      "source": "Wong, Theory of Ground Vehicles, Table 1.3 lists concrete and asphalt road together (peak adhesion about 0.8-0.9 dry, Crr 0.010-0.015); the same row is used, so lambda_mu = 1.0 and Crr = 0.013 as asphalt. lambda_mu is a DRY, asphalt-relative tyre friction scale (asphalt = 1.0); the weather W6 wet/damp factors of physics_sim's surface_conditions class of the same name multiply it. Owner O-2 (2026-10-05): own named entry per geo2map surface kind, the owner tunes the numbers by driving, as was done for grass. UNVERIFIED CITATION: the table ranges quoted here were written from memory of the cited books/tables in a session without source access and were not re-read; treat every number as [AS] until checked."
+    },
+    "paving_stones": {
+      "display_name": "Dry concrete paving stones",
+      "lambda_mu": 0.95,
+      "crr": 0.016,
+      "source": "[AS] interlocking concrete block pavement skids close to asphalt when dry (no single cited number; the ICPI/CMAA literature reports skid resistance of the same order as asphalt) - 0.95 assumed; Crr between asphalt 0.013 and a poor block surface 0.02 (Gillespie, Fundamentals of Vehicle Dynamics, rolling resistance on pavement types), 0.016 assumed. lambda_mu is a DRY, asphalt-relative tyre friction scale (asphalt = 1.0); the weather W6 wet/damp factors of physics_sim's surface_conditions class of the same name multiply it. Owner O-2 (2026-10-05): own named entry per geo2map surface kind, the owner tunes the numbers by driving, as was done for grass. UNVERIFIED CITATION: the table ranges quoted here were written from memory of the cited books/tables in a session without source access and were not re-read; treat every number as [AS] until checked."
+    },
+    "sett": {
+      "display_name": "Dry dressed stone setts",
+      "lambda_mu": 0.88,
+      "crr": 0.02,
+      "source": "[AS] granite setts polish under traffic; ordering follows physics_sim's wet classes (paving 0.85 > sett 0.75 > cobblestone 0.70 wet): dry 0.88 assumed. Crr 0.020: setts/'ordinary cobbles' sit at 0.015-0.025 in the rolling-resistance tables (Engineering ToolBox rolling resistance table, cobbles 0.015 ordinary / 0.03 poor; Gillespie), flat-topped dressed setts the lower half. lambda_mu is a DRY, asphalt-relative tyre friction scale (asphalt = 1.0); the weather W6 wet/damp factors of physics_sim's surface_conditions class of the same name multiply it. Owner O-2 (2026-10-05): own named entry per geo2map surface kind, the owner tunes the numbers by driving, as was done for grass. UNVERIFIED CITATION: the table ranges quoted here were written from memory of the cited books/tables in a session without source access and were not re-read; treat every number as [AS] until checked."
+    },
+    "cobblestone": {
+      "display_name": "Dry rounded cobblestones",
+      "lambda_mu": 0.8,
+      "crr": 0.025,
+      "source": "[AS] rounded river cobbles with wide joints: lowest-grip sealed class (physics_sim wet 0.70), dry 0.80 assumed. Crr 0.025 between ordinary (0.015) and poor (0.03) cobbles (Engineering ToolBox rolling resistance table; Gillespie). lambda_mu is a DRY, asphalt-relative tyre friction scale (asphalt = 1.0); the weather W6 wet/damp factors of physics_sim's surface_conditions class of the same name multiply it. Owner O-2 (2026-10-05): own named entry per geo2map surface kind, the owner tunes the numbers by driving, as was done for grass. UNVERIFIED CITATION: the table ranges quoted here were written from memory of the cited books/tables in a session without source access and were not re-read; treat every number as [AS] until checked."
+    },
+    "gravel": {
+      "display_name": "Loose gravel road",
+      "lambda_mu": 0.62,
+      "crr": 0.035,
+      "source": "Wong, Theory of Ground Vehicles, Table 1.3 (average adhesion of gravel about 0.6, same row as the dirt entry's hard-packed dirt/gravel road 0.55-0.65): loose gravel 0.62, slightly above dirt (0.60) in the middle of that range. Crr 0.035: rolled gravel 0.02 (Gillespie) to loose gravel 0.04-0.05 (Wong), taken between. lambda_mu is a DRY, asphalt-relative tyre friction scale (asphalt = 1.0); the weather W6 wet/damp factors of physics_sim's surface_conditions class of the same name multiply it. Owner O-2 (2026-10-05): own named entry per geo2map surface kind, the owner tunes the numbers by driving, as was done for grass. UNVERIFIED CITATION: the table ranges quoted here were written from memory of the cited books/tables in a session without source access and were not re-read; treat every number as [AS] until checked."
+    },
+    "compacted": {
+      "display_name": "Compacted track / hard-packed fines",
+      "lambda_mu": 0.68,
+      "crr": 0.03,
+      "source": "Wong, Theory of Ground Vehicles, Table 1.3: dry earth road peak adhesion about 0.68 (hard-packed, no loose layer, hence above dirt 0.60 and gravel 0.62). Crr 0.03: low end of the dirt range 0.03-0.05 used by the dirt entry, a compacted surface having little sinkage. lambda_mu is a DRY, asphalt-relative tyre friction scale (asphalt = 1.0); the weather W6 wet/damp factors of physics_sim's surface_conditions class of the same name multiply it. Owner O-2 (2026-10-05): own named entry per geo2map surface kind, the owner tunes the numbers by driving, as was done for grass. UNVERIFIED CITATION: the table ranges quoted here were written from memory of the cited books/tables in a session without source access and were not re-read; treat every number as [AS] until checked."
+    },
+    "sand": {
+      "display_name": "Dry loose sand",
+      "lambda_mu": 0.35,
+      "crr": 0.12,
+      "source": "Wong, Theory of Ground Vehicles, Table 1.3 / Bosch: dry sand peak adhesion about 0.3-0.4 (0.35 used). Crr: loose dry sand 0.15-0.30, firm/wet sand about 0.06 (Wong ch. 1 and 2, Bekker sinkage resistance); 0.12 assumed [AS] as a beach-grade surface. lambda_mu is a DRY, asphalt-relative tyre friction scale (asphalt = 1.0); the weather W6 wet/damp factors of physics_sim's surface_conditions class of the same name multiply it. Owner O-2 (2026-10-05): own named entry per geo2map surface kind, the owner tunes the numbers by driving, as was done for grass. UNVERIFIED CITATION: the table ranges quoted here were written from memory of the cited books/tables in a session without source access and were not re-read; treat every number as [AS] until checked."
+    }
+  }
+}

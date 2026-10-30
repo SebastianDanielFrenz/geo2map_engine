@@ -49,6 +49,7 @@ enum class VerticalDatum : std::uint16_t {
     None = 0,      // not a height layer
     DHHN2016 = 1,  // German normal heights (DGM1)
     EGM2008 = 2,   // global geoid (GLO-30)
+    Unspecified = 3, // height values whose vertical reference is unknown
 };
 
 enum class SectionCodec : std::uint8_t {

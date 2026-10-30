@@ -45,8 +45,9 @@ enum class JunctionDecline : std::uint16_t {
     SingleApproach = 3,   // fewer than two used approaches
     Degenerate = 4,       // even the hull fallback has < 3 non-collinear vertices (or an edge cannot be placed, or the hull rings do not nest)
     Underground = 5,      // every approach is a tunnel
+    MergeLane = 6,        // a merge lane or an exit lands on this node (JoinKind::Landing): the carriageways meet in their joins, no patch (G2M-028)
 };
-inline constexpr std::size_t kJunctionDeclineCount = 6;
+inline constexpr std::size_t kJunctionDeclineCount = 7;
 struct RoadJunction {
     std::vector<std::int64_t> nodes;            // ascending OSM ids; nodes.front() is the owner node
     std::vector<JunctionApproach> approaches;   // used approaches (stubs) in ring order starting at the smallest

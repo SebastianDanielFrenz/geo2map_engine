@@ -144,7 +144,7 @@ Result<TileBody> decode_body(std::span<const std::uint8_t> bytes) {
 Result<std::vector<std::uint8_t>> encode_header(const TileHeader& h) {
     if (!is_valid_layer_name(h.layer)) return make_error(ErrorCode::InvalidArgument, "invalid layer name");
     if (!h.key.valid()) return make_error(ErrorCode::InvalidArgument, "invalid tile key");
-    if (static_cast<std::uint16_t>(h.datum) > static_cast<std::uint16_t>(VerticalDatum::EGM2008)) {
+    if (static_cast<std::uint16_t>(h.datum) > static_cast<std::uint16_t>(VerticalDatum::Unspecified)) {
         return make_error(ErrorCode::InvalidArgument, "unknown vertical datum");
     }
     if (h.inputs.size() > kMaxInputHashes || !strictly_ascending(h.inputs)) {
@@ -211,7 +211,7 @@ Result<TileHeader> decode_header(std::span<const std::uint8_t> bytes, std::size_
     h.key.zone = geo::UtmZone{zone, static_cast<geo::Hemisphere>(hemi)};
     h.key.level = level;
     if (!h.key.valid()) return make_error(ErrorCode::Malformed, "invalid tile key");
-    if (datum > static_cast<std::uint16_t>(VerticalDatum::EGM2008)) {
+    if (datum > static_cast<std::uint16_t>(VerticalDatum::Unspecified)) {
         return make_error(ErrorCode::Unsupported, "unknown vertical datum");
     }
     h.datum = static_cast<VerticalDatum>(datum);

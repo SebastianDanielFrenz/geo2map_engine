@@ -707,6 +707,14 @@ RoadJunction build_from(const RoadGeomTile& tile, const std::vector<NodeInput>& 
     };
     if (all_tunnels) return finish(JunctionDecline::Underground);
     if (stubs.size() < 2) return finish(JunctionDecline::SingleApproach);
+    // A merge lane or an exit that lands on the added lane (G2M-028): the three carriageways meet in their lane-change joins and
+    // the link ends off the node, so there is no junction to patch (the ring of the three would fold over the added lane).
+    if (nodes.size() == 1) {
+        for (const auto& u : stubs) {
+            const auto& xs = tile.entries[u.r.entry].cross_section;
+            if (xs && (u.r.at_end ? xs->end_join : xs->start_join).kind == JoinKind::Landing) return finish(JunctionDecline::MergeLane);
+        }
+    }
 
     // ---- darts: stubs first (index = position in `stubs`, ascending key), then the internal darts ----
     std::vector<Dart> darts(stubs.size() + internal.size());
@@ -1383,17 +1391,12 @@ void junction_weights(const JunctionSurface& surface, double x, double y, std::s
     for (std::size_t m = 0; m < n; ++m) weights[m] /= static_cast<double>(touched);
 }
 
-double junction_height_m(const JunctionSurface& surface, const RoadGeomTile& tile, double x, double y,
-    const RoadSurfaceParams& params) noexcept {
-    constexpr std::size_t kInline = 32;
-    const std::size_t n = surface.approaches.size();
-    double inline_weights[kInline];
-    std::vector<double> heap;
-    std::span<double> w(inline_weights, std::min(n, kInline));
-    if (n > kInline) { heap.assign(n, 0.0); w = std::span<double>(heap); }   // beyond 32 approaches only; never on the fixtures
+namespace {
+double junction_height_weighted(const JunctionSurface& surface, const RoadGeomTile& tile, double x, double y,
+    const RoadSurfaceParams& params, std::span<double> w) noexcept {
     junction_weights(surface, x, y, w);
     double z = 0.0;
-    for (std::size_t i = 0; i < n; ++i) {
+    for (std::size_t i = 0; i < surface.approaches.size(); ++i) {
         if (w[i] == 0.0) continue;
         double phi = 0.0, psi = 0.0;
         junction_relief_weights(surface, i, x, y, phi, psi);
@@ -1401,6 +1404,24 @@ double junction_height_m(const JunctionSurface& surface, const RoadGeomTile& til
         z += w[i] * (v.base + phi * (v.paved - v.base) + psi * (v.z - v.paved));
     }
     return z;
+}
+
+// Beyond 32 approaches only; never on the fixtures. Kept out of junction_height_m so the common path constructs no
+// std::vector at all: a debug-STL (MSVC _ITERATOR_DEBUG_LEVEL) vector allocates its _Container_proxy even when empty.
+double junction_height_heap_weights(const JunctionSurface& surface, const RoadGeomTile& tile, double x, double y,
+    const RoadSurfaceParams& params) noexcept {
+    std::vector<double> heap(surface.approaches.size(), 0.0);
+    return junction_height_weighted(surface, tile, x, y, params, std::span<double>(heap));
+}
+} // namespace
+
+double junction_height_m(const JunctionSurface& surface, const RoadGeomTile& tile, double x, double y,
+    const RoadSurfaceParams& params) noexcept {
+    constexpr std::size_t kInline = 32;
+    const std::size_t n = surface.approaches.size();
+    if (n > kInline) return junction_height_heap_weights(surface, tile, x, y, params);
+    double inline_weights[kInline];
+    return junction_height_weighted(surface, tile, x, y, params, std::span<double>(inline_weights, n));
 }
 
 std::vector<ProfileFeature> JunctionFeatureAdjustment::core_features() const {

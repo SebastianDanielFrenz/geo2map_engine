@@ -70,17 +70,24 @@ Result<DeriveResult> RailGeomDeriver::derive(const DeriveRequest& request) const
     expected.insert(expected.end(), dem_refs->begin(), dem_refs->end());
     std::sort(expected.begin(), expected.end());
     if (request.inputs.size() != expected.size()) return make_error(ErrorCode::InvalidArgument, "rail.geom: incomplete dependency set");
-    std::set<InputTileRef> seen; std::vector<HeightTile> heights; std::optional<VerticalDatum> datum;
+    std::set<InputTileRef> seen; std::vector<HeightTile> heights; std::optional<VerticalDatum> datum, known_datum;
     for (const auto& input : request.inputs) {
         if (!std::binary_search(expected.begin(), expected.end(), input.ref) || !seen.insert(input.ref).second)
             return make_error(ErrorCode::Malformed, "rail.geom: unexpected or duplicate dependency");
         if (input.ref.layer == kSrcOsmLayer) continue;
         if (!input.header) continue;   // outside the elevation coverage: the pieces needing it are declined
         if (const auto ok = check_header(input, "elevation"); !ok) return ok.error();
-        if (input.header->datum != VerticalDatum::DHHN2016 && input.header->datum != VerticalDatum::EGM2008)
+        const VerticalDatum input_datum = input.header->datum;
+        if (input_datum != VerticalDatum::DHHN2016 && input_datum != VerticalDatum::EGM2008 &&
+            input_datum != VerticalDatum::Unspecified)
             return make_error(ErrorCode::Unsupported, "rail.geom: unknown elevation datum");
-        if (datum && *datum != input.header->datum) return make_error(ErrorCode::Malformed, "rail.geom: mixed elevation datums");
-        datum = input.header->datum;
+        if (input_datum != VerticalDatum::Unspecified) {
+            if (known_datum && *known_datum != input_datum)
+                return make_error(ErrorCode::Malformed, "rail.geom: mixed elevation datums");
+            known_datum = input_datum;
+        }
+        if (!datum || input_datum == VerticalDatum::Unspecified)
+            datum = input_datum;
         const auto body = decode_body(input.body); if (!body) return body.error();
         heights.emplace_back(); const auto decoded = decode_height_tile(*body, input.ref.key, heights.back()); if (!decoded) return decoded.error();
         for (auto& height : heights.back().h) if (height != kHeightNoData) {

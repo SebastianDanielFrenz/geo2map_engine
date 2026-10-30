@@ -31,6 +31,9 @@ class DecodedElevMemo;
 class ElevBaseDeriver final : public IDeriver {
 public:
     ElevBaseDeriver();
+    // Explicit alternate raw source, already resampled to the same UTM lattice.
+    // The source is part of the config hash; its datum is preserved.
+    explicit ElevBaseDeriver(std::string source_layer);
     ~ElevBaseDeriver() override;
     ElevBaseDeriver(const ElevBaseDeriver&) = delete;
     ElevBaseDeriver& operator=(const ElevBaseDeriver&) = delete;

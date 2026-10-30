@@ -24,6 +24,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace g2m {
@@ -73,6 +74,11 @@ struct DeriveResult {
     std::vector<std::uint8_t> body;  // an encoded TileBody (tile_container.h)
     VerticalDatum datum = VerticalDatum::None;
     std::int32_t height_offset = 0;
+    // Named counts of source data the deriver left out of this tile (never part of the body, the
+    // header or any hash). Empty when it left nothing out. Servers do not read it; a caller that
+    // calls derive() directly (tools, tests) can report it. Names are stable, e.g.
+    // "restrictions_dropped_over_via_ways".
+    std::vector<std::pair<std::string, std::uint64_t>> diagnostics{};
 };
 
 class IDeriver {

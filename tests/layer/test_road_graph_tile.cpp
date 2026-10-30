@@ -27,7 +27,7 @@ RoadGraph graph(const TileKey& key) {
     result.edges = {{10, 0, 1, 2}, {10, 1, 2, 3}, {20, 0, 4, 1}};
     return result;
 }
-osm::OsmData raw(const TileKey& key, bool conflict = false, bool relation_conflict = false) {
+osm::OsmData raw(const TileKey& key, bool conflict = false, bool relation_conflict = false, bool long_rules = false) {
     const auto source = graph(key);
     osm::OsmBuilder builder;
     const geo::Utm utm(geo::kGRS80);
@@ -51,6 +51,15 @@ osm::OsmData raw(const TileKey& key, bool conflict = false, bool relation_confli
         {{"restriction", "no_u_turn"}, {"type", "restriction"}});
     builder.add_relation(503, {M{way, 20, "from"}, M{node, 1, "via"}, M{way, 10, "to"}},
         {{"restriction:hgv", "no_left_turn"}, {"type", "restriction"}});
+    if (long_rules) {
+        // 504: 17 via ways, one more than the format holds. 505: exactly 16, the most it holds. Both start on way 10 (held).
+        std::vector<M> over{M{way, 20, "from"}, M{way, 10, "via"}}, edge{M{way, 20, "from"}, M{way, 10, "via"}};
+        for (std::int64_t id = 600; id < 616; ++id) over.push_back(M{way, id, "via"});
+        for (std::int64_t id = 600; id < 615; ++id) edge.push_back(M{way, id, "via"});
+        over.push_back(M{way, 20, "to"}); edge.push_back(M{way, 20, "to"});
+        builder.add_relation(504, std::move(over), {{"restriction", "no_right_turn"}, {"type", "restriction"}});
+        builder.add_relation(505, std::move(edge), {{"restriction", "only_straight_on"}, {"type", "restriction"}});
+    }
     const auto data = builder.build(); REQUIRE(data); return *data;
 }
 InputTile input(const InputTileRef& ref, const osm::OsmData& data) {
@@ -60,9 +69,9 @@ InputTile input(const InputTileRef& ref, const osm::OsmData& data) {
     header.body_size = bytes->size(); header.body_hash = content_hash(*bytes);
     return {ref, header, *bytes};
 }
-std::vector<InputTile> inputs(const RoadGraphDeriver& deriver, const TileKey& key) {
+std::vector<InputTile> inputs(const RoadGraphDeriver& deriver, const TileKey& key, bool long_rules = false) {
     std::vector<InputTile> result;
-    const auto data = raw(key);
+    const auto data = raw(key, false, false, long_rules);
     for (const auto& ref : deriver.inputs_for(key)) {
         if (ref.key == key || (ref.key.y == key.y && ref.key.x == key.x + 1)) result.push_back(input(ref, data));
         else result.push_back({ref, {}, {}});
@@ -274,6 +283,45 @@ TEST_CASE("Road graph derivation stores the restrictions a tile holds, one copy 
     source = inputs(deriver, key);
     for (auto& value : source) if (value.header && value.ref.key.x == key.x + 1) value = input(value.ref, raw(key, false, true));
     CHECK_FALSE(deriver.derive({key, 0, source}));
+}
+
+TEST_CASE("Road graph derivation leaves out a restriction over the via-way limit and still derives the tile",
+          "[layer][road_graph_tile][restriction]") {
+    RoadGraphDeriver deriver; const auto key = g2m_test::home_tile();
+    // The fixture really holds a 17-via-way rule and a 16-via-way one (the limit).
+    const auto all = extract_turn_restrictions(raw(key, false, false, true)); REQUIRE(all);
+    std::size_t longest = 0;
+    for (const auto& r : all->restrictions) longest = std::max(longest, r.via_ways.size());
+    CHECK(longest == kRoadGraphMaxViaWays + 1);
+    // The codec keeps the limit: the format does not change, so a tile that holds the rule is still rejected.
+    const auto world = build_road_graph(raw(key), key.zone); REQUIRE(world);
+    CHECK_FALSE(select_road_graph_tile(*world, key, all->restrictions));
+    // The derivation drops the one rule, counts it, and derives the tile.
+    const auto source = inputs(deriver, key, true);
+    const auto derived = deriver.derive({key, 7, source});
+    REQUIRE(derived);
+    const auto body = decode_body(derived->body); REQUIRE(body);
+    const auto tile = decode_road_graph(*body); REQUIRE(tile);
+    std::vector<std::int64_t> relations;
+    for (const auto& r : tile->restrictions) relations.push_back(r.relation_id);
+    CHECK(relations == std::vector<std::int64_t>{500, 501, 505}); // 504 is gone, the 16-way rule 505 is kept
+    using Count = std::pair<std::string, std::uint64_t>;
+    CHECK(derived->diagnostics == std::vector<Count>{{"restrictions_dropped_over_via_ways", 1}, {"relations_dropped_over_via_ways", 1}});
+    // The tile is what the other rules alone select; without long rules nothing is reported.
+    auto expected_rules = all->restrictions;
+    expected_rules.erase(std::remove_if(expected_rules.begin(), expected_rules.end(),
+        [](const auto& r) { return r.relation_id == 504; }), expected_rules.end());
+    const auto expected = select_road_graph_tile(*world, key, expected_rules); REQUIRE(expected);
+    CHECK(*expected == *tile);
+    const auto plain = deriver.derive({key, 7, inputs(deriver, key)}); REQUIRE(plain);
+    CHECK(plain->diagnostics.empty());
+    // The helper alone: it counts rules and distinct relations (two rules of one relation count once as a relation).
+    auto list = all->restrictions;
+    auto sibling = *std::find_if(list.begin(), list.end(), [](const auto& r) { return r.relation_id == 504; });
+    sibling.from_way = 21; list.push_back(sibling);
+    const auto dropped = drop_overlong_restrictions(list);
+    CHECK(dropped.rules == 2); CHECK(dropped.relations == 1);
+    for (const auto& r : list) CHECK(r.via_ways.size() <= kRoadGraphMaxViaWays);
 }
 
 TEST_CASE("Road graph encoding 6 round trips restrictions; 5 and 4 leave them out; bad ones are rejected", "[layer][road_graph_tile][restriction]") {

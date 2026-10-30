@@ -34,6 +34,9 @@ template<class T> Building attributes(const Data& d,const T& e,double fallback,d
  const auto h=number(tag(d,e,"height"));const auto levels=number(tag(d,e,"building:levels"),false);
  const auto roof=number(tag(d,e,"roof:height"));const auto roof_levels=number(tag(d,e,"roof:levels"),false);
  const double roof_height=roof.value_or(roof_levels.value_or(0)*storey);
+ b.roof_height=roof_height;b.levels=levels.value_or(0);
+ b.roof_shape=tag(d,e,"roof:shape");b.roof_colour=tag(d,e,"roof:colour");b.roof_material=tag(d,e,"roof:material");
+ b.roof_orientation=tag(d,e,"roof:orientation");b.roof_direction=tag(d,e,"roof:direction");b.material=tag(d,e,"building:material");
  if(h&&*h>0){b.height=*h;b.height_source="height";}
  else if(levels&&*levels>0){b.height=*levels*storey+roof_height;b.height_source="building:levels";}
  else {b.height=fallback;b.height_source="fallback";}

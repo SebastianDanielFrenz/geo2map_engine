@@ -330,7 +330,7 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         auto with_origin = body(must(g2m::encode_road_geom(completed), "road geom provenance encode"));
         // Junctions (a signalised one, a raised table, one on a crossing node) and furniture of every kind.
         auto junctions = body(must(g2m::encode_road_geom(must(g2m_test::junction_scene_tile(), "junction scene")), "road geom junction encode"));
-        // Encoding 9 (D56): one underpass deck record on the profiled entry.
+        // Encoding 10 (D56, G2M-028): one underpass deck record on the profiled entry.
         auto decked = featured; decked.encoding = g2m::kRoadGeomEncoding;
         decked.underpasses.push_back({0, 10.0, 30.0, 1500, 0, {77, 4242}});
         auto nine = body(must(g2m::encode_road_geom(decked), "road geom underpass encode"));
