@@ -73,6 +73,29 @@ bytes, SHA-256 `b9e460b72d896c4ea95e4bbba8c87489d9f01b30a99761cc6ea7a2ae194b3e48
 - **Size**: 799,511 bytes (~781 KiB).
 - **SHA-256**: `8556244549478372cccdead6d3fd59638b5e313fc9358ccb9a1a4b7ac2947dd8`
 
+## osm/unterliederbach_tunnel.osm.pbf
+
+- **Source**: `hessen-latest.osm.pbf` (Geofabrik Hessen extract), as staged
+  read-only at `S:\claude_code\geo2map_data\downloads\hessen-latest.osm.pbf`.
+  (c) OpenStreetMap contributors, licensed
+  [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/); the cut is a
+  Derivative Database redistributed under the same terms, this notice is the
+  attribution (see `THIRD_PARTY_NOTICES.md`).
+- **Purpose** (terrain migration phase 7a-1, portal and join continuity,
+  `docs/structure_classification.md` section 5): the short tunnel way 4812754 at
+  Unterliederbach (tile utm32n/2/456/5420) whose north-west mouth lies on a bank
+  face, and the ground road 480160094 that reaches it.
+  `tests/layer/test_portal_continuity.cpp` runs the served road completion over
+  it on a synthetic bank DEM (the fixtures carry no real DEM there).
+- **Cut with** (test-only tool, same algorithm as above):
+  ```
+  g2m_fixture_cut cut-pbf --in hessen-latest.osm.pbf --relation 4209939 \
+    --bbox 8.5435,50.1005,8.5505,50.1065 --out unterliederbach_tunnel.osm.pbf
+  ```
+- **Content**: 6173 nodes, 982 ways, 1238 relations.
+- **Size**: 721,111 bytes (~704 KiB).
+- **SHA-256**: `b6acbe3405f6731fdff09d15ee1236e128bd32489b1efddf5ba4cac77db3abc6`
+
 ## osm/unsorted_nodes.osm.pbf
 
 - **Source**: hand-built, not cut from real data - `g2m_fixture_cut
@@ -131,7 +154,7 @@ bytes, SHA-256 `b9e460b72d896c4ea95e4bbba8c87489d9f01b30a99761cc6ea7a2ae194b3e48
   ```
 - **Size**: 5,889,924 bytes (~5.62 MiB); `testdata/fixtures/` as a whole is
   6,842,992 bytes (~6.53 MiB, including the OSM fixture above and
-  `regions.json`), within the fixture budget (raised from 8 to 10 MiB when the second OSM fixture hoechst_a66.osm.pbf was added; the whole directory is now about 8.25 MiB).
+  `regions.json`), within the fixture budget (raised from 8 to 10 MiB when the second OSM fixture hoechst_a66.osm.pbf was added; the whole directory is now about 8.96 MiB after unterliederbach_tunnel.osm.pbf).
 - **SHA-256**: `8fddb6a1910e5ba90d295026ac802caab2745b7d8312d3dce5b037329c07f956`
 
 ## worldcover/fixture_N50E008_hoechst.tif, worldcover/fixture_N50E008_bbox.tif

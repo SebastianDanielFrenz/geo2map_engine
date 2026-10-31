@@ -51,6 +51,7 @@ const std::map<std::string, std::string>& expected_hashes() {
         {"dgm1/PKT_fixture.zip", "8fddb6a1910e5ba90d295026ac802caab2745b7d8312d3dce5b037329c07f956"},
         {"osm/frankfurt_hoechst.osm.pbf", "dab190344af86d2feca297e68637155c99ade32df8189b0fd5e4def3c3361cae"},
         {"osm/hoechst_a66.osm.pbf", "8556244549478372cccdead6d3fd59638b5e313fc9358ccb9a1a4b7ac2947dd8"},
+        {"osm/unterliederbach_tunnel.osm.pbf", "b6acbe3405f6731fdff09d15ee1236e128bd32489b1efddf5ba4cac77db3abc6"},
         {"osm/unsorted_nodes.osm.pbf", "3431f2e25aefc19947999dd657949947441e47e432a8da664befe4a372a53f22"},
         {"regions.json", "586df4ace50c7cb45a795814af1b7e7371ca4f370ccb8aeb29cc62a0b59c40a5"},
         {"worldcover/fixture_N50E008_bbox.tif", "806c442100e789bb1d55f7342199f21ed6d7060efff4c96d65558dd1aeae37f1"},

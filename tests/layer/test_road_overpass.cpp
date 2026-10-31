@@ -290,7 +290,7 @@ RoadGraph scene_d65(double tunnel_half, bool crossing = false) {
 struct D65Run { const RoadProfile* p = nullptr; RoadGeomTile tile; RoadCompletionStats stats; };
 // roads.geom of the scene with the served completion options, `opt` applied on top.
 Result<RoadGeomTile> build_d65(const RoadGraph& world, const Dem& dem, RoadCompletionStats* stats, const std::function<void(RoadCompletionOptions&)>& opt = {}) {
-    g2m_test::GeomOptions o; o.height_m = dem; o.completion = served_road_completion_options(); o.underpass = true; o.stats = stats;
+    g2m_test::GeomOptions o; o.height_m = dem; o.completion = g2m::served_road_completion_options(); o.underpass = true; o.stats = stats;
     if (opt) opt(o.completion);
     return g2m_test::geometry_in_tile_with(world, kUnderpassTile, o);
 }

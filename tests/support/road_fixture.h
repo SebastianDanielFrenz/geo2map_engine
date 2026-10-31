@@ -91,6 +91,11 @@ struct RoadGeomInputs {
     std::vector<g2m::TileKey> dem_keys;
     g2m::RoadGraph crossings;   // D57: the tile graph plus the roads.graph tiles of road_crossing_dependencies
 };
+// The served completion options without the 7a-1 portal anchoring: the D47/D52/D65 tunnel mechanics tests compare against
+// the frozen game code and the previous releases, which anchor a tunnel floor on the DEM sample at its portal node.
+inline g2m::RoadCompletionOptions served_without_portal_anchor() {
+    auto o = g2m::served_road_completion_options(); o.tunnel_portal_anchor = false; return o;
+}
 // `walk_margin_mm`: the D48 squares of road_bridge_dependencies (0 = the pre-D48 stage 2, a negative control).
 inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world, const g2m::TileKey& key, bool bridge_far_end = true,
         std::int64_t walk_margin_mm = g2m::kRoadBridgeWalkMarginMm) {
@@ -113,6 +118,8 @@ inline g2m::Result<RoadGeomInputs> road_geom_inputs(const g2m::RoadGraph& world,
     if (bridge_far_end) {
         const auto bridges = road_bridge_dependencies(in.tile.graph, *context, key.zone, &key, walk_margin_mm); if (!bridges) return bridges.error();
         for (const auto& d : *bridges) (d.layer == kRoadGraphLayer ? graph_keys : dem_keys).insert(d.key);
+        const auto portals = road_portal_dependencies(in.tile.graph, *context, key.zone, &key); if (!portals) return portals.error();
+        for (const auto& d : *portals) (d.layer == kRoadGraphLayer ? graph_keys : dem_keys).insert(d.key);
         context = merge(); if (!context) return context.error();
     }
     in.context = std::move(*context);

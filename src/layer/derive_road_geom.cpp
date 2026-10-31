@@ -59,6 +59,9 @@ Result<std::optional<std::vector<InputTileRef>>> bridge_dependencies(const RoadG
     for (const auto& tile : tiles) graphs.push_back(&tile.graph);
     const auto context = merge_road_graphs(graphs); if (!context) return context.error();
     auto bridges = road_bridge_dependencies(graph.graph, *context, zone, &graph.key); if (!bridges) return bridges.error();
+    auto portals = road_portal_dependencies(graph.graph, *context, zone, &graph.key); if (!portals) return portals.error();   // 7a-1
+    bridges->insert(bridges->end(), portals->begin(), portals->end());
+    std::sort(bridges->begin(), bridges->end()); bridges->erase(std::unique(bridges->begin(), bridges->end()), bridges->end());
     return std::optional<std::vector<InputTileRef>>(std::move(*bridges));
 }
 // The roads.graph tiles holding every way that crosses a segment of the tile's ways (D57, underpass decks); empty with
@@ -133,7 +136,10 @@ std::string road_geom_config_text() {
         // G2M-024: reference fits keep within half the road width plus a margin of the OSM chord (de.json reference block,
         // percent/mm), else the rounded fallback; the values are in the rules hash too, the token versions the algorithm.
         " reference-chord=G2M-024/" + std::to_string(builtin_road_rules_de().reference.chord_half_width_percent) + "/" +
-        std::to_string(builtin_road_rules_de().reference.chord_margin_mm);
+        std::to_string(builtin_road_rules_de().reference.chord_margin_mm)
+        // 7a-1: a tunnel floor end and the ground stretch meeting it take one portal plane (the adjacent ground profile's end,
+        // else the approach level); the stage-2 set adds the incident ground ways' DEM and node tiles at every portal.
+        + std::string(c.tunnel_portal_anchor ? " portal-anchor=7a1" : "");
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {

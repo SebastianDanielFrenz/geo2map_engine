@@ -1273,6 +1273,38 @@ over the road is not modelled in geo2map at all (the racing_game side must sourc
 recorded sabotages `UnderpassRules.overpass = false`, `tunnel_cut_max_length_m = 0`, `CarveOptions.tunnel_cut = false`), pins `test_road_geom_xs.cpp`, `test_terrain_carve.cpp`,
 `test_road_rules.cpp` (de.json hash is of the LF bytes), goldens g3c/g3d (one hoechst_a66 tile). Tools `g2m_osm_near`, `g2m_spot_dump` (docs/pipeline/README.md 7.4).
 
+## Portal continuity 7a-1 (2026-10-20, branch claude/portal-continuity, unmerged until phase 7)
+
+docs/structure_classification.md section 5. A tunnel floor's portal anchor is no longer `dem.sample` at the portal node (often a bank
+face) but the adjacent ground road's level: `road_completion.cpp` `portal_plane(node)` (memoised, a pure function of the node) takes
+(1) the end height and grade of an accepted ground profile ending there (strict, else the 20 m retry; `underpass = nullptr`), else
+(2) the approach level of the joining ground way (`portal_approach.{h,cpp}`: median of the DEM 2-8 m out, detrended to the node, grade
+clamped to 0.10), else (3) for tunnel/tunnel nodes the junction plane. Step 2a ramps the DEM samples to the anchor height over
+`ground_ramp_m` and holds the joining road's grade; a chord tunnel (>= 200 m) stays on its chord within `kPortalGradeSlack` 0.015 with
+end ramps of at most a quarter of its length; a D65 cut is exactly the chord (the carve's 1 cm straightness test), so a cut's grade can
+miss the ground road's by more than 0.02. Fallback chain: anchored -> floor between the two anchors -> straight chord
+(`portal_tunnel_straight`) -> DEM (`portal_tunnel_unfit`). Step 3's `plane_at` gains the tunnel portal plane after D64: strict, then the
+D43 ease with the chord mismatch waived (`ground_tunnel_chord`), then the DEM planes (`ground_tunnel_unfit`); `ground_tunnel_anchored`
+counts the successes. Tile invariance: `road_portal_dependencies` (`road_dem_dependencies.h`, stage 2 with the bridge dependencies) adds
+the DEM within 8.5 m of every portal node and along 9 m of each joining ground way. Rail: `rail_geom_build.cpp` `rail_node_anchor` gives
+chain ends and ground-piece ends that touch a structure the same approach level; `rail_dem_dependencies(..., portal_anchor)` adds the
+approach segments. Option `RoadCompletionOptions::tunnel_portal_anchor` (struct default false, true in `served_road_completion_options()`;
+`g2m_test::served_without_portal_anchor()` for the previous behaviour); config token ` portal-anchor=7a1` in roads.geom and rail.geom
+(only when on; release ids change only through it, de.json and data ids untouched). New fixture `testdata/fixtures/osm/unterliederbach_tunnel.osm.pbf`
+(way 4812754, tile utm32n/2/456/5420; synthetic bank DEM in the test). Tests `tests/layer/test_portal_continuity.cpp` (`[roads][structure][portal]`:
+fixtures flat/tilted, 4812754 NW mouth, carved axis, rail; recorded sabotages A portal anchor back to the node's DEM sample, B no refit of
+the declined stretch to the tunnel plane); goldens g3c/g3d (hoechst_a66) re-recorded; `test_terrain_carve.cpp` T12 and `test_junction_gradient.cpp`
+D42 each allow the one hoechst_a66 1820/21684 tilted case that appears because a formerly declined stretch now completes. `g2m_spot_dump --portals`
+is the census. Reach rule (review of ffd575d): `portal_shift(node)` in `road_completion.cpp` - where a tunnel stretch's two raw portal heights differ by more than
+`kPortalReach` 0.9 x `tunnel_max_grade` x its reference length, each end moves toward the other by half the excess (pure per node, largest shift
+wins at a node on several stretches; an end nothing joins is FREE: step 2a moves its floor end to the nearest height within kPortalReach of the anchored end - stat portal_free_end - and nothing shifts or refits; the first attempt shifted the joined node instead and pushed five short ground stubs back into a decline); `portal_plane` returns the moved plane, which anchors the floor in step 2a and which step 3 refits the joining
+ground stretches to (declined ones, and retry-accepted ones - `refit`, stat `ground_portal_refit`, provenance becomes GroundCompleted and keeps its
+strict decline code). A strict-accepted ground profile is never re-fitted (format: non-strict provenance needs a strict decline code); a ground
+stretch that cannot reach the moved plane is refitted to the UNMOVED raw plane instead (stat `ground_portal_unreachable`; the floor stays on the moved plane, so a step remains and is reported - both show as census steps) ("unreachable" lines of `g2m_spot_dump --portals`, which also
+lists the decline text per declined portal node; test `unreachable_dz`). Stat `portal_clamped` counts moved nodes; the DEM floor `portal_tunnel_unfit`
+stays as a counted last resort. Test `test_road_completion.cpp` "portal reach (7a-1)" (5 m stub between 3.6 m of terrain rise: both mouths step 0,
+floor rise 1.348 of 1.5 m); a second part covers the dead-end stub. Recorded sabotages C (`kPortalReach` 1e9 = no clamp) and D (an unjoined far end not moved: the stub keeps its DEM height) fail it.Known pre-existing failure on the base: `test_road_rules.cpp` "The tunnel block" (its mutation string predates D65's three extra keys).
+
 ## Railways R1/R2 (2026-10-20, decision G2M-026)
 
 `g2m.rail.geom` v1, an OPT-IN level-2 baked layer (body encoding `LayerEncoding::RailGeom` = 1 in its own id space):

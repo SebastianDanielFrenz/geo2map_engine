@@ -450,6 +450,27 @@ At the NW portal node 30906085 (467585.07 / 5550217.80) that sample is the bank 
 - **Tunnel/tunnel nodes** take one floor value from the component solve (3.2).
 - **Rail** (`rail.geom` v1, chains linear between ground anchors) gets the same anchor rule.
 
+**Implemented (phase 7a-1, branch claude/portal-continuity, unmerged):** `road_completion.cpp` `portal_plane` (rules 1-3 above;
+the approach is `portal_approach.{h,cpp}`, the DEM median 2-8 m out detrended to the node), step 2a anchors both tunnel
+ends (height by a ramp of `ground_ramp_m` on the DEM samples, grade = the joining road's `away` grade continued; a straight
+chord keeps its chord within 0.015 and meets the ground grade over end ramps of at most a quarter of the length, a D65 cut
+stays EXACTLY the chord because the carve recognises a cut by a floor straight to 1 cm, so a cut's grade can differ from the
+ground road's by more than 0.02), step 3 refits declined ground stretches to the tunnel plane (strict, then with the D43
+mismatch waived, `ground_tunnel_chord`, else the DEM planes). Gated by `RoadCompletionOptions::tunnel_portal_anchor`
+(config token `portal-anchor=7a1` in roads.geom and rail.geom); rail: `rail_geom_build.cpp` `rail_node_anchor`. The test
+lives in `tests/layer/test_portal_continuity.cpp` (g2m_unit_tests does not link g2m_layers).
+
+**Reach rule (review of ffd575d, same phase):** a tunnel stub cannot always climb between the heights of the roads at its two
+ends (node 3909993585: a 4.85 m stub between ground ends 2.6 m apart, 30 % bound). The first build then fell back to the DEM
+floor and left a step of up to 2.65 m; continuity is a hard requirement, so the ground gives way. `portal_shift(node)` (pure, a
+function of the node's tunnel stretches, their reference lengths and the raw anchors of both ends): when the raw heights differ by
+more than `kPortalReach` 0.9 x `tunnel_max_grade` x length, each end moves toward the other by half the excess (an end nothing joins is free: step 2a moves its floor end to the nearest reachable height and the joined end keeps the ground road's level). The moved plane
+(`portal_plane`, the raw plane with its height shifted, grades kept) anchors the tunnel floor (step 2a) and is the plane the joining
+ground stretches refit to (step 3: declined stretches as before, and retry-accepted ones, which keep their strict decline code).
+The DEM-floor fallback `portal_tunnel_unfit` stays as a counted last resort. A strict-accepted ground profile cannot be re-fitted
+(the tile format ties a non-strict provenance to a strict decline), and a ground stretch that cannot reach the moved plane within
+its own class bound is refitted to the unmoved raw plane (stat `ground_portal_unreachable`, the step stays): both show as a step in the census and are reported there as "unreachable" with the stub
+length, both bounds and dz (`g2m_spot_dump --portals`, `test_portal_continuity` `unreachable_dz`).
 **Test** (`test_portal_continuity`, tags `[roads][structure]`, geo2map):
 - on the corridor fixture tiles plus the 4812754 fixture tile (`utm32n/2/456/5420`), for every TunnelFloor entry and
   every node it shares, |dz| <= 0.01 m and |dgrade| <= 0.02;

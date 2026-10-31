@@ -99,6 +99,13 @@ struct RoadCompletionOptions {
     // along its heading) takes precedence over the walk, as the game's anchor map does; the walk tries every incident
     // bridge edge in order, not only the first.
     bool bridge_anchor_reuse = true;
+    // Terrain migration phase 7a-1 (docs/structure_classification.md section 5): the ground side owns the join at a
+    // tunnel portal. A tunnel stretch end takes the plane of the ground road that joins it: the end height and grade of
+    // an accepted (strict or retried) ground profile ending at the node, else the approach level (median DEM 2-8 m out
+    // along the joining ground way, portal_approach.h) with that way's measured grade; two tunnel stretches meeting
+    // at a node without a ground way share the junction plane. A ground stretch still declined after the strict pass
+    // and the retry then ends on that plane (step 3). Default off: the previous release's tunnel step (the game's).
+    bool tunnel_portal_anchor = false;
 };
 // The outer bounds of the tunnel options; the validator certifies a TunnelFloor profile against them.
 inline constexpr double kRoadCompletionMaxTunnelGrade = 0.30;
@@ -113,6 +120,7 @@ inline RoadCompletionOptions served_road_completion_options() {
     o.tunnel_cut_max_length_m = builtin_road_rules_de().tunnel.cut_max_length_m;
     o.tunnel_cut_hump_min_m = static_cast<double>(builtin_road_rules_de().tunnel.cut_hump_min_mm) / 1000.0;
     o.tunnel_cut_hump_max_m = static_cast<double>(builtin_road_rules_de().tunnel.cut_hump_max_mm) / 1000.0;
+    o.tunnel_portal_anchor = true;
     return o;
 }
 // What the completion tier did, per kind (design 6.6; diagnostics only, never stored).
@@ -127,6 +135,19 @@ struct RoadCompletionStats {
     std::size_t bridge_anchor_reused = 0;    // end nodes whose plane came from an accepted bridge stretch (D47), once per node
     std::size_t walk_other_side = 0;         // bridging nodes whose walk found support only away from a later bridge edge (D47)
     std::size_t strict_anchors = 0;          // bridging end nodes that took the strict pass's anchor (D30), once per node
+    // 7a-1 portal planes, once per node: from an accepted ground profile / from the approach level / the junction plane
+    // of tunnel stretches meeting without a ground way.
+    std::size_t portal_ground = 0, portal_approach = 0, portal_joint = 0;
+    std::size_t portal_clamped = 0;          // portal nodes the ground gave way at (the tunnel could not climb to the ground anchor), once per node
+    std::size_t portal_free_end = 0;         // unjoined tunnel ends moved to the nearest height the floor can reach from the anchored end
+    std::size_t ground_portal_unreachable = 0; // ground stretches that could not reach a moved portal plane and keep the unmoved one (a step of the shift remains)
+    std::size_t ground_portal_refit = 0;     // retry-accepted ground stretches re-fitted to such a moved portal plane
+    std::size_t portal_tunnel_ends = 0;      // tunnel floor ends anchored on a portal plane
+    std::size_t portal_tunnel_straight = 0;  // ... on the straight floor between the portal heights (the portal grades left no cubic)
+    std::size_t portal_tunnel_unfit = 0;     // tunnel floors whose portal planes left no floor (kept on the DEM)
+    std::size_t ground_tunnel_anchored = 0;  // declined ground stretches completed on a tunnel portal plane
+    std::size_t ground_tunnel_chord = 0;     // ... completed on the chord from the portal (the stretch departs from the DEM's grade)
+    std::size_t ground_tunnel_unfit = 0;     // ... whose portal plane left no cubic (completed on the DEM planes, or declined)
 };
 // Encoding 9, section 8 (decisions D53-D58): a deck span of a ground stretch over a lower road that runs in a DEM
 // cutting under it without a bridge tag (road_underpass.h). The profile over [start_m, end_m] is the rim chord, not

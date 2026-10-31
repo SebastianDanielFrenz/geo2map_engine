@@ -356,13 +356,16 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
     CHECK(deriver.config_hash() != Sha256::of(d63));
     // Owner report 2026-10-19 (D64, D65): the hump mask under an upper bridge and the short-tunnel cut (de.json tunnel
     // block: 80 m, a 1..8 m rise over the portal chord).
-    const std::string after = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
+    const std::string d65 = "g2m.roads.geom/1 class-policy-2026-10-02 spacing=5 max-samples=2048 iterations=4096 curvature-exceptions=true "
         "sloping-plane-r3 approach=32 height-correction=.25 merge-agreement=.5 incline-soft=5 dependency-margin=65 coverage=graph xs=1 enc=9 rules=de:" +
         rules_hex + " join-bisector=1 context=nodes junction=1 furniture=1 completion=1 completion-retry=20/16384 completion-abutment=32/200 "
         "completion-ground=40/32 strict-anchor=1 ring-nesting=2mm bridge-far-end=1 ground-ease=8/0.05 corner-fillet=1 width-taper=5"
         " tunnel-floor=5/0.29999999999999999/20/chord:200 tunnel-cut=80/1/8 bridge-anchor-reuse=1 bridge-walk-margin=205 underpass=1 crossing-context=1"
         " underpass-tags=D61 underpass-join=D63/61000 overpass-mask=D64"
         " reference-chord=G2M-024/100/3000";
+    CHECK(deriver.config_hash() != Sha256::of(d65));
+    // Phase 7a-1 (portal and join continuity): a tunnel floor end and the ground stretch meeting it share one portal plane.
+    const std::string after = d65 + " portal-anchor=7a1";
     CHECK(road_geom_config_text() == after);
     CHECK(deriver.config_hash() == Sha256::of(after));
     CHECK(road_geom_desc().encoding == 10);
@@ -373,7 +376,7 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
         CHECK(served.enabled); CHECK(served.retry_spacing_m == 20); CHECK(served.retry_iterations == 16384);
         CHECK(served.abutment_ground_m == 32); CHECK(served.abutment_path_m == 200); CHECK(served.ground_spacing_m == 40); CHECK(served.ground_ramp_m == 32);
         CHECK(served.tunnel_floors); CHECK(served.tunnel_spacing_m == 5); CHECK(served.tunnel_max_grade == 0.30); CHECK(served.tunnel_min_radius_m == 20);
-        CHECK(served.tunnel_chord_min_length_m == 200); CHECK(served.tunnel_chord_min_length_m == builtin_road_rules_de().tunnel.straight_grade_min_length_m); CHECK(served.bridge_anchor_reuse);
+        CHECK(served.tunnel_chord_min_length_m == 200); CHECK(served.tunnel_chord_min_length_m == builtin_road_rules_de().tunnel.straight_grade_min_length_m); CHECK(served.bridge_anchor_reuse); CHECK(served.tunnel_portal_anchor);
     }
 
     struct Temp {

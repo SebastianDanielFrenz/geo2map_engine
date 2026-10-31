@@ -44,7 +44,7 @@ Limits: 200 000 pieces and 4 000 000 points per tile.
 | Levels | 2 only |
 | Header datum | the datum of the `g2m.elev.base` inputs (z is in that datum); None for a tile without pieces |
 | Coverage | `g2m.src.osm` |
-| Config hash | SHA-256 of `g2m.rail.geom/1 enc=1 owner=first-vertex-mm piece=cut-at-first-vertex-ge-max-length profile=ground:smoothed-triangular+grade-limit-pinned-ends structure:chain-linear-dem-anchors window=src.osm-3x3 rules=de:<sha256 of de.json>` (`rail_geom_config_text()`) |
+| Config hash | SHA-256 of `g2m.rail.geom/1 enc=1 owner=first-vertex-mm piece=cut-at-first-vertex-ge-max-length profile=ground:smoothed-triangular+grade-limit-pinned-ends structure:chain-linear-dem-anchors window=src.osm-3x3 portal-anchor=7a1 rules=de:<sha256 of de.json>` (`rail_geom_config_text()`) |
 
 ## Inputs
 

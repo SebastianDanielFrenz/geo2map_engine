@@ -28,4 +28,11 @@ Result<std::vector<InputTileRef>> road_dem_dependencies(const RoadGraph& graph,
 inline constexpr std::int64_t kRoadBridgeWalkMarginMm = 205000;
 Result<std::vector<InputTileRef>> road_bridge_dependencies(const RoadGraph& tile_graph, const RoadGraph& context,
     geo::UtmZone zone, const TileKey* exclude = nullptr, std::int64_t walk_margin_mm = kRoadBridgeWalkMarginMm);
+// Phase 7a-1 (portal and join continuity): a tunnel floor end and the ground stretch meeting it take the portal plane of
+// their shared node (road_completion.cpp portal_plane), which reads the ground ways incident to that node. For every
+// node of `tile_graph`'s ways that a tunnel way of `context` (the merged stretch context) also touches, this lists the
+// elev.base tiles of those incident non-tunnel, non-bridge ways' segments (65 m margin, road_dem_dependencies) and the
+// roads.graph tiles of their nodes (road_context_dependencies, `exclude` omitted), sorted and unique. One hop: no chain.
+Result<std::vector<InputTileRef>> road_portal_dependencies(const RoadGraph& tile_graph, const RoadGraph& context,
+    geo::UtmZone zone, const TileKey* exclude = nullptr);
 }

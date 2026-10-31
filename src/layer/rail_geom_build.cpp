@@ -2,6 +2,7 @@
 #include "g2m/layer/rail_geom_tile.h"
 #include "g2m/core/geom/project.h"
 #include "g2m/layer/terrain_layers.h"
+#include "g2m/layer/portal_approach.h"
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -175,6 +176,25 @@ RailChain rail_chain(const RailWorld& world, const RailWay& way, const RailRules
     return c;
 }
 
+// 7a-1: the polyline of the lowest-id non-structure ("joining ground") way at `node`, running outward from the node (first
+// point = the node); empty where no ground way joins. Shared by the anchor and by the DEM dependency set.
+static std::vector<geom::PointMm> rail_approach_polyline(const RailWorld& world, std::int64_t node) {
+    std::vector<geom::PointMm> line;
+    const auto it = world.node_ways.find(node);
+    if (it == world.node_ways.end()) return line;
+    for (const auto id : it->second) {
+        const RailWay& w = world.ways.at(id);
+        if (w.attrs.flags & kStructure) continue;
+        const auto at = std::find(w.refs.begin(), w.refs.end(), node);
+        if (at == w.refs.end()) continue;
+        const auto index = static_cast<std::size_t>(at - w.refs.begin());
+        if (index + 1 < w.pts.size()) line.assign(w.pts.begin() + static_cast<std::ptrdiff_t>(index), w.pts.end());
+        else line.assign(w.pts.rbegin(), w.pts.rend());
+        break;
+    }
+    return line;
+}
+
 namespace {
 // Adds the level-0 tiles within `margin_mm` of segment (a, b) (a == b: a point) to `keys`.
 Result<void> add_segment_tiles(std::set<TileKey>& keys, geo::UtmZone zone, const geom::PointMm& a, const geom::PointMm& b,
@@ -196,11 +216,29 @@ Result<void> add_segment_tiles(std::set<TileKey>& keys, geo::UtmZone zone, const
 }
 }
 
-Result<std::vector<InputTileRef>> rail_dem_dependencies(const RailWorld& world, const TileKey& key, const RailRules& rules, std::size_t max_tiles) {
+Result<std::vector<InputTileRef>> rail_dem_dependencies(const RailWorld& world, const TileKey& key, const RailRules& rules, std::size_t max_tiles,
+    bool portal_anchor) {
     if (!key.valid() || key.level != 2) return make_error(ErrorCode::InvalidArgument, "rail.geom: level-2 target required");
     const std::int64_t margin = static_cast<std::int64_t>(rules.dependency_margin_m) * 1000;
     std::set<TileKey> keys;
     std::set<std::int64_t> chained;
+    // 7a-1: the segments of the joining ground way within kPortalApproachFarM of `node` (the approach samples are bilinear, so
+    // the margin applies): what rail_node_anchor reads. The whole segments are listed - over-inclusive, deterministic.
+    const auto add_approach = [&](std::int64_t node) -> Result<void> {
+        const auto line = rail_approach_polyline(world, node);
+        double walked = 0;
+        for (std::size_t i = 0; i + 1 < line.size() && walked <= kPortalApproachFarM + 1.0; ++i) {
+            const auto r = add_segment_tiles(keys, key.zone, line[i], line[i + 1], margin, max_tiles); if (!r) return r;
+            const double dx = static_cast<double>(line[i + 1].x - line[i].x) / 1000.0, dy = static_cast<double>(line[i + 1].y - line[i].y) / 1000.0;
+            walked += std::sqrt(dx * dx + dy * dy);
+        }
+        return {};
+    };
+    const auto touches_structure = [&](std::int64_t node) {
+        const auto it = world.node_ways.find(node);
+        if (it == world.node_ways.end()) return false;
+        return std::any_of(it->second.begin(), it->second.end(), [&](auto id) { return (world.ways.at(id).attrs.flags & kStructure) != 0; });
+    };
     for (const auto& plan : plan_owned_pieces(world, key, rules)) {
         const RailWay& way = *plan.way;
         for (std::size_t i = plan.first; i < plan.last; ++i) {
@@ -209,6 +247,10 @@ Result<std::vector<InputTileRef>> rail_dem_dependencies(const RailWorld& world, 
         if ((way.attrs.flags & kStructure) && chained.insert(way.id).second) {
             const RailChain c = rail_chain(world, way, rules);
             for (const auto& p : {c.pos_a, c.pos_b}) { const auto r = add_segment_tiles(keys, key.zone, p, p, margin, max_tiles); if (!r) return r.error(); }
+            if (portal_anchor) for (const auto node : {c.node_a, c.node_b}) { const auto r = add_approach(node); if (!r) return r.error(); }
+        } else if (portal_anchor && !(way.attrs.flags & kStructure)) {
+            for (const auto vertex : {plan.first, plan.last})
+                if (touches_structure(way.refs[vertex])) { const auto r = add_approach(way.refs[vertex]); if (!r) return r.error(); }
         }
     }
     std::vector<InputTileRef> out; out.reserve(keys.size());
@@ -252,7 +294,19 @@ std::vector<std::int32_t> rail_ground_profile(std::span<const double> s_m, std::
     return result;
 }
 
-Result<RailGeomTile> build_rail_geom_tile(const RailWorld& world, const TileKey& key, const RailRules& rules, const RoadDemSampler& dem) {
+// 7a-1: the ground height a bridge/tunnel chain end and a ground piece ending at the same node both take: the approach
+// level of the lowest-id joining ground way (median DEM 2-8 m out along it, carried back along its grade); the DEM at
+// the node where no ground way joins or the approach is missing. A pure function of (world, node, DEM near the node).
+static std::optional<std::int32_t> rail_node_anchor(const RailWorld& world, const RoadDemSampler& dem, geo::UtmZone zone,
+    std::int64_t node, const geom::PointMm& pos, bool portal_anchor) {
+    if (portal_anchor) {
+        const auto line = rail_approach_polyline(world, node);
+        if (!line.empty()) if (const auto approach = portal_approach(dem, zone, line)) return approach->height;
+    }
+    const auto v = dem.sample(zone, pos); if (!v) return std::nullopt; return static_cast<std::int32_t>(*v);
+}
+
+Result<RailGeomTile> build_rail_geom_tile(const RailWorld& world, const TileKey& key, const RailRules& rules, const RoadDemSampler& dem, bool portal_anchor) {
     if (!key.valid() || key.level != 2) return make_error(ErrorCode::InvalidArgument, "rail.geom: level-2 target required");
     RailGeomTile tile; tile.key = key;
     std::map<std::int64_t, std::vector<double>> arc_cache;
@@ -278,7 +332,12 @@ Result<RailGeomTile> build_rail_geom_tile(const RailWorld& world, const TileKey&
             auto chain = chain_cache.find(way.id);
             if (chain == chain_cache.end()) chain = chain_cache.emplace(way.id, rail_chain(world, way, rules)).first;
             const RailChain& c = chain->second;
-            const std::int32_t za = sample(c.pos_a, declined), zb = sample(c.pos_b, declined);
+            const auto anchor = [&](std::int64_t node, const geom::PointMm& pos) -> std::int32_t {
+                const auto v = rail_node_anchor(world, dem, key.zone, node, pos, portal_anchor);
+                if (!v) { declined = true; return 0; }
+                return *v;
+            };
+            const std::int32_t za = anchor(c.node_a, c.pos_a), zb = anchor(c.node_b, c.pos_b);
             piece.z.resize(piece.xy.size(), 0);
             if (!declined) for (std::size_t i = plan.first; i <= plan.last; ++i) {
                 const double f = c.chain_mm > 0 ? (c.ext_a_mm + arcs->second[i]) / c.chain_mm : 0.0;
@@ -303,8 +362,19 @@ Result<RailGeomTile> build_rail_geom_tile(const RailWorld& world, const TileKey&
             }
             std::vector<std::int32_t> raw(piece.xy.size());
             std::vector<double> s(piece.xy.size(), 0.0);
+            // A ground piece ending at a node a bridge/tunnel also touches takes that node's anchor (the chain's own).
+            const auto touches_structure = [&](std::size_t vertex) {
+                const auto it = world.node_ways.find(way.refs[vertex]);
+                if (it == world.node_ways.end()) return false;
+                return std::any_of(it->second.begin(), it->second.end(), [&](auto id) { return (world.ways.at(id).attrs.flags & kStructure) != 0; });
+            };
+            const bool anchor_first = portal_anchor && touches_structure(plan.first), anchor_last = portal_anchor && touches_structure(plan.last);
             for (std::size_t i = 0; i < piece.xy.size() && !declined; ++i) {
-                raw[i] = sample(piece.xy[i], declined);
+                if ((i == 0 && anchor_first) || (i + 1 == piece.xy.size() && anchor_last)) {
+                    const std::size_t vertex = i == 0 ? plan.first : plan.last;
+                    const auto v = rail_node_anchor(world, dem, key.zone, way.refs[vertex], way.pts[vertex], true);
+                    if (!v) declined = true; else raw[i] = *v;
+                } else raw[i] = sample(piece.xy[i], declined);
                 if (i > 0) s[i] = s[i - 1] + dist_mm(piece.xy[i - 1], piece.xy[i]) / 1000.0;
             }
             if (!declined) {
