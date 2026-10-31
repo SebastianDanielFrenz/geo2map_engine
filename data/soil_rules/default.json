@@ -1,0 +1,48 @@
+{
+  "format": "g2m.soil_rules/1",
+  "source": {"scheme": "soilgrids_v2_mean", "cells_per_degree": 480},
+  "grid": {"cells_per_side": 32},
+  "nodata": {"surface_texture_sum_zero": true},
+  "landcover": {"scheme": "esa_worldcover_v200", "builtup": [50], "water": [80]},
+  "horizons": [
+    {"name": "top", "from_cm": 0, "to_cm": 30},
+    {"name": "sub", "from_cm": 30, "to_cm": 100}
+  ],
+  "texture": {
+    "scheme": "usda12",
+    "classes": [
+      {"code": 1, "name": "sand", "alternatives": [
+        [{"w": [0, 2, 3], "op": "<", "k": 300}]]},
+      {"code": 2, "name": "loamy_sand", "alternatives": [
+        [{"w": [0, 2, 3], "op": ">=", "k": 300}, {"w": [0, 1, 2], "op": "<", "k": 300}]]},
+      {"code": 3, "name": "sandy_loam", "alternatives": [
+        [{"w": [0, 0, 1], "op": ">=", "k": 70}, {"w": [0, 0, 1], "op": "<", "k": 200}, {"w": [1, 0, 0], "op": ">", "k": 520}, {"w": [0, 1, 2], "op": ">=", "k": 300}],
+        [{"w": [0, 0, 1], "op": "<", "k": 70}, {"w": [0, 1, 0], "op": "<", "k": 500}, {"w": [0, 1, 2], "op": ">=", "k": 300}]]},
+      {"code": 4, "name": "loam", "alternatives": [
+        [{"w": [0, 0, 1], "op": ">=", "k": 70}, {"w": [0, 0, 1], "op": "<", "k": 270}, {"w": [0, 1, 0], "op": ">=", "k": 280}, {"w": [0, 1, 0], "op": "<", "k": 500}, {"w": [1, 0, 0], "op": "<=", "k": 520}]]},
+      {"code": 5, "name": "silt_loam", "alternatives": [
+        [{"w": [0, 1, 0], "op": ">=", "k": 500}, {"w": [0, 0, 1], "op": ">=", "k": 120}, {"w": [0, 0, 1], "op": "<", "k": 270}],
+        [{"w": [0, 1, 0], "op": ">=", "k": 500}, {"w": [0, 1, 0], "op": "<", "k": 800}, {"w": [0, 0, 1], "op": "<", "k": 120}]]},
+      {"code": 6, "name": "silt", "alternatives": [
+        [{"w": [0, 1, 0], "op": ">=", "k": 800}, {"w": [0, 0, 1], "op": "<", "k": 120}]]},
+      {"code": 7, "name": "sandy_clay_loam", "alternatives": [
+        [{"w": [0, 0, 1], "op": ">=", "k": 200}, {"w": [0, 0, 1], "op": "<", "k": 350}, {"w": [0, 1, 0], "op": "<", "k": 280}, {"w": [1, 0, 0], "op": ">", "k": 450}]]},
+      {"code": 8, "name": "clay_loam", "alternatives": [
+        [{"w": [0, 0, 1], "op": ">=", "k": 270}, {"w": [0, 0, 1], "op": "<", "k": 400}, {"w": [1, 0, 0], "op": ">", "k": 200}, {"w": [1, 0, 0], "op": "<=", "k": 450}]]},
+      {"code": 9, "name": "silty_clay_loam", "alternatives": [
+        [{"w": [0, 0, 1], "op": ">=", "k": 270}, {"w": [0, 0, 1], "op": "<", "k": 400}, {"w": [1, 0, 0], "op": "<=", "k": 200}]]},
+      {"code": 10, "name": "sandy_clay", "alternatives": [
+        [{"w": [0, 0, 1], "op": ">=", "k": 350}, {"w": [1, 0, 0], "op": ">", "k": 450}]]},
+      {"code": 11, "name": "silty_clay", "alternatives": [
+        [{"w": [0, 0, 1], "op": ">=", "k": 400}, {"w": [0, 1, 0], "op": ">=", "k": 400}]]},
+      {"code": 12, "name": "clay", "alternatives": [
+        [{"w": [0, 0, 1], "op": ">=", "k": 400}, {"w": [1, 0, 0], "op": "<=", "k": 450}, {"w": [0, 1, 0], "op": "<", "k": 400}]]}
+    ]
+  },
+  "field_summary": {"lattice_spacing_mm": 16000},
+  "sources": {
+    "texture": "USDA soil texture triangle (Soil Survey Manual, 12 classes); sand/silt/clay in g/kg, renormalised to 1000",
+    "soilgrids": "ISRIC SoilGrids 250 m v2.0 (Poggio et al. 2021, SOIL 7, 217-240, doi:10.5194/soil-7-217-2021), CC BY 4.0",
+    "landcover": "ESA WorldCover 2021 v200 classes: 50 built-up, 80 permanent water bodies"
+  }
+}

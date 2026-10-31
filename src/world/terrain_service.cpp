@@ -9,6 +9,7 @@
 
 #include "g2m/client/in_process_transport.h"
 #include "g2m/layer/layer_id.h"
+#include "g2m/layer/soil_tile.h"
 #include "g2m/layer/src_osm.h"
 #include "g2m/layer/terrain_carve.h"
 #include "g2m/layer/terrain_class.h"
@@ -52,6 +53,8 @@ constexpr ProductKind kKindBuildings = 8;
 constexpr ProductKind kKindWarm = 9;
 constexpr ProductKind kKindTerrainClass = 10;
 constexpr ProductKind kKindRailGeom = 11;
+constexpr ProductKind kKindFields = 12;
+constexpr ProductKind kKindSoil = 13;
 constexpr ProductKind kFirstUserKind = 100;
 
 // Type identity used by the scheduler and the cache. hash_code() is equal for equal types in one
@@ -251,6 +254,34 @@ struct TerrainService::Impl {
                        if (!tile.ok()) return failed(std::string(layer) + " " + to_string(l2) + ": " + tile.error().message);
                        auto p = std::make_shared<const RailGeomTile>(std::move(tile.value()));
                        return detail::erase<RailGeomTile>(Outcome<RailGeomTile>::ready(std::move(p), f.container.size() * 4 + 4096));
+                   }};
+    }
+
+    Job job_fields(const TileKey& l2) {
+        return Job{{kKindFields, l2.packed(), 0}, &typeid(FieldTile), [this, l2]() -> ErasedOutcome {
+                       const std::string_view layer = kFieldsGeomLayer;
+                       const Fetched f = fetch_container(layer, l2);
+                       if (f.status != Status::Ok) return status_outcome(f, layer, l2);
+                       const Result<TileBody> body = open_body(f, layer, l2);
+                       if (!body.ok()) return failed(std::string(layer) + " " + to_string(l2) + ": " + body.error().message);
+                       Result<FieldTile> tile = decode_fields_geom(body.value());
+                       if (!tile.ok()) return failed(std::string(layer) + " " + to_string(l2) + ": " + tile.error().message);
+                       auto p = std::make_shared<const FieldTile>(std::move(tile.value()));
+                       return detail::erase<FieldTile>(Outcome<FieldTile>::ready(std::move(p), f.container.size() * 4 + 4096));
+                   }};
+    }
+
+    Job job_soil(const TileKey& l2) {
+        return Job{{kKindSoil, l2.packed(), 0}, &typeid(SoilGridTile), [this, l2]() -> ErasedOutcome {
+                       const std::string_view layer = kSoilGridLayer;
+                       const Fetched f = fetch_container(layer, l2);
+                       if (f.status != Status::Ok) return status_outcome(f, layer, l2);
+                       const Result<TileBody> body = open_body(f, layer, l2);
+                       if (!body.ok()) return failed(std::string(layer) + " " + to_string(l2) + ": " + body.error().message);
+                       Result<SoilGridTile> tile = decode_soil_grid(body.value());
+                       if (!tile.ok()) return failed(std::string(layer) + " " + to_string(l2) + ": " + tile.error().message);
+                       auto p = std::make_shared<const SoilGridTile>(std::move(tile.value()));
+                       return detail::erase<SoilGridTile>(Outcome<SoilGridTile>::ready(std::move(p), f.container.size() * 4 + 4096));
                    }};
     }
 
@@ -554,6 +585,8 @@ Result<std::unique_ptr<TerrainService>> TerrainService::open(const TerrainServic
 
     const bool carved = config.layers.carved;
     const bool classes = config.layers.classes;
+    const bool fields = config.layers.fields;
+    const bool soil = config.layers.soil;
     if (config.remote_transport) {
         if (!config.remote_manifest) return bad(ErrorCode::InvalidArgument, "remote transport needs a pinned manifest");
         if (!config.extra_derivers.empty()) return bad(ErrorCode::InvalidArgument, "remote mode cannot use local derivers");
@@ -564,7 +597,8 @@ Result<std::unique_ptr<TerrainService>> TerrainService::open(const TerrainServic
         };
         if (!needs(true, carved ? "g2m.terrain.carved" : "g2m.terrain.height") ||
             !needs(config.layers.roads, "g2m.roads.graph") || !needs(config.layers.geometry, "g2m.roads.geom") ||
-            !needs(classes, "g2m.terrain.class") || !needs(config.layers.rail, "g2m.rail.geom"))
+            !needs(classes, "g2m.terrain.class") || !needs(config.layers.rail, "g2m.rail.geom") ||
+            !needs(fields, "g2m.fields.geom") || !needs(soil, "g2m.soil.grid"))
             return bad(ErrorCode::InvalidArgument, "remote release lacks required terrain layers");
         m.transport = config.remote_transport;
     } else {
@@ -588,7 +622,7 @@ Result<std::unique_ptr<TerrainService>> TerrainService::open(const TerrainServic
         const bool roads = config.layers.roads || carved || classes;
         const bool geometry = config.layers.geometry || carved || classes;
         LocalReleaseParams params =
-            builtin_local_release_params(config.stores.source_scope, m.derivers, config.attribution, roads, geometry, carved, classes, config.layers.rail);
+            builtin_local_release_params(config.stores.source_scope, m.derivers, config.attribution, roads, geometry, carved, classes, config.layers.rail, fields, soil);
         LayerRegistry source_registry = LayerRegistry::builtin();
         if (config.elevation_source != kSrcElevDgm1Layer) {
             auto registered = source_registry.add(make_raw_elev_layer(config.elevation_source.substr(kSrcElevPrefix.size())));
@@ -717,6 +751,18 @@ Ticket<RoadGeomTile> TerrainService::road_geom(const TileKey& l2, Priority prior
 Ticket<RoadSegmentsTile> TerrainService::road_segments(const TileKey& l2, Priority priority) {
     return impl_->ticket<RoadSegmentsTile>(impl_->job_road_segments(to_level2(l2)), priority);
 }
+Ticket<FieldTile> TerrainService::fields(const TileKey& l2, Priority priority) {
+    if (!has_layer(kFieldsGeomLayer))
+        return impl_->finished_ticket<FieldTile>({kKindFields, to_level2(l2).packed(), 0},
+                                                 failed("g2m.fields.geom is not in the release (LayerOptIn::fields)"));
+    return impl_->ticket<FieldTile>(impl_->job_fields(to_level2(l2)), priority);
+}
+Ticket<SoilGridTile> TerrainService::soil(const TileKey& l2, Priority priority) {
+    if (!has_layer(kSoilGridLayer))
+        return impl_->finished_ticket<SoilGridTile>({kKindSoil, to_level2(l2).packed(), 0},
+                                                    failed("g2m.soil.grid is not in the release (LayerOptIn::soil)"));
+    return impl_->ticket<SoilGridTile>(impl_->job_soil(to_level2(l2)), priority);
+}
 Ticket<OsmTile> TerrainService::source_osm(const TileKey& l2, Priority priority) {
     return impl_->ticket<OsmTile>(impl_->job_source_osm(to_level2(l2)), priority);
 }
@@ -788,6 +834,47 @@ std::shared_ptr<const RoadGeomTile> TerrainService::peek_road_geom(const TileKey
 std::shared_ptr<const RoadSegmentsTile> TerrainService::peek_road_segments(const TileKey& l2) const noexcept {
     return std::static_pointer_cast<const RoadSegmentsTile>(
         impl_->cache.peek({kKindRoadSegments, to_level2(l2).packed(), 0}, type_id(typeid(RoadSegmentsTile))));
+}
+std::shared_ptr<const FieldTile> TerrainService::peek_fields(const TileKey& l2) const noexcept {
+    return std::static_pointer_cast<const FieldTile>(
+        impl_->cache.peek({kKindFields, to_level2(l2).packed(), 0}, type_id(typeid(FieldTile))));
+}
+std::optional<TerrainService::FieldHit> TerrainService::field_at(double x, double y) const {
+    return field_at_grid(x + static_cast<double>(frame().e0_m()), y + static_cast<double>(frame().n0_m()));
+}
+std::optional<TerrainService::FieldHit> TerrainService::field_at_grid(double easting, double northing) const {
+    const auto key = tile_key_at(frame().zone(), 2, easting, northing);
+    if (!key) return std::nullopt;
+    auto tile = peek_fields(*key);
+    if (!tile) return std::nullopt;
+    const auto index = g2m::field_at(*tile, geom::PointMm{static_cast<std::int64_t>(std::floor(easting * 1000.0)),
+                                                         static_cast<std::int64_t>(std::floor(northing * 1000.0))});
+    if (!index) return std::nullopt;
+    return FieldHit{std::move(tile), *index};
+}
+std::shared_ptr<const SoilGridTile> TerrainService::peek_soil(const TileKey& l2) const noexcept {
+    return std::static_pointer_cast<const SoilGridTile>(
+        impl_->cache.peek({kKindSoil, to_level2(l2).packed(), 0}, type_id(typeid(SoilGridTile))));
+}
+std::optional<SoilSample> TerrainService::soil_at(double x, double y) const {
+    return soil_at_grid(x + static_cast<double>(frame().e0_m()), y + static_cast<double>(frame().n0_m()));
+}
+std::optional<SoilSample> TerrainService::soil_at_grid(double easting, double northing) const {
+    const auto key = tile_key_at(frame().zone(), 2, easting, northing);
+    if (!key) return std::nullopt;
+    const auto tile = peek_soil(*key);
+    if (!tile) return std::nullopt;
+    return g2m::soil_at(*tile, static_cast<std::int64_t>(std::floor(easting * 1000.0)), static_cast<std::int64_t>(std::floor(northing * 1000.0)));
+}
+SoilFieldSummary TerrainService::field_soil(const FieldRecord& field) const {
+    const SoilLookup lookup = [this](std::int64_t e_mm, std::int64_t n_mm) -> std::optional<SoilSample> {
+        const auto key = tile_key_at(frame().zone(), 2, static_cast<double>(e_mm) / 1000.0, static_cast<double>(n_mm) / 1000.0);
+        if (!key) return std::nullopt;
+        const auto tile = peek_soil(*key);
+        if (!tile) return std::nullopt;
+        return g2m::soil_at(*tile, e_mm, n_mm);
+    };
+    return summarise_field_soil(field, builtin_soil_rules(), lookup);
 }
 std::shared_ptr<const OsmTile> TerrainService::peek_source_osm(const TileKey& l2) const noexcept {
     return std::static_pointer_cast<const OsmTile>(

@@ -102,6 +102,14 @@ TEST_CASE("G3rail golden hashes match testdata/golden/g3rail_golden.txt", "[gold
     check_against("g3rail_golden.txt", g2m_golden::compute_g3rail());
 }
 
+TEST_CASE("G3f golden hashes match testdata/golden/g3f_golden.txt", "[golden][fields]") {
+    check_against("g3f_golden.txt", g2m_golden::compute_g3f());
+}
+
+TEST_CASE("G3s golden hashes match testdata/golden/g3s_golden.txt", "[golden][soil]") {
+    check_against("g3s_golden.txt", g2m_golden::compute_g3s());
+}
+
 TEST_CASE("G3c golden hashes match testdata/golden/g3c_golden.txt", "[golden][terrain_class]") {
     check_against("g3c_golden.txt", g2m_golden::compute_g3c());
 }

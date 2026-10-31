@@ -9,6 +9,10 @@
 #include "g2m/layer/osm_clip.h"
 #include "g2m/layer/pack.h"
 #include "g2m/layer/rail_geom_tile.h"
+#include "g2m/layer/field_tile.h"
+#include "g2m/layer/soil_tile.h"
+#include "g2m/layer/src_soil.h"
+#include "soil_world.h"
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/region.h"
@@ -339,6 +343,47 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         tile.entries[0].cross_section_decline.reset(); tile.entries[0].profile.reset(); tile.entries[0].decline = g2m::make_error(g2m::ErrorCode::Unsupported, "fixture decline");
         return {std::move(first), body(legacy), std::move(with_features), std::move(cross_decline), body(must(g2m::encode_road_geom(tile), "road geom decline encode")),
                 std::move(six), std::move(with_origin), std::move(junctions), std::move(nine)};
+    }
+    case Target::SrcSoil: {
+        // A real window of the synthetic world (every kind of no-data patch inside), and a minimal 1 x 1 window.
+        auto first = body(must(g2m::encode_src_soil(g2m_test::soil::make_src_tile(g2m_test::home_tile())), "encode_src_soil"));
+        g2m::SoilSourceTile tiny; tiny.key = g2m_test::home_tile(); tiny.scheme = "soilgrids_v2_mean"; tiny.cells_per_degree = 480;
+        tiny.col0 = 3360; tiny.row0 = 24100; tiny.width = 1; tiny.height = 1; tiny.values.assign(g2m::kSoilPlanes, 100);
+        tiny.values[3] = g2m::kSoilNoData;
+        return {std::move(first), body(must(g2m::encode_src_soil(tiny), "encode_src_soil tiny"))};
+    }
+    case Target::SoilGrid: {
+        g2m::SoilGridTile tile; tile.key = g2m_test::home_tile(); tile.cells_per_side = 32; tile.cells.resize(1024);
+        for (int r = 0; r < 32; ++r) for (int c = 0; c < 32; ++c) tile.cells[static_cast<std::size_t>(r) * 32 + static_cast<std::size_t>(c)] = g2m_test::soil::ref_cell(tile.key, c, r);
+        auto first = body(must(g2m::encode_soil_grid(tile), "encode_soil_grid"));
+        g2m::SoilGridTile coarse; coarse.key = tile.key; coarse.cells_per_side = 4; coarse.cells.resize(16);
+        for (int i = 0; i < 16; ++i) coarse.cells[static_cast<std::size_t>(i)] = g2m_test::soil::ref_cell(tile.key, i * 2, (i * 5) % 32);
+        return {std::move(first), body(must(g2m::encode_soil_grid(coarse), "encode_soil_grid coarse"))};
+    }
+    case Target::FieldsGeom: {
+        // Two pieces of a field cut by a track, a relation field with a hole and a crop, two decline records.
+        g2m::FieldTile tile; tile.key = g2m_test::home_tile();
+        const auto x = tile.key.min_easting() * 1000, y = tile.key.min_northing() * 1000;
+        const auto rect = [&](std::int64_t x0, std::int64_t y0, std::int64_t x1, std::int64_t y1) {
+            g2m::geom::Ring r{{x + x0, y + y0}, {x + x1, y + y0}, {x + x1, y + y1}, {x + x0, y + y1}}; return r; };
+        const auto make = [&](std::int64_t osm, std::uint32_t piece, g2m::FieldSource source, const char* crop, g2m::FieldPolygon polygon) {
+            g2m::FieldRecord f; f.source = source; f.osm_id = osm; f.piece = static_cast<std::uint16_t>(piece);
+            f.id = *g2m::pack_field_id(source, osm, piece); f.landuse = 0; f.crop = crop; f.polygon = std::move(polygon);
+            g2m::finalize_field_record(f, g2m::builtin_field_rules_de());
+            f.flags |= g2m::field_flag::Owned; return f; };
+        g2m::FieldPolygon a, b, c;
+        a.outer = rect(10000, 10000, 100000, 60000); g2m::normalise_field_ring(a.outer, true);
+        b.outer = rect(104000, 10000, 200000, 60000); g2m::normalise_field_ring(b.outer, true);
+        c.outer = rect(10000, 100000, 300000, 300000); g2m::normalise_field_ring(c.outer, true);
+        c.holes.push_back(rect(100000, 150000, 200000, 250000)); g2m::normalise_field_ring(c.holes[0], false);
+        tile.fields = {make(1000, 0, g2m::FieldSource::OsmWay, "wheat", a), make(1000, 1, g2m::FieldSource::OsmWay, "wheat", b),
+                       make(2000, 0, g2m::FieldSource::OsmRelation, "", c)};
+        std::sort(tile.fields.begin(), tile.fields.end(), [](const auto& l, const auto& r) { return l.id < r.id; });
+        tile.declines = {{g2m::FieldSource::OsmWay, 3000, g2m::FieldDeclineReason::TooLarge}, {g2m::FieldSource::OsmRelation, 4000, g2m::FieldDeclineReason::RelationIncomplete}};
+        tile.counts.blocks = 2;
+        auto first = body(must(g2m::encode_fields_geom(tile), "encode_fields_geom"));
+        g2m::FieldTile empty; empty.key = tile.key;
+        return {std::move(first), body(must(g2m::encode_fields_geom(empty), "encode_fields_geom empty"))};
     }
     case Target::Roadgraph: {
         g2m::RoadGraphTile tile;

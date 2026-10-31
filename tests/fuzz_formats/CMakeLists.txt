@@ -58,7 +58,7 @@ set_tests_properties(g2m_fuzz_seeds PROPERTIES FIXTURES_SETUP g2m_fuzz_corpus LA
 
 foreach(_t container elev landcover osm pack manifest path region roadgraph roadgeom roadCrossSectionEval
            railGeom
-           packDirectory httpRequest httpResponse terrainClass)
+           packDirectory httpRequest httpResponse terrainClass fieldsGeom srcSoil soilGrid)
   # Enumerator name: container -> Container.
   string(SUBSTRING ${_t} 0 1 _first)
   string(TOUPPER ${_first} _first)

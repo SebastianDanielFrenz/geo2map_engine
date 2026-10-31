@@ -211,13 +211,14 @@ TEST_CASE("layers: names, raw descriptors and the registry", "[layer]") {
     const LayerRegistry& b = LayerRegistry::builtin();
     // PLAN.md G2.1 added g2m.elev.base/g2m.terrain.height/g2m.terrain.class
     // to the built-in registry, alongside the 3 raw source layers.
-    REQUIRE(b.all().size() == 6);
+    REQUIRE(b.all().size() == 7); // soil branch: + g2m.src.soil
     CHECK(b.all()[0].id.name == "g2m.elev.base");
     CHECK(b.all()[1].id.name == "g2m.src.elev.dgm1");
     CHECK(b.all()[2].id.name == "g2m.src.landcover");
     CHECK(b.all()[3].id.name == "g2m.src.osm");
-    CHECK(b.all()[4].id.name == "g2m.terrain.class");
-    CHECK(b.all()[5].id.name == "g2m.terrain.height");
+    CHECK(b.all()[4].id.name == "g2m.src.soil");
+    CHECK(b.all()[5].id.name == "g2m.terrain.class");
+    CHECK(b.all()[6].id.name == "g2m.terrain.height");
     CHECK(b.find("g2m.src.osm") != nullptr);
     CHECK(b.find("g2m.src.elev.glo30") == nullptr);
     CHECK(b.find("g2m.elev.base") != nullptr);
