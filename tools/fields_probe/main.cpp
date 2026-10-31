@@ -4,6 +4,11 @@
 //   g2m_fields_probe stats DERIVED_DIR RELEASE_HEX [fields.csv]
 //       counts, area distribution, implausible share, declines, subdivision numbers; the CSV (one line per field,
 //       owned copy only) is optional.
+//   g2m_fields_probe outlines DERIVED_DIR RELEASE_HEX out.bin
+//       every field's outline (owned copy only): id, anchor, outer ring, holes, as integer UTM millimetres of the bake's zone. The import
+//       file of a consumer that must not open the tile store (format: docs/formats/fields_geom.md "Outline export").
+//   g2m_fields_probe outlines-check DERIVED_DIR RELEASE_HEX out.bin
+//       reads out.bin back and compares every field with the layer (ids, anchors, rings, checksum); exit 1 on any difference.
 //   g2m_fields_probe png DERIVED_DIR RELEASE_HEX SOURCE_DIR SCOPE out.png [--tile X,Y] [--tiles N] [--mpp M]
 //       fields filled by land use, piece borders in dark, the OSM roads, tracks, paths, waterways and hedges the
 //       subdivision cut along drawn on top. Default: the N x N (3) window of level-2 tiles with the most fields,
@@ -147,6 +152,127 @@ int stats(int argc, char** argv) {
     for (std::size_t i = 0; i < top.size() && i < 12; ++i) std::printf(" %s %zu;", top[i].second.c_str(), top[i].first);
     std::printf("\n");
     return 0;
+}
+
+// ---- outline export -------------------------------------------------------------------------------------------------------
+// File layout (little endian): "G2MFOUT1" (8 bytes), zone u8, hemisphere u8 (0 north, 1 south), field count u32, then per field in
+// ascending id: id u64, anchor x svarint, y svarint, hole count varint, outer ring, holes; then FNV-1a 64 of everything before it (u64).
+// ring: vertex count varint, first vertex svarint x, y, then svarint deltas to the previous vertex. varint = LEB128, svarint = zigzag.
+// Rings are the layer's own (outer counter-clockwise, holes clockwise, each from its smallest vertex).
+void put_varint(std::vector<std::uint8_t>& out, std::uint64_t v) {
+    while (v >= 0x80) { out.push_back(static_cast<std::uint8_t>(v | 0x80)); v >>= 7; }
+    out.push_back(static_cast<std::uint8_t>(v));
+}
+void put_svarint(std::vector<std::uint8_t>& out, std::int64_t v) { put_varint(out, (static_cast<std::uint64_t>(v) << 1) ^ static_cast<std::uint64_t>(v >> 63)); }
+void put_u32(std::vector<std::uint8_t>& out, std::uint32_t v) { for (int i = 0; i < 4; ++i) out.push_back(static_cast<std::uint8_t>(v >> (8 * i))); }
+void put_u64(std::vector<std::uint8_t>& out, std::uint64_t v) { for (int i = 0; i < 8; ++i) out.push_back(static_cast<std::uint8_t>(v >> (8 * i))); }
+std::uint64_t fnv1a64(const std::uint8_t* d, std::size_t n) {
+    std::uint64_t h = 1469598103934665603ull;
+    for (std::size_t i = 0; i < n; ++i) { h ^= d[i]; h *= 1099511628211ull; }
+    return h;
+}
+void put_ring(std::vector<std::uint8_t>& out, const geom::Ring& ring) {
+    put_varint(out, ring.size());
+    std::int64_t px = 0, py = 0;
+    for (const auto& p : ring) { put_svarint(out, p.x - px); put_svarint(out, p.y - py); px = p.x; py = p.y; }
+}
+
+std::vector<const FieldRecord*> owned_sorted(const std::vector<FieldTile>& tiles) {
+    std::vector<const FieldRecord*> v;
+    for (const auto& tile : tiles) for (const auto& f : tile.fields) if ((f.flags & field_flag::Owned) != 0) v.push_back(&f);
+    std::sort(v.begin(), v.end(), [](const FieldRecord* a, const FieldRecord* b) { return a->id < b->id; });
+    return v;
+}
+
+int outlines(int argc, char** argv) {
+    if (argc < 5) { std::cerr << "usage: outlines DERIVED_DIR RELEASE_HEX out.bin\n"; return 1; }
+    auto store = open_store(argv[2]);
+    const auto tiles = load_tiles(*store, argv[3]);
+    if (tiles.empty()) { std::cerr << "no fields tiles\n"; return 1; }
+    const auto zone = tiles.front().key.zone;
+    const auto fields = owned_sorted(tiles);
+    std::vector<std::uint8_t> out{'G', '2', 'M', 'F', 'O', 'U', 'T', '1'};
+    out.push_back(static_cast<std::uint8_t>(zone.zone));
+    out.push_back(zone.hemisphere == geo::Hemisphere::South ? 1 : 0);
+    put_u32(out, static_cast<std::uint32_t>(fields.size()));
+    std::uint64_t vertices = 0;
+    for (const FieldRecord* f : fields) {
+        put_u64(out, f->id);
+        put_svarint(out, f->anchor.x); put_svarint(out, f->anchor.y);
+        put_varint(out, f->polygon.holes.size());
+        put_ring(out, f->polygon.outer); vertices += f->polygon.outer.size();
+        for (const auto& h : f->polygon.holes) { put_ring(out, h); vertices += h.size(); }
+    }
+    put_u64(out, fnv1a64(out.data(), out.size()));
+    std::ofstream file(argv[4], std::ios::binary);
+    file.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+    if (!file) { std::cerr << "cannot write " << argv[4] << "\n"; return 1; }
+    std::printf("wrote %s: %zu fields, %llu vertices, %zu bytes, zone %d%s\n", argv[4], fields.size(), static_cast<unsigned long long>(vertices), out.size(), static_cast<int>(zone.zone), zone.hemisphere == geo::Hemisphere::South ? "S" : "N");
+    return 0;
+}
+
+struct Reader {
+    const std::vector<std::uint8_t>& d;
+    std::size_t pos = 0;
+    bool ok = true;
+    std::uint64_t varint() {
+        std::uint64_t v = 0; int shift = 0;
+        while (true) {
+            if (pos >= d.size() || shift > 63) { ok = false; return 0; }
+            const std::uint8_t b = d[pos++];
+            v |= static_cast<std::uint64_t>(b & 0x7f) << shift;
+            if ((b & 0x80) == 0) return v;
+            shift += 7;
+        }
+    }
+    std::int64_t svarint() { const std::uint64_t u = varint(); return static_cast<std::int64_t>((u >> 1) ^ (~(u & 1) + 1)); }
+    std::uint64_t u64() { std::uint64_t v = 0; if (pos + 8 > d.size()) { ok = false; return 0; } for (int i = 0; i < 8; ++i) v |= static_cast<std::uint64_t>(d[pos++]) << (8 * i); return v; }
+    geom::Ring ring() {
+        geom::Ring r; const std::uint64_t n = varint();
+        if (n > d.size()) { ok = false; return r; }
+        std::int64_t x = 0, y = 0;
+        for (std::uint64_t i = 0; i < n && ok; ++i) { x += svarint(); y += svarint(); r.push_back({x, y}); }
+        return r;
+    }
+};
+
+int outlines_check(int argc, char** argv) {
+    if (argc < 5) { std::cerr << "usage: outlines-check DERIVED_DIR RELEASE_HEX out.bin\n"; return 1; }
+    auto store = open_store(argv[2]);
+    const auto tiles = load_tiles(*store, argv[3]);
+    const auto fields = owned_sorted(tiles);
+    std::ifstream file(argv[4], std::ios::binary);
+    std::vector<std::uint8_t> d((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (d.size() < 22 || std::string(d.begin(), d.begin() + 8) != "G2MFOUT1") { std::cerr << "not an outline file\n"; return 1; }
+    Reader r{d, 10};
+    std::uint32_t count = 0;
+    for (int i = 0; i < 4; ++i) count |= static_cast<std::uint32_t>(d[r.pos++]) << (8 * i);
+    std::size_t bad = 0;
+    if (count != fields.size()) { std::printf("count %u against the layer's %zu\n", count, fields.size()); ++bad; }
+    for (std::uint32_t i = 0; i < count && r.ok; ++i) {
+        const std::uint64_t id = r.u64();
+        const std::int64_t ax = r.svarint(), ay = r.svarint();
+        const std::uint64_t holes = r.varint();
+        const geom::Ring outer = r.ring();
+        std::vector<geom::Ring> hs;
+        for (std::uint64_t h = 0; h < holes && r.ok; ++h) hs.push_back(r.ring());
+        if (i >= fields.size()) { ++bad; continue; }
+        const FieldRecord& f = *fields[i];
+        if (id != f.id || ax != f.anchor.x || ay != f.anchor.y || outer != f.polygon.outer || hs != f.polygon.holes) {
+            if (bad < 5) std::printf("field %llu differs\n", static_cast<unsigned long long>(f.id));
+            ++bad;
+        }
+    }
+    if (!r.ok || r.pos + 8 != d.size()) {
+        std::printf("trailing or truncated data (pos %zu of %zu)\n", r.pos, d.size());
+        ++bad;
+    } else {
+        std::uint64_t stored = 0;
+        for (int i = 0; i < 8; ++i) stored |= static_cast<std::uint64_t>(d[r.pos + static_cast<std::size_t>(i)]) << (8 * i);
+        if (stored != fnv1a64(d.data(), d.size() - 8)) { std::printf("checksum differs\n"); ++bad; }
+    }
+    std::printf("outlines-check: %u fields, %zu differences\n", count, bad);
+    return bad == 0 ? 0 : 1;
 }
 
 // ---- picture --------------------------------------------------------------------------------------------------------------
@@ -330,6 +456,8 @@ int png(int argc, char** argv) {
 int main(int argc, char** argv) {
     if (argc >= 2 && std::string_view(argv[1]) == "stats") return stats(argc, argv);
     if (argc >= 2 && std::string_view(argv[1]) == "png") return png(argc, argv);
-    std::cerr << "usage: g2m_fields_probe stats|png ...\n";
+    if (argc >= 2 && std::string_view(argv[1]) == "outlines") return outlines(argc, argv);
+    if (argc >= 2 && std::string_view(argv[1]) == "outlines-check") return outlines_check(argc, argv);
+    std::cerr << "usage: g2m_fields_probe stats|png|outlines|outlines-check ...\n";
     return 1;
 }

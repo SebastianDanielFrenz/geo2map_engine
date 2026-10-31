@@ -186,6 +186,7 @@ Details: [client_side.md](client_side.md).
 | Tests | `tests/layer/test_fields_geom.cpp`, `tests/world/test_terrain_service.cpp` (fields case); golden `g3f_golden.txt`; fuzz target `fieldsGeom`. |
 | Consumers | None yet. `racing_game` or the fork enables the layer (`LayerOptIn::fields`, bake layer name, or `g2m_server --fields`), reads `fields()`/`field_at`, stores the polygon copy and `FieldRef` in its saves. |
 | Parcel data | Seam designed (source kind 2, reserved), not used. Hessen reference parcels are CC BY 4.0 per a third-party listing: [fields.md](fields.md). |
+| Outline export | `g2m_fields_probe outlines DERIVED_DIR RELEASE_HEX out.bin` writes every field's outer ring, holes and anchor (owned copy, ascending id, checksummed, 5.04 MB for 26,432 fields) into one import file for a consumer that must not open the tile store; `outlines-check` compares a file with the layer. Not a layer, not part of the bake: [fields_geom.md](../formats/fields_geom.md) "Outline export". The farming game reads it next to `fields.csv`. |
 
 Details: [fields.md](fields.md).
 

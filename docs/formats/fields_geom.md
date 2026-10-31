@@ -68,3 +68,20 @@ satisfies these; the encoder refuses anything else.
 `field_at(tile, point)`: index of the field containing the point (boundary counts as inside, lowest id on overlap).
 `TerrainService::field_at(x, y)` / `field_at_grid(e, n)` answer it from the resident tile. `match_field(saved,
 candidates, rules)` finds a saved field again after a re-bake (see the pipeline page).
+
+## Outline export
+
+`g2m_fields_probe outlines DERIVED_DIR RELEASE_HEX out.bin` writes the outline of every field (the owned copy of each, so one per
+field) into one small file. A consumer that needs the shapes of all fields of a bake at once (the farming game, 26,432 fields in
+Rhein-Main-Hessen) reads this file instead of decoding the tile store. `outlines-check` reads a file back and compares every field with
+the layer (ids, anchors, rings, checksum); exit 1 on any difference. It is not a layer and not part of the bake: it is derived from the
+layer and carries nothing the layer does not.
+
+Layout, little endian: `"G2MFOUT1"` (8 bytes), zone `u8`, hemisphere `u8` (0 north, 1 south), field count `u32`; per field in ascending
+id: id `u64`, anchor x and y (`svarint`), hole count (`varint`), the outer ring, then each hole; finally FNV-1a 64 over everything before it
+(`u64`). A ring is its vertex count (`varint`), the first vertex (`svarint` x, y) and then `svarint` deltas to the previous vertex, in
+integer UTM millimetres of the file's zone, the layer's own orientation (outer counter-clockwise, holes clockwise). `varint` is LEB128,
+`svarint` is zigzag of it. Ids ascend and are unique.
+
+Size and time for Rhein-Main-Hessen (release 2026-10-31): 26,432 fields, 1,020,436 vertices, 5.04 MB, written in about 0.4 s; the game
+reads and joins it in about 70 ms. The id is the `id` column of `fields.csv`.
