@@ -607,7 +607,7 @@ FixtureTotals run_fixture(const std::string& pbf, bool tile_graph_context) {
 }
 }
 
-TEST_CASE("T9-T11 fixtures: counts, acceptance rules and tile invariance with its negative control", "[layer][roads][furniture][fixtures]") {
+TEST_CASE("T9-T11 fixtures: counts, acceptance rules and tile invariance with its negative control", "[layer][roads][furniture][fixtures][long]") {
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         const auto t = run_fixture(pbf, false);
         std::size_t declined = 0;

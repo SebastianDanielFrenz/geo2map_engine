@@ -119,7 +119,7 @@ TEST_CASE("underpass census (G-6): a ground road over a cutting dips; flat and s
     CHECK(bridged.crossings.empty());
 }
 
-TEST_CASE("underpass census (G-6): both fixtures, flat and tilted DEM (diag counts)", "[layer][census][underpass]") {
+TEST_CASE("underpass census (G-6): both fixtures, flat and tilted DEM (diag counts)", "[layer][census][underpass][long]") {
     std::size_t measured_all = 0;
     for (const char* file : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         const RoadGraph world = g2m_test::fixture_world(file);
@@ -739,7 +739,7 @@ Dem cutting_at(double cx, double cy) {
 }
 } // namespace
 
-TEST_CASE("underpass deck (D61): the owner's crossings in the fixtures", "[layer][underpass][deck][d61]") {
+TEST_CASE("underpass deck (D61): the owner's crossings in the fixtures", "[layer][underpass][deck][d61][long]") {
     // Kalbach: two parking aisles of a multi-storey car park under a parking aisle (no deck, not a crossing). A 66: the
     // motorway over the continuous service tunnel 52405506 (covered: masked, no deck). Main-Taunus-Zentrum: the level-1
     // aisle of the two-level car park over the tunnel-tagged ground-level aisle (no deck, not a crossing). Each crossing

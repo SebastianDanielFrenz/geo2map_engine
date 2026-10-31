@@ -4,7 +4,10 @@
   cross-leg golden-hash compare.
 
 .DESCRIPTION
-  tools\ci.ps1                     every leg (Windows + WSL), grep, golden compare
+  tools\ci.ps1                     every leg (Windows + WSL), grep, golden compare;
+                                   ctest skips the tests tagged [long]
+  tools\ci.ps1 -Full               the same, every test incl. [long] (a test taking
+                                   >= 5 s in release gets the tag); before a phase counts done
   tools\ci.ps1 -SkipWsl            Windows legs only
   tools\ci.ps1 -SkipWindows        WSL legs only
   tools\ci.ps1 -Only release,linux-release   named legs only (preset names)
@@ -15,7 +18,7 @@
   ~/build/geo2map_engine/<preset> for the main checkout, never under /mnt/s):
   linux-release, linux-asan-ubsan, linux-tsan.
 
-  Per leg: cmake configure, build, ctest (every test), then
+  Per leg: cmake configure, build, ctest (without the [long]-tagged tests; -Full runs every test), then
   g2m_golden_dump for each golden set (g0, g1). The golden compare fails
   unless every leg's dump of a set equals testdata/golden/<set>_golden.txt
   byte for byte (comments stripped). On the WSL legs listed in $FuzzLegs,
@@ -41,6 +44,7 @@
 param(
     [switch]$SkipWsl,
     [switch]$SkipWindows,
+    [switch]$Full,
     [string[]]$Only = @()
 )
 
@@ -54,6 +58,8 @@ $wslRoot = '/mnt/' + $repoRoot.Substring(0, 1).ToLower() + ($repoRoot.Substring(
 # Per-checkout WSL build dir, shared with no other worktree (CMakePresets.json
 # binaryDir uses ${sourceDirName}): ~/build/<checkout dir name>/<preset>.
 $wslBuildRoot = '$HOME/build/' + (Split-Path -Leaf $repoRoot)
+# Regular runs skip the [long] tests (the Catch2 tags are CTest labels, ADD_TAGS_AS_LABELS); -Full runs everything.
+$ctestFilter = if ($Full) { @() } else { @('-LE', 'long') }
 $logDir = Join-Path $repoRoot 'out\ci_logs'
 $goldenDir = Join-Path $repoRoot 'out\ci_golden'
 New-Item -ItemType Directory -Force $logDir, $goldenDir | Out-Null
@@ -140,7 +146,7 @@ function Invoke-WindowsLeg([string]$Preset) {
         if ($LASTEXITCODE -ne 0) { Show-LogTail $log 60; return }
 
         $ctestLog = Join-Path $logDir "$Preset.ctest.log"
-        $t = Measure-Command { & ctest --preset $Preset --output-on-failure --parallel 12 *> $ctestLog }
+        $t = Measure-Command { & ctest --preset $Preset --output-on-failure --parallel 12 @ctestFilter *> $ctestLog }
         $ok = ($LASTEXITCODE -eq 0)
         Add-Result $Preset 'ctest' $ok (Get-CtestSummary $ctestLog) $t.TotalSeconds
         if (-not $ok) { Show-LogTail $ctestLog 60 }
@@ -307,7 +313,7 @@ function Invoke-WslLeg([string]$Preset) {
 
     $ctestLog = Join-Path $logDir "$Preset.ctest.log"
     Set-Content -LiteralPath $ctestLog -Value "" -Encoding utf8
-    $t = Measure-Command { $script:rc = Invoke-Wsl "ctest --preset $Preset --output-on-failure --parallel 12" $ctestLog }
+    $t = Measure-Command { $script:rc = Invoke-Wsl "ctest --preset $Preset --output-on-failure --parallel 12 $($ctestFilter -join ' ')" $ctestLog }
     Add-Result $Preset 'ctest' ($script:rc -eq 0) (Get-CtestSummary $ctestLog) $t.TotalSeconds
     if ($script:rc -ne 0) { Show-LogTail $ctestLog 60 }
 

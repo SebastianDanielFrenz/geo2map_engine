@@ -94,7 +94,7 @@ TEST_CASE("G3j golden hashes match testdata/golden/g3j_golden.txt", "[golden][ro
 }
 
 // Street fidelity P2 slice 9: the carved terrain g2m.terrain.carved level 0 (golden_g3d.cpp).
-TEST_CASE("G3d golden hashes match testdata/golden/g3d_golden.txt", "[golden][carve]") {
+TEST_CASE("G3d golden hashes match testdata/golden/g3d_golden.txt", "[golden][carve][long]") {
     check_against("g3d_golden.txt", g2m_golden::compute_g3d());
 }
 
@@ -102,7 +102,7 @@ TEST_CASE("G3rail golden hashes match testdata/golden/g3rail_golden.txt", "[gold
     check_against("g3rail_golden.txt", g2m_golden::compute_g3rail());
 }
 
-TEST_CASE("G3c golden hashes match testdata/golden/g3c_golden.txt", "[golden][terrain_class]") {
+TEST_CASE("G3c golden hashes match testdata/golden/g3c_golden.txt", "[golden][terrain_class][long]") {
     check_against("g3c_golden.txt", g2m_golden::compute_g3c());
 }
 

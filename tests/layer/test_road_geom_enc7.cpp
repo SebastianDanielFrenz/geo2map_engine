@@ -277,7 +277,7 @@ Invariance invariance_of(const std::string& pbf, bool with_context) {
 }
 }
 
-TEST_CASE("T7: every junction is owned exactly once and equals what every tile builds; furniture follows its owner", "[layer][road_geom][enc7][T7][roads]") {
+TEST_CASE("T7: every junction is owned exactly once and equals what every tile builds; furniture follows its owner", "[layer][road_geom][enc7][T7][roads][long]") {
     std::size_t junction_furniture = 0;   // frankfurt_hoechst has no signalised or signed junction
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         INFO(pbf);

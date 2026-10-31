@@ -566,7 +566,7 @@ void print_census(const char* name, const Census& c) {
 }
 }
 
-TEST_CASE("Fixtures: every junction ring is valid and nested, the same node builds identically in every tile", "[layer][junction][roads]") {
+TEST_CASE("Fixtures: every junction ring is valid and nested, the same node builds identically in every tile", "[layer][junction][roads][long]") {
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         INFO(pbf);
         const auto c = census_of(pbf);
@@ -922,7 +922,7 @@ void print_cluster_census(const char* name, const ClusterCensus& c) {
 }
 }
 
-TEST_CASE("Fixtures with clustering: valid rings, every junction node covered in its own tile, every record identical in every tile that builds it", "[layer][junction][roads]") {
+TEST_CASE("Fixtures with clustering: valid rings, every junction node covered in its own tile, every record identical in every tile that builds it", "[layer][junction][roads][long]") {
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         INFO(pbf);
         const auto c = cluster_census_of(pbf);
@@ -939,7 +939,7 @@ TEST_CASE("Fixtures with clustering: valid rings, every junction node covered in
     }
 }
 
-TEST_CASE("D34: simple offset rings that do not nest take the all-layer hull, which nests", "[layer][junction][roads]") {
+TEST_CASE("D34: simple offset rings that do not nest take the all-layer hull, which nests", "[layer][junction][roads][long]") {
     // D21 handed slice 8 two junctions of frankfurt_hoechst (5 vertices, worst 352 mm outside) whose offset rings are
     // simple but not nested. The builder now sends them to the all-layer hull; with the rule off (the sabotage) the
     // census finds the violations again.
@@ -959,7 +959,7 @@ TEST_CASE("D34: simple offset rings that do not nest take the all-layer hull, wh
     CHECK(without.nested_bad > 0);
 }
 
-TEST_CASE("Negative control: a possible link to an incomplete node treated as absent breaks tile invariance", "[layer][junction][roads]") {
+TEST_CASE("Negative control: a possible link to an incomplete node treated as absent breaks tile invariance", "[layer][junction][roads][long]") {
     // The same census with the sabotage: a tile that sees a cluster member only partially builds a different record
     // than the tile that sees the whole cluster. This shows the identity check can fail.
     JunctionBuildOptions sabotage; sabotage.unknown_links_are_absent = true;
