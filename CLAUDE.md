@@ -489,7 +489,7 @@ geo2map_engine/
                                       Dijkstra (node and point), route validators and GraphBuilder; route_scenes.h = the
                                       synthetic cross and random restricted grids
     golden/                           golden.h/.cpp + golden_g1.cpp + golden_g1c.cpp (g2m_golden, milestone G1c I6),
-                                      dump_main.cpp (g2m_golden_dump [g0|g1|g1c|...|g3c|g3f]), test_golden.cpp (g2m_golden_tests)
+                                      dump_main.cpp (g2m_golden_dump [g0|g1|g1c|...|g3c|g3f|g3s]), test_golden.cpp (g2m_golden_tests)
     fuzz/                             libFuzzer targets for g2m_decode (fuzz_zip, fuzz_tiff, fuzz_pbf) over a
                                       fuzz-instrumented copy of G2M_DECODE_SOURCES; same G2M_BUILD_FUZZERS gate and
                                       CTest `fuzz` label as fuzz_formats (WSL clang legs)
@@ -1156,6 +1156,32 @@ field_at_grid` (job kind 11). Tests `tests/layer/test_fields_geom.cpp` ([fields]
 [fields_bake], [fields_fixture_check]), fields case in `tests/world/test_terrain_service.cpp`, golden `g3f`
 (`tests/golden/golden_g3f.cpp`, `testdata/golden/g3f_golden.txt`), fuzz target `fieldsGeom`. Tool `tools/fields_probe`
 (`g2m_fields_probe stats|png`, built with `g2m_tiler`). Not done: no consumer, no parcel source (kind 2 reserved).
+
+`g2m.src.soil` v1 L2, body encoding 11, and `g2m.soil.grid` v1 L2, body encoding 12 (soil facts for the farming game;
+`docs/formats/src_soil.md`, `docs/formats/soil_grid.md`, `docs/pipeline/soil.md`). Source: ISRIC SoilGrids 2.0 mean predictions (7
+properties x 6 depths) fetched by `tools/soil_fetch/fetch_soilgrids.py` (python, stdlib; ISRIC WCS, 1/480 degree lattice,
+manifest with SHA-256) and imported by `g2m_tiler import-soil` (`include/g2m/import/soil.h`, `src/import/soil.cpp`; int16/uint16
+GeoTIFF sets, window = covering lattice cells + 1 margin, `ordered_for`, independent of `--jobs`). Code `include/g2m/layer/
+{src_soil,soil_tile,soil_rules}.h`, `src/layer/{src_soil,soil_tile,soil_rules,derive_soil}.cpp`; rules `data/soil_rules/default.json`
+(`g2m.soil_rules/1`, embedded via `g2m_embed_json`, SHA-256 in the config hash): horizons 0-30 / 30-100 cm, thickness weights,
+USDA 12-class texture as ordered integer clauses (exact partition checked over all 501 501 permille triples), no-data rules,
+land cover 50 / 80 -> BuiltUp / Water. `SoilGridDeriver` (32 x 32 cells of 32 m, cell centre -> `Utm::reverse` -> one floor ->
+integers; tile-invariant, window-independent), `soil_at` (`[lo, hi)` cells), `summarise_field_soil` (absolute 16 m lattice,
+odd multiples of 8 m, boundary inclusive; independent of tiling). Opt-in: `BuiltinTerrainDerivers::ordered(..., include_soil)` /
+`builtin_local_release_params(..., include_soil)`, bake layer `g2m.soil.grid` (`--levels 2-2`), `g2m_server --soil`,
+`LayerOptIn::soil`, `TerrainService::soil/peek_soil/soil_at/soil_at_grid/field_soil`. Tests `tests/layer/test_soil.cpp` (14 cases,
+[soil], [soil_derive], [soil_field], [soil_import], [soil_bake]) with support `tests/support/soil_world.h`, soil case in
+`tests/world/test_terrain_service.cpp` ([soil]), golden `g3s` (`tests/golden/golden_g3s.cpp`, `testdata/golden/g3s_golden.txt`,
+one of `tools/ci.ps1`'s `GoldenSets`), fuzz targets `srcSoil`, `soilGrid`. Tool `tools/soil_probe` (`g2m_soil_probe stats|png`,
+built with `g2m_tiler`; class shares, per-field aggregates, region table, picture). Recorded sabotages (each fails the named
+tests, run 2026-10-31): S1 sandy-loam clause overlap, S2 unweighted depth mean, S3 round half down, S4 water / built-up swapped,
+S5 cell corner instead of centre, S6 surface-zero rule off,
+S7 summary tie to the highest class, S8 field lattice at multiples of the spacing, S9 closed upper boundary in `soil_at`,
+S10 import rows flipped, S11 window without margin, S12 sum-to-1000 check removed, S13 lattice cell clamped into the window,
+S14 values above 32767 kept, S15 remainder to sand instead of clay, S16 decode without validation (codec and fuzz smoke),
+S17 easting / northing swapped in `soil_at_grid`, S18 half-cell shift of every centre (golden), S19 derive depends on the call
+order, S20 import depends on the job count. Not done: no consumer, no root depth (SoilGrids has none), no regional source
+(BFD50 / BUEK licence unconfirmed; a second raw scheme is the seam).
 
 Junction gradient (design D42, after slice 9): the junction surface blends v_i = b_i + phi_i (p_i - b_i) + psi_i (z_i - p_i)
 instead of z_i (b base, p paved band only, z full approach surface; `junction_approach_heights` returns all three), with

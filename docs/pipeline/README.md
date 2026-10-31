@@ -3,7 +3,7 @@
 This is the one entry point. Start here if you have never seen the code.
 It shows the whole path with diagrams, then links to the detail pages.
 
-- Status date: 2026-10-31. Verified against the code of `geo2map_engine` master at 2026-10-05 plus the field polygon layer (branch `claude/field-polygons`, section 2.7).
+- Status date: 2026-10-31. Verified against the code of `geo2map_engine` master at 2026-10-05 plus the field polygon layer (branch `claude/field-polygons`, section 2.7) and the soil layer (branch `claude/field-soil`, section 2.8).
 - Scope: `geo2map_engine` (this repo) and how its two consumers use it: `racing_game` (render + game) and `physics_sim` (terrain tiles for the physics heightfield). Both consumers are separate repos and are only described here.
 - Rule: any change that adds or changes a pipeline stage, layer, encoding, data source or consumer updates this folder in the same commit (also in `CLAUDE.md`).
 - Reading the diagrams: **green** = implemented and in use. **amber dashed** = downloaded or designed, not used yet. **grey dashed** = planned. Mermaid renders on GitHub and in most editors.
@@ -30,10 +30,10 @@ The idea in one paragraph. Raw files (a height model, an OSM extract, a land cov
 ```mermaid
 %%{init: {"flowchart": {"wrappingWidth": 440, "useMaxWidth": false}}}%%
 flowchart TB
-  SRC["<b>1. Raw sources</b> - files on S:<br/>DGM1 1 m heights - HVBG<br/>OSM Hessen extract - Geofabrik<br/>ESA WorldCover 10 m<br/><i>downloaded, not used yet:</i> GLO-30, LoD2, DOM1, DOP20, Basis-DLM, tree data"]
-  IMP["<b>2. Import</b> - g2m_tiler import<br/>resolve region to level-2 tiles<br/>import-dem, import-osm, import-landcover"]
-  RAW["<b>3. Raw layers</b> - level 2, 1024 m, source store<br/>g2m.src.elev.dgm1 / g2m.src.osm / g2m.src.landcover"]
-  BAKE["<b>4. Derived layers</b> - pure derivers, g2m_tiler bake<br/>g2m.elev.base L0 / g2m.terrain.height L0-L6<br/>g2m.roads.graph L2 / g2m.roads.geom L2<br/>g2m.terrain.carved L0-L6, g2m.terrain.class L0-L6 (opt-in; consumer helpers exist, the game has not switched)<br/>g2m.fields.geom L2 (opt-in; farm field polygons, no consumer yet)<br/><i>planned:</i> buildings, trees, markings"]
+  SRC["<b>1. Raw sources</b> - files on S:<br/>DGM1 1 m heights - HVBG<br/>OSM Hessen extract - Geofabrik<br/>ESA WorldCover 10 m<br/>SoilGrids 2.0 250 m - ISRIC (soil)<br/><i>downloaded, not used yet:</i> GLO-30, LoD2, DOM1, DOP20, Basis-DLM, tree data"]
+  IMP["<b>2. Import</b> - g2m_tiler import<br/>resolve region to level-2 tiles<br/>import-dem, import-osm, import-landcover, import-soil"]
+  RAW["<b>3. Raw layers</b> - level 2, 1024 m, source store<br/>g2m.src.elev.dgm1 / g2m.src.osm / g2m.src.landcover / g2m.src.soil"]
+  BAKE["<b>4. Derived layers</b> - pure derivers, g2m_tiler bake<br/>g2m.elev.base L0 / g2m.terrain.height L0-L6<br/>g2m.roads.graph L2 / g2m.roads.geom L2<br/>g2m.terrain.carved L0-L6, g2m.terrain.class L0-L6 (opt-in; consumer helpers exist, the game has not switched)<br/>g2m.fields.geom L2 (opt-in; farm field polygons, no consumer yet)<br/>g2m.soil.grid L2 (opt-in; soil facts per 32 m cell, no consumer yet)<br/><i>planned:</i> buildings, trees, markings"]
   SRV["<b>5. Server and cache</b> - in-process (the game), or HTTP sidecar g2m_server<br/>g2m::Server: cache, derive on miss, upstream<br/>tiles.sqlite3 + blob files, release id<br/><i>planned:</i> hosted server, CDN (G7)"]
   GAME["<b>6a. racing_game</b> WorldTerrain<br/>render chunks, road raster and grip,<br/>road carving at L0, NPC traffic"]
   PHYS["<b>6b. physics_sim</b><br/>g2m_ps_bridge G2mTerrainSource<br/>TileManager Jolt heightfield pool"]
@@ -48,6 +48,7 @@ What the diagram hides, in short:
 
 - **Two height layers.** `g2m.terrain.height` is the plain DGM1 pyramid and stays the default. `g2m.terrain.carved` (street fidelity P2 slice 9, [design](../street_fidelity/p2_junction_design.md) section 6) is the same pyramid with the roads carved in on the server: smoothed DEM, junction and approach cores, blends, deck clearance. No consumer reads it yet: `racing_game` still carves its own copy of the level-0 tile (stage "client derivations" below) until it switches; then its carve step is removed, not kept as a fallback (owner decision 2026-10-05). `g2m.terrain.class` (slice 10, section 2.4) classifies the same points under the same ownership for grip and colour. A `roads.geom` tile that fails to resolve counts as absent for both (G-1): the carved and class tiles are still served, without that tile's roads, and their headers name it with a rejected-input marker.
 - **`g2m.fields.geom` (farm field polygons, section 2.7) is opt-in and independent of the roads.** It reads `g2m.src.osm` only.
+- **`g2m.soil.grid` (soil facts, section 2.8) is opt-in and independent of every other derived layer.** It reads `g2m.src.soil` and, when present, `g2m.src.landcover` (to mask built-up and water cells). The soil source is not part of the one-call `import`: `import-soil` reads separate GeoTIFF sets.
 - **`roads.graph`, `roads.geom` and `terrain.carved` are opt-in.** They are only added to a release when asked for, so the release id of terrain-only releases did not change when they were added. Asking for `terrain.carved` adds both road layers; asking for `terrain.class` adds `terrain.carved` too (a carved-only release keeps its identity, D49).
 - **Some things never travel over the wire.** Render meshes, LOD selection, the road colour raster and physics surface ids are computed in the client from tiles.
 
@@ -172,6 +173,22 @@ Details: [client_side.md](client_side.md).
 
 Details: [fields.md](fields.md).
 
+### 2.8 Soil: `g2m.src.soil` and `g2m.soil.grid`
+
+| | |
+|---|---|
+| Inputs | `g2m.src.soil` (raw, level 2: the window of the global 1/480 degree lattice covering the tile plus one cell, 42 planes = 7 properties x 6 depths) and, optionally, `g2m.src.landcover` of the same tile. Coverage follows `g2m.src.soil`. |
+| Code | `include/g2m/layer/{src_soil,soil_tile,soil_rules}.h`, `src/layer/{src_soil,soil_tile,soil_rules,derive_soil}.cpp`, importer `include/g2m/import/soil.h` + `src/import/soil.cpp`; rules `data/soil_rules/default.json` (embedded, SHA-256 in the config hash); fetch `tools/soil_fetch/fetch_soilgrids.py`; wiring `builtin_release.h` (`include_soil`), `bake.cpp`, `apps/g2m_server --soil`, `apps/g2m_tiler import-soil`, `TerrainService` (`LayerOptIn::soil`, `soil()`, `peek_soil`, `soil_at`, `soil_at_grid`, `field_soil`). |
+| Output | `g2m.src.soil` v1, encoding 11 ([src_soil.md](../formats/src_soil.md)); `g2m.soil.grid` v1, encoding 12 ([soil_grid.md](../formats/soil_grid.md)), level 2: 32 x 32 cells of 32 m, per cell a state (Ok, NoSource, BuiltUp, Water) and for topsoil (0-30 cm) and subsoil (30-100 cm) sand / silt / clay (permille, sum 1000), USDA texture class (12), organic carbon, pH, coarse fragments, bulk density. |
+| Method | Cell centre -> deterministic UTM reverse -> source lattice cell (one floor, then integers) -> thickness-weighted integer means per horizon -> renormalised texture -> ordered integer clauses give the class. Land cover class 50 / 80 at the centre -> BuiltUp / Water. A cell is a function of its position alone. |
+| Source | ISRIC SoilGrids 2.0 (250 m, CC BY 4.0), fetched through the ISRIC WCS on the 1/480 degree lattice. Chosen by measurement against the Hessian soil survey BFD50: it separates loess from valley-floor soils, not aeolian sands; a regional source is a second raw scheme (seam designed, not used). Numbers, alternatives and attribution: [soil.md](soil.md). |
+| Per field | `summarise_field_soil` / `TerrainService::field_soil`: area-mean values, dominant and mean texture class, class mask and sand/clay spread, over a fixed absolute 16 m lattice inside the polygon (tile-invariant). |
+| Config hash | `g2m.soil.grid/1 enc=12 impl=1 rules=<SHA-256 of default.json> ...` (cell rule, landcover rule, view rule). |
+| Tests | `tests/layer/test_soil.cpp`, `tests/world/test_terrain_service.cpp` (soil case), golden `g3s_golden.txt`, fuzz targets `srcSoil` and `soilGrid`. Sabotages S1-S20: `CLAUDE.md`. |
+| Consumers | None yet. The farming game enables `LayerOptIn::soil` and reads `soil_at` / `field_soil`; it derives field capacity and wilting point from the texture itself. Root depth is not provided (SoilGrids has none): [soil.md](soil.md). |
+
+Details: [soil.md](soil.md).
+
 ---
 
 ## 3. Layer dependencies
@@ -190,6 +207,8 @@ flowchart TD
   RM["g2m.roads.geom - L2"]
   TC["g2m.terrain.class - L0 to L6 - P2 slice 10"]
   FLD["g2m.fields.geom - L2 - farm fields"]
+  SSRC["g2m.src.soil - L2 1024 m"]
+  SOIL["g2m.soil.grid - L2 - soil facts"]
   CARVE["g2m.terrain.carved L0 - smoothed and carved"]
   CARVE1["g2m.terrain.carved L1 to L6"]
   BLD["buildings from LoD2 - planned"]
@@ -199,6 +218,8 @@ flowchart TD
   EB -->|"same key, byte-identical"| H0
   H0 -->|"4 children of the level below"| H1
   OSM -->|"own tile + the tiles covering each block, 4 discovery stages"| FLD
+  SSRC -->|"same key"| SOIL
+  LC -->|"same key, optional: built-up and water cells"| SOIL
   OSM -->|"own tile + 8 neighbours, 128 m halo"| RG
   RG -->|"same key"| RM
   EB -->|"every L0 tile near a road, margin 65 m"| RM
@@ -213,7 +234,7 @@ flowchart TD
 
   classDef done fill:#d8f0d8,stroke:#2e7d32,color:#000;
   classDef plan fill:#eeeeee,stroke:#888888,stroke-dasharray:4 3,color:#000;
-  class OSM,DEM,LC,EB,H0,H1,RG,RM,CARVE,CARVE1,FLD done;
+  class OSM,DEM,LC,EB,H0,H1,RG,RM,CARVE,CARVE1,FLD,SSRC,SOIL done;
   class TC,BLD,TRE plan;
 ```
 
@@ -224,6 +245,7 @@ Tile-level rules worth remembering:
 - `roads.geom` is the only built-in layer whose input list depends on the data (`additional_inputs_for`), in two discovery stages (D35): stage 1 names the DEM tiles under the complete ways and the `roads.graph` tiles holding every way incident to their nodes; stage 2, once those are resolved, names the DEM along every bridge incident to those nodes (65 m margin) and the `roads.graph` tiles of its nodes, so the far end of a bridge span is always an input, and (D48) the elev.base and `roads.graph` tiles of a 205 m square around every node of those bridges, which bound the 200 m abutment walk. Stage 1 also names (D57) the `roads.graph` tiles every segment of a tile way passes through, so every road crossing a tile way without a shared node (an underpass) is complete in the crossing graph. Other derivers use one stage.
 - A `terrain.carved` L0 tile (and a `terrain.class` L0 tile, which also reads the land cover level-2 tiles holding its 257 x 257 nodes) reads its own and its 8 neighbouring `elev.base` tiles and every `roads.geom` tile within 192 m (one typically, at most four). Each junction is stored only in the `roads.geom` tile holding its smallest node id; the 192 m radius is what makes that sufficient ([design section 5](../street_fidelity/p2_junction_design.md#5-tile-invariance)).
 - `g2m.fields.geom` is the second layer (after `roads.geom`) whose input list depends on the data: stage 1 names the tiles covering every block of the tile (bounding box + widest cut), later stages the tile of each open relation chain end. A field is the same record in every tile it touches ([fields.md](fields.md)).
+- `g2m.soil.grid` reads exactly its own tile of `g2m.src.soil` (the raw tile already holds the lattice window with a margin) and optionally its own `g2m.src.landcover` tile: no neighbours, no halo. A cell does not depend on which window it was read from ([soil.md](soil.md)).
 - A tile in the 1 km halo of the region may have no DGM1 coverage: 85 such tiles were skipped at import (`import_report_home-2026-09r1.json`).
 
 ---
@@ -297,6 +319,9 @@ Files are under `S:\claude_code\geo2map_data\downloads\` (not in git). The full 
 | Frankfurt Baumkataster | Stadt Frankfurt | dl-de/by-2.0 | **Required** | `downloads/frankfurt_baumkataster/` | Planned: trees (P5) | Downloaded, not used |
 | Thuenen dominant tree species | Thuenen Institute | CC BY 4.0 | **Required** (citation with DOI in SOURCES.md) | `downloads/thuenen_tree_species/` | Planned: trees (P5, P6) | Downloaded, not used |
 | Copernicus HRL tree cover and leaf type | Copernicus Land Monitoring Service / EEA | Free and open (Regulation (EU) 1159/2013) | **Required** (EU, Copernicus, EEA) | `downloads/copernicus_hrl/` | Planned: trees (P5) | Downloaded, not used |
+| ISRIC SoilGrids 2.0 (sand, silt, clay, organic carbon, pH, coarse fragments, bulk density at six depths, mean predictions, 250 m) | ISRIC - World Soil Information | CC BY 4.0 (ISRIC README; WCS: no fees, no access constraints) | **Required**: "Soil data: SoilGrids 2.0, ISRIC - World Soil Information, CC BY 4.0 (Poggio et al. 2021, SOIL 7, 217-240, doi:10.5194/soil-7-217-2021)" | `S:\geo_data\soil\soilgrids_rmh\` (42 GeoTIFFs, 5.1 MB, fetched 2026-10-30 by `tools/soil_fetch/fetch_soilgrids.py`, manifest with SHA-256) | `import-soil` -> `g2m.src.soil`; `g2m.soil.grid` | **Used** (opt-in layer) |
+| HLNUG BFD50 Hessen soil survey 1:50 000 (soil units and substrate text) | HLNUG Hessen (ArcGIS REST service `boden/bfd50`) | Believed CC BY; **not confirmed at the source** | Unknown until confirmed | not downloaded (400 point queries only) | Reference to judge SoilGrids; candidate regional source and the only candidate for usable root depth | Measured 2026-10-31, not used |
+| BGR BUEK200 / BUEK1000 soil maps | BGR | Not confirmed at the source | Unknown until confirmed | not downloaded | Candidate Germany-wide regional source | Not measured |
 | Hessen reference parcels (InVeKoS Feldblöcke, FLIK) | Land Hessen (geoportal.hessen.de, WFS) | CC BY 4.0 per a third-party listing (source.coop `de_he`); confirm at the source | **Required**: "(c) Land Hessen, CC BY 4.0" | not downloaded | Seam for `g2m.fields.geom` (source kind Parcel) | Researched 2026-10-31, not used |
 | DWD phenology | Deutscher Wetterdienst | GeoNutzV | **Required**: source reference | `downloads/dwd_phenology/` | Planned: seasons (P6) | Downloaded, not used |
 
@@ -407,7 +432,7 @@ g2m_tiler stats --store STORE_DIR --scope SCOPE
 g2m_tiler index-hash --store STORE_DIR --scope SCOPE
 ```
 
-`import` runs resolve + `import-dem` + `import-osm` + `import-landcover` and writes `import_report_<scope>.json`. `--pbf` may be given several times and `--bw-data DIR` adds the Baden-Wuerttemberg DEM (see [raw_layers.md](raw_layers.md) "Two DEM sources"); `--dem-data` becomes optional when `--bw-data` is given. The individual `import-*` subcommands take `--resolved` instead of the region argument. `diff-scopes` compares two stores tile by tile. `check-dem-nodata` reports DEM tiles with no data. The real home import (scope `home-2026-09r1`) took 131 s and wrote 3170 tiles (807 MB) per its report.
+`import` runs resolve + `import-dem` + `import-osm` + `import-landcover` and writes `import_report_<scope>.json`. `--pbf` may be given several times and `--bw-data DIR` adds the Baden-Wuerttemberg DEM (see [raw_layers.md](raw_layers.md) "Two DEM sources"); `--dem-data` becomes optional when `--bw-data` is given. The individual `import-*` subcommands take `--resolved` instead of the region argument. `import-soil --resolved R --store S --scope X --data DIR [--data DIR2] [--jobs N] [--pin]` imports the soil source (not part of `import`; the data sets come from `tools/soil_fetch/fetch_soilgrids.py`, see [soil.md](soil.md); Rhein-Main-Hessen: 2173 tiles in 1.9 s). `diff-scopes` compares two stores tile by tile. `check-dem-nodata` reports DEM tiles with no data. The real home import (scope `home-2026-09r1`) took 131 s and wrote 3170 tiles (807 MB) per its report.
 
 ### 7.3 Bake derived layers
 
@@ -420,6 +445,8 @@ g2m_tiler bake --store STORE_DIR --scope SCOPE --derived DERIVED_DIR `
 
 Farm fields: `--layers g2m.fields.geom --levels 2` (level 2 only; the layer has no other level). Rhein-Main-Hessen, 2173 tiles: 68 s with `--jobs 6`.
 
+Soil: `--layers g2m.soil.grid --levels 2-2` (adds the soil deriver; needs `g2m.src.soil`, uses `g2m.src.landcover` when present; coverage follows the soil tiles). Rhein-Main-Hessen, 2173 tiles: 0.77 s, 3.4 MB.
+
 ### 7.4 Probes
 
 ```powershell
@@ -427,6 +454,8 @@ g2m_osm_tag_probe --pbf F --region REGIONS.json#NAME --out-md F --out-json F
 g2m_road_probe STORE_DIR SCOPE utm32n/2/455/5421 out.csv [--exceptions] [--profiles]
 g2m_fields_probe stats DERIVED_DIR RELEASE_HEX [fields.csv]
 g2m_fields_probe png DERIVED_DIR RELEASE_HEX SOURCE_DIR SCOPE out.png [--tile X,Y] [--tiles N] [--mpp M]
+g2m_soil_probe stats SOIL_DIR SOIL_RELEASE FIELDS_DIR FIELDS_RELEASE [fields_soil.csv]
+g2m_soil_probe png SOIL_DIR SOIL_RELEASE FIELDS_DIR FIELDS_RELEASE out.png [--tile X,Y] [--tiles N] [--mpp M] [--horizon 0|1] [--lonlat LON,LAT]
 ```
 
 Both are under `G2M_BUILD_APPS`. See `tools/osm_tag_probe` and `tools/road_probe/README.md`. The probes never write to the tile cache.
@@ -507,6 +536,7 @@ These are listed, not resolved. Each needs an owner decision or a check.
 |---|---|
 | This overview | `docs/pipeline/README.md` |
 | Farm fields | [fields.md](fields.md), [../formats/fields_geom.md](../formats/fields_geom.md) |
+| Soil | [soil.md](soil.md), [../formats/src_soil.md](../formats/src_soil.md), [../formats/soil_grid.md](../formats/soil_grid.md) |
 | Detail pages | [raw_layers.md](raw_layers.md), [terrain.md](terrain.md), [roads.md](roads.md), [client_side.md](client_side.md) |
 | Byte formats | [../formats/README.md](../formats/README.md): [tile_container](../formats/tile_container.md), [src_elev](../formats/src_elev.md), [src_landcover](../formats/src_landcover.md), [src_osm](../formats/src_osm.md), [pack](../formats/pack.md), [release_manifest](../formats/release_manifest.md), [regions](../formats/regions.md), [protocol](../formats/protocol.md), [cache_db](../formats/cache_db.md), [road_graph](../formats/road_graph.md), [road_geom](../formats/road_geom.md) |
 | G3 road pipeline | [../g3_road_pipeline.md](../g3_road_pipeline.md), [../g3_profile_foundation.md](../g3_profile_foundation.md), [../g3_reference_lines.md](../g3_reference_lines.md) |

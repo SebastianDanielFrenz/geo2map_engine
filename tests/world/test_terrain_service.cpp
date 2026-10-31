@@ -7,6 +7,9 @@
 #include "g2m/world/terrain_service.h"
 #include "g2m/layer/terrain_class.h"
 #include "g2m/layer/field_tile.h"
+#include "g2m/layer/soil_tile.h"
+#include "g2m/layer/src_soil.h"
+#include "soil_world.h"
 
 #include "g2m/core/hash.h"
 #include "g2m/layer/road_geom_tile.h"
@@ -136,7 +139,7 @@ struct World {
     TempDir dir;
     std::filesystem::path sources_dir() const { return dir.path() / "sources"; }
 
-    explicit World(bool with_field = false) {
+    explicit World(bool with_field = false, bool with_soil = false) {
         auto sources = TileStore::open({sources_dir(), "tiles"});
         REQUIRE(sources);
         const geo::Utm utm(geo::kGRS80);
@@ -186,6 +189,14 @@ struct World {
                 auto data = input_tile(std::string(kSrcElevDgm1Layer), k, *encode_src_elev(elev), VerticalDatum::DHHN2016);
                 REQUIRE((*sources)->put({kScope, data.ref.layer, k}, *data.header, data.body, true));
             }
+        if (with_soil) {   // the synthetic soil world (tests/support/soil_world.h) for the central 3 x 3 level-2 tiles; no land cover
+            for (int y = -1; y <= 1; ++y)
+                for (int x = -1; x <= 1; ++x) {
+                    const TileKey k = l2(x, y);
+                    auto data = input_tile(std::string(kSrcSoilLayer), k, *encode_src_soil(g2m_test::soil::make_src_tile(k)));
+                    REQUIRE((*sources)->put({kScope, data.ref.layer, k}, *data.header, data.body, true));
+                }
+        }
     }
 
     TerrainServiceConfig config(const std::string& derived_name = "derived", int workers = 2) const {
@@ -1031,4 +1042,64 @@ TEST_CASE("service: the memory cache evicts least recently used tiles", "[world]
     CHECK(st.cache_bytes <= 3 * sizeof(HeightTile) + 4096);
     CHECK_FALSE(svc->peek_height(l0(0, 0)));
     CHECK(svc->peek_height(l0(5, 0)));
+}
+
+TEST_CASE("service: soil grid ticket, peek, point queries and field aggregates", "[world][terrain_service][soil]") {
+    World w(true, true);
+    {   // without the opt-in the ticket fails at once
+        auto plain = w.open();
+        CHECK(plain->soil(l2(0, 0), Priority::Render).state() == TileState::Failed);
+        CHECK(plain->peek_soil(l2(0, 0)) == nullptr);
+        CHECK_FALSE(plain->soil_at_grid(0, 0));
+        CHECK_FALSE(plain->has_layer(kSoilGridLayer));
+    }
+    TerrainServiceConfig sc = w.config("derived_soil", 2);
+    sc.layers.soil = true; sc.layers.fields = true;
+    auto svc = w.open(sc);
+    CHECK(svc->has_layer(kSoilGridLayer));
+    // A level-0 key maps to its level-2 ancestor; the tile equals the synthetic world's direct evaluation.
+    auto t = svc->soil(l0(0, 0), Priority::Render);
+    REQUIRE(t.wait_for(kLong));
+    REQUIRE(t.state() == TileState::Ready);
+    CHECK(svc->peek_soil(l2(0, 0)) == t.value());
+    const SoilGridTile& tile = *t.value();
+    REQUIRE(tile.cells.size() == 1024);
+    for (int r = 0; r < 32; ++r)
+        for (int c = 0; c < 32; ++c) CHECK(tile.cells[static_cast<std::size_t>(r) * 32 + static_cast<std::size_t>(c)] == g2m_test::soil::ref_cell(l2(0, 0), c, r, false));
+    // The tile equals a decode of the raw container.
+    auto raw = svc->raw_tile(std::string(kSoilGridLayer), l2(0, 0), Priority::Render);
+    REQUIRE(raw.wait_for(kLong));
+    const auto view = parse_container(raw.value()->container); REQUIRE(view);
+    const auto body = decode_body(view->body); REQUIRE(body);
+    const auto decoded = decode_soil_grid(*body); REQUIRE(decoded);
+    CHECK(*decoded == tile);
+    // Point queries in grid metres and through the session frame.
+    for (double e = 20.25; e < 1020; e += 53.5)
+        for (double n = 11.75; n < 1020; n += 61.25) {
+            const auto p = svc->soil_at_grid(e, n);
+            REQUIRE(p); CHECK(*p == g2m_test::soil::ref_at(kZone, static_cast<std::int64_t>(std::floor(e * 1000.0)), static_cast<std::int64_t>(std::floor(n * 1000.0)), false));
+        }
+    const auto at = svc->soil_at_grid(300.5, 250.5);
+    REQUIRE(at); CHECK(*at == g2m_test::soil::ref_at(kZone, 300500, 250500, false));
+    const auto local = svc->soil_at(300.5 - static_cast<double>(svc->frame().e0_m()), 250.5 - static_cast<double>(svc->frame().n0_m()));
+    REQUIRE(local); CHECK(*local == *at);
+    // A tile that is not resident answers nothing and starts no work; a tile outside the soil coverage is Absent.
+    CHECK_FALSE(svc->soil_at_grid(5 * 1024 + 300, 250));
+    auto none = svc->soil(l2(3, 0), Priority::Render);
+    REQUIRE(none.wait_for(kLong)); CHECK(none.state() == TileState::Absent);
+    // Field aggregates read the resident tiles: the 300 m x 100 m block of the world, cut in two by a track.
+    auto ft = svc->fields(l2(0, 0), Priority::Render); REQUIRE(ft.wait_for(kLong)); REQUIRE(ft.state() == TileState::Ready);
+    REQUIRE(ft.value()->fields.size() == 2);
+    for (const auto& f : ft.value()->fields) {
+        const SoilFieldSummary s = svc->field_soil(f);
+        CHECK(s.samples > 20); CHECK(s.missing == 0); CHECK(s.valid > 10);
+        const SoilLookup direct = [&](std::int64_t e, std::int64_t n) -> std::optional<SoilSample> { return g2m_test::soil::ref_at(kZone, e, n, false); };
+        CHECK(s == summarise_field_soil(f, builtin_soil_rules(), direct));
+    }
+    // A field whose soil tile is not resident reports itself incomplete.
+    FieldRecord far = ft.value()->fields[0];
+    for (auto& p : far.polygon.outer) p.x += 5 * 1024 * 1000;
+    far.bbox = ring_bbox(far.polygon.outer); far.anchor.x += 5 * 1024 * 1000;
+    const SoilFieldSummary missing = svc->field_soil(far);
+    CHECK(missing.missing == missing.samples); CHECK(missing.valid == 0);
 }

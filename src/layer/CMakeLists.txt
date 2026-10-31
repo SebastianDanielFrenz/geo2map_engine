@@ -50,6 +50,10 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/field_tile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/field_subdivide.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/derive_fields.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/soil_rules.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src_soil.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/soil_tile.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/derive_soil.cpp
   CACHE INTERNAL "g2m_layers sources (also compiled into the fuzz-instrumented copy, tests/fuzz_formats)"
 )
 
@@ -75,6 +79,8 @@ g2m_embed_json(${PROJECT_SOURCE_DIR}/data/carve/carve_default.json carve_default
 g2m_embed_json(${PROJECT_SOURCE_DIR}/data/classifiers/esa_worldcover_v200.json esa_worldcover_v200.inc kEsaWorldcoverV200)
 # Field polygons (farming game): data/field_rules/de.json, hashed into the g2m.fields.geom layer config.
 g2m_embed_json(${PROJECT_SOURCE_DIR}/data/field_rules/de.json field_rules_de.inc kFieldRulesDe)
+# Soil layer (farming game): data/soil_rules/default.json, hashed into the g2m.soil.grid layer config.
+g2m_embed_json(${PROJECT_SOURCE_DIR}/data/soil_rules/default.json soil_rules_default.inc kSoilRulesDefault)
 
 add_library(g2m_layers STATIC ${G2M_LAYERS_SOURCES})
 target_include_directories(g2m_layers PUBLIC ${PROJECT_SOURCE_DIR}/include)

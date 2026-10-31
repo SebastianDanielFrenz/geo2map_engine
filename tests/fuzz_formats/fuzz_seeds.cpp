@@ -9,6 +9,9 @@
 #include "g2m/layer/osm_clip.h"
 #include "g2m/layer/pack.h"
 #include "g2m/layer/field_tile.h"
+#include "g2m/layer/soil_tile.h"
+#include "g2m/layer/src_soil.h"
+#include "soil_world.h"
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/region.h"
@@ -325,6 +328,22 @@ std::vector<std::vector<std::uint8_t>> seeds(Target target) {
         tile.entries[0].cross_section_decline.reset(); tile.entries[0].profile.reset(); tile.entries[0].decline = g2m::make_error(g2m::ErrorCode::Unsupported, "fixture decline");
         return {std::move(first), body(legacy), std::move(with_features), std::move(cross_decline), body(must(g2m::encode_road_geom(tile), "road geom decline encode")),
                 std::move(six), std::move(with_origin), std::move(junctions), std::move(nine)};
+    }
+    case Target::SrcSoil: {
+        // A real window of the synthetic world (every kind of no-data patch inside), and a minimal 1 x 1 window.
+        auto first = body(must(g2m::encode_src_soil(g2m_test::soil::make_src_tile(g2m_test::home_tile())), "encode_src_soil"));
+        g2m::SoilSourceTile tiny; tiny.key = g2m_test::home_tile(); tiny.scheme = "soilgrids_v2_mean"; tiny.cells_per_degree = 480;
+        tiny.col0 = 3360; tiny.row0 = 24100; tiny.width = 1; tiny.height = 1; tiny.values.assign(g2m::kSoilPlanes, 100);
+        tiny.values[3] = g2m::kSoilNoData;
+        return {std::move(first), body(must(g2m::encode_src_soil(tiny), "encode_src_soil tiny"))};
+    }
+    case Target::SoilGrid: {
+        g2m::SoilGridTile tile; tile.key = g2m_test::home_tile(); tile.cells_per_side = 32; tile.cells.resize(1024);
+        for (int r = 0; r < 32; ++r) for (int c = 0; c < 32; ++c) tile.cells[static_cast<std::size_t>(r) * 32 + static_cast<std::size_t>(c)] = g2m_test::soil::ref_cell(tile.key, c, r);
+        auto first = body(must(g2m::encode_soil_grid(tile), "encode_soil_grid"));
+        g2m::SoilGridTile coarse; coarse.key = tile.key; coarse.cells_per_side = 4; coarse.cells.resize(16);
+        for (int i = 0; i < 16; ++i) coarse.cells[static_cast<std::size_t>(i)] = g2m_test::soil::ref_cell(tile.key, i * 2, (i * 5) % 32);
+        return {std::move(first), body(must(g2m::encode_soil_grid(coarse), "encode_soil_grid coarse"))};
     }
     case Target::FieldsGeom: {
         // Two pieces of a field cut by a track, a relation field with a hole and a crop, two decline records.

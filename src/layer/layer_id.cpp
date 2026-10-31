@@ -73,6 +73,17 @@ LayerDesc make_raw_landcover_layer() {
     return d;
 }
 
+LayerDesc make_raw_soil_layer() {
+    LayerDesc d;
+    d.id = LayerId{std::string(kSrcSoilLayer), 1};
+    d.kind = LayerKind::Raw;
+    d.encoding = static_cast<std::uint16_t>(LayerEncoding::SrcSoil);
+    d.encoding_version = 1;
+    d.levels = level_bit(kRawTileLevel);
+    d.content = "soil properties (sand, silt, clay, organic carbon, pH, coarse fragments, bulk density; 6 depth intervals) on a 1/480 degree lattice window per tile";
+    return d;
+}
+
 const LayerRegistry& LayerRegistry::builtin() {
     static const LayerRegistry reg = [] {
         LayerRegistry r;
@@ -81,6 +92,7 @@ const LayerRegistry& LayerRegistry::builtin() {
         (void)r.add(make_raw_elev_layer("dgm1"));
         (void)r.add(make_raw_landcover_layer());
         (void)r.add(make_raw_osm_layer());
+        (void)r.add(make_raw_soil_layer());
         // PLAN.md G2.1: the terrain L0 layers.
         (void)r.add(elev_base_desc());
         (void)r.add(terrain_height_desc());

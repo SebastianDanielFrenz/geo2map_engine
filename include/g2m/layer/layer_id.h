@@ -52,6 +52,8 @@ enum class LayerEncoding : std::uint16_t {
     RoadGeomTunnels = 8,   // g2m.roads.geom encoding 7 plus provenance 4, TunnelFloor (terrain migration phase 4, decision D47)
     RoadGeomUnderpasses = 9, // g2m.roads.geom encoding 8 plus section 8, underpass deck spans (decisions D53-D58)
     FieldsGeom = 10,       // g2m.fields.geom; docs/formats/fields_geom.md
+    SrcSoil = 11,          // g2m.src.soil; docs/formats/src_soil.md
+    SoilGrid = 12,         // g2m.soil.grid; docs/formats/soil_grid.md
     TerrainClass = 7,      // g2m.terrain.class (encoding 7 in that layer's id space, design 9.4); docs/formats/terrain_class.md
 };
 
@@ -81,6 +83,7 @@ struct LayerDesc {
 inline constexpr int kRawTileLevel = 2;
 inline constexpr std::string_view kSrcOsmLayer = "g2m.src.osm";
 inline constexpr std::string_view kSrcLandcoverLayer = "g2m.src.landcover";
+inline constexpr std::string_view kSrcSoilLayer = "g2m.src.soil";
 inline constexpr std::string_view kSrcElevPrefix = "g2m.src.elev.";
 inline constexpr std::string_view kSrcElevDgm1Layer = "g2m.src.elev.dgm1";
 
@@ -90,5 +93,6 @@ inline constexpr std::string_view kSrcElevDgm1Layer = "g2m.src.elev.dgm1";
 LayerDesc make_raw_elev_layer(std::string_view source);
 LayerDesc make_raw_osm_layer();
 LayerDesc make_raw_landcover_layer();
+LayerDesc make_raw_soil_layer();
 
 } // namespace g2m

@@ -50,6 +50,10 @@
 namespace g2m {
 struct TerrainClassTile; // g2m/layer/terrain_class.h (include it to use terrain_class())
 struct FieldTile;        // g2m/layer/field_tile.h (include it to use fields())
+struct FieldRecord;      // g2m/layer/field_tile.h
+struct SoilGridTile;     // g2m/layer/soil_tile.h (include it to use soil())
+struct SoilSample;
+struct SoilFieldSummary;
 }
 
 namespace g2m::world {
@@ -72,6 +76,7 @@ struct LayerOptIn {
     bool carved = false;    // g2m.terrain.carved; when set, height() serves it instead of g2m.terrain.height
     bool classes = false;   // g2m.terrain.class (phase 6); implies the carved layer in the release (height() still follows `carved`)
     bool fields = false;    // g2m.fields.geom (farm field polygons); reads g2m.src.osm only, independent of the road layers
+    bool soil = false;      // g2m.soil.grid (soil facts per 32 m cell); reads g2m.src.soil (+ g2m.src.landcover), independent of every other derived layer
 };
 
 struct TerrainServiceConfig {
@@ -231,6 +236,9 @@ public:
     // The decoded g2m.fields.geom tile (farm field polygons; level 2, a finer key maps to its ancestor). Failed at once
     // when the release has no fields layer (LayerOptIn::fields off).
     Ticket<FieldTile> fields(const TileKey& l2, Priority priority);
+    // The decoded g2m.soil.grid tile (level 2, a finer key maps to its ancestor). Failed at once when the release has no soil
+    // layer (LayerOptIn::soil off); Absent where the soil source does not cover the tile.
+    Ticket<SoilGridTile> soil(const TileKey& l2, Priority priority);
     // Any layer's container, uncached typed decode skipped (for layers without a typed ticket, and tools).
     Ticket<RawTile> raw_tile(const std::string& layer, const TileKey& key, Priority priority);
     // Phase-3 products. Failed until the matching producer is installed.
@@ -257,6 +265,15 @@ public:
     };
     std::optional<FieldHit> field_at(double x, double y) const;
     std::optional<FieldHit> field_at_grid(double easting, double northing) const;
+    std::shared_ptr<const SoilGridTile> peek_soil(const TileKey& l2) const noexcept;
+    // The soil record at a point, answered from the resident soil tile (never starts work): session-local metres
+    // (soil_at) or UTM grid metres of the session zone (soil_at_grid). nullopt when the tile is not resident.
+    std::optional<SoilSample> soil_at(double x, double y) const;
+    std::optional<SoilSample> soil_at_grid(double easting, double northing) const;
+    // Per-field soil aggregates from the RESIDENT soil tiles (request them first with soil()): the same summary whichever
+    // tiles the field touches. `missing` counts lattice points whose tile was not resident; the aggregate is complete
+    // when it is 0. See summarise_field_soil.
+    SoilFieldSummary field_soil(const FieldRecord& field) const;
     std::shared_ptr<const StructureSet> peek_structures(const TileKey& l2) const noexcept;
 
     // ---- point heights on resident level-0 tiles (session-local metres; nullopt when a needed tile is not
