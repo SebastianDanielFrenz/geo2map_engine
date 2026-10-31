@@ -1,0 +1,8 @@
+g3rail.frankfurt_hoechst.462.5428 5 0aeaffe35b96ad2c
+g3rail.frankfurt_hoechst.463.5428 24 74c3747dcdeda108
+g3rail.frankfurt_hoechst.464.5428 17 3f0801c250488044
+g3rail.frankfurt_hoechst.464.5429 1 0a3ecd908d1682c0
+g3rail.hoechst_a66.454.5420 1 e6b258ad15a03725
+g3rail.hoechst_a66.455.5420 1 96e0a084b3ce16b7
+g3rail.hoechst_a66.454.5421 2 6335f222bf390cfa
+all 51 e932054d6f594946

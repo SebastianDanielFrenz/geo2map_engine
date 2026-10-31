@@ -46,6 +46,10 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/terrain_carve.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/terrain_class.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/derive_road_graph.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/rail_rules.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/rail_geom_tile.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/rail_geom_build.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/derive_rail_geom.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/field_rules.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/field_tile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/field_subdivide.cpp
@@ -76,6 +80,7 @@ function(g2m_embed_json json_file inc_name array_name)
 endfunction()
 g2m_embed_json(${PROJECT_SOURCE_DIR}/data/road_rules/de.json road_rules_de.inc kRoadRulesDe)
 g2m_embed_json(${PROJECT_SOURCE_DIR}/data/carve/carve_default.json carve_default.inc kCarveDefault)
+g2m_embed_json(${PROJECT_SOURCE_DIR}/data/rail_rules/de.json rail_rules_de.inc kRailRulesDe)
 g2m_embed_json(${PROJECT_SOURCE_DIR}/data/classifiers/esa_worldcover_v200.json esa_worldcover_v200.inc kEsaWorldcoverV200)
 # Field polygons (farming game): data/field_rules/de.json, hashed into the g2m.fields.geom layer config.
 g2m_embed_json(${PROJECT_SOURCE_DIR}/data/field_rules/de.json field_rules_de.inc kFieldRulesDe)

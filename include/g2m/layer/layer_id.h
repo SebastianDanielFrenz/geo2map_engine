@@ -55,6 +55,7 @@ enum class LayerEncoding : std::uint16_t {
     SrcSoil = 11,          // g2m.src.soil; docs/formats/src_soil.md
     SoilGrid = 12,         // g2m.soil.grid; docs/formats/soil_grid.md
     TerrainClass = 7,      // g2m.terrain.class (encoding 7 in that layer's id space, design 9.4); docs/formats/terrain_class.md
+    RailGeom = 1,          // g2m.rail.geom (encoding 1 in that layer's id space, railways R1/R2); docs/formats/rail_geom.md
 };
 
 // Levels a layer has tiles at, as a bit mask over TileKey levels 0..20.

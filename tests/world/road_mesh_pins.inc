@@ -9,59 +9,71 @@
 // too but its patch is unchanged). Checked per junction: patch geometry differs only at those mixed junctions.
 // structure_scene (.holed/.sep) re-pinned for the straight-grade tunnels (D52: its 308 m and 250 m tunnels now take one
 // grade between their portals): regenerated with refgen from racing_game 945455a's mesh code over the new tiles.
-// {case, decks, deck hash, deck start_ref hash, ribbon vertices, ribbon indices, ribbon hash}  // bridges tunnels inferred
-{"structure_scene", 5, 0xbfacf6972f8cf9a6ull, 0xee85fafd354b0935ull, 53836, 128208, 0xd7c4788ea4f9b994ull},  // 1 2 2
-{"structure_scene.holed", 5, 0xbfacf6972f8cf9a6ull, 0xee85fafd354b0935ull, 48244, 114780, 0x04c664c0a568c92aull},  // 1 2 2
+// // Full-footprint correction: slabs/collider/crown now follow the served cross-section, and approach inference uses its
+// signed outer footprint. Re-recorded from g2m::world over the same inputs; shape/count changes checked by the geometry tests.
+// Turn-lane arrows re-pinned for vault G2M-024 (explicit turn:lanes token table instead of the substring rule: merge_to_*
+// and slight_* no longer draw the full bent turn arrow, a merge draws one diagonal arrow, and a neighbouring lane no longer
+// gets a mirrored one): ribbon vertex / index counts and hashes of the hoechst_a66 and frankfurt_hoechst tiles that carry
+// such lanes (frankfurt_hoechst.463.5428, .464.5429; hoechst_a66.454/455/456.5421, .454/455.5422, each with .holed / .sep).
+// The deck hashes and every case without those tokens are unchanged; the racing_game pins of the other cases still match.
+// Reference-line chord bound (vault G2M-024; de.json block reference): the roads.geom reference line of a stretch may leave the chord of its
+// node pairs by at most 1.0 x half the way's width + 3 m, else it takes the rounded straight/arc fallback, so the bowed clothoids of short ways
+// beside other roads are straightened. Re-recorded from g2m::world over the same inputs; 32 cases moved in ribbon hash (31 also in vertex /
+// index count, 12 also in deck hash: the bridge decks of hoechst_a66.454/455.5421 and .5422 follow a straightened reference line), the deck
+// counts and every case that holds no bowed stretch are unchanged: structure_scene, junction_scene, frankfurt_hoechst.463.5427/.463.5430/.465.5429,
+// hoechst_a66.452/453 (except the hash of 452.5419.holed), .456.5422 and the overpass cases.
+{"structure_scene", 5, 0x7e5b86d1dfff2e22ull, 0xee85fafd354b0935ull, 53836, 128208, 0x2f4aa71a28a37b90ull},  // 1 2 2
+{"structure_scene.holed", 5, 0x7e5b86d1dfff2e22ull, 0xee85fafd354b0935ull, 48244, 114780, 0xca36c604c4d3fc96ull},  // 1 2 2
 {"junction_scene", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 37877, 93216, 0x4281c573a89ecc99ull},  // 0 0 0
 {"junction_scene.holed", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 33677, 83928, 0x310ecacdfcdfad54ull},  // 0 0 0
 {"frankfurt_hoechst.463.5427", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 1312, 3198, 0x80cd7abfadf07578ull},  // 0 0 0
-{"frankfurt_hoechst.462.5428", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 92236, 270468, 0x548e93e6ab1fa428ull},  // 0 0 0
-{"frankfurt_hoechst.463.5428", 3, 0x8699a63afc356ba5ull, 0x5467b0da1d106495ull, 334680, 1003026, 0xbe93a83fc91a4543ull},  // 3 0 0
-{"frankfurt_hoechst.464.5428", 13, 0x215d1041146d8122ull, 0x5c569877000ae3b5ull, 345184, 1046304, 0xf894d6aac98be8eeull},  // 10 3 0
-{"frankfurt_hoechst.465.5428", 2, 0xaa8191fe05d18663ull, 0xa8c7f832281a39c5ull, 7794, 16092, 0x70d085612037030aull},  // 1 1 0
-{"frankfurt_hoechst.462.5429", 1, 0x20f5cb933afde3f1ull, 0x4d25767f9dce13f5ull, 116850, 335796, 0x8b76dba6fca822fbull},  // 1 0 0
-{"frankfurt_hoechst.463.5429", 13, 0x6d8d1e8dc5274ec2ull, 0x5c569877000ae3b5ull, 471849, 1470612, 0x2a0d314cd7cc7291ull},  // 2 11 0
-{"frankfurt_hoechst.464.5429", 15, 0x1a12ab6ede85dcafull, 0xf87b38c6cf34ac55ull, 498515, 1511814, 0x44730d0de1e230cfull},  // 1 14 0
+{"frankfurt_hoechst.462.5428", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 93531, 273897, 0x5ab3841dba046776ull},  // 0 0 0
+{"frankfurt_hoechst.463.5428", 3, 0x178a23b4803a7298ull, 0x5467b0da1d106495ull, 331703, 991542, 0x4fcf77910c0159cdull},  // 3 0 0
+{"frankfurt_hoechst.464.5428", 13, 0xe87b3f9590a2d7fbull, 0x5c569877000ae3b5ull, 342876, 1044099, 0xffc8b6555c8d845eull},  // 10 3 0
+{"frankfurt_hoechst.465.5428", 2, 0xa4d463415a4502f8ull, 0xa8c7f832281a39c5ull, 7704, 15912, 0xef331e0f8dca039dull},  // 1 1 0
+{"frankfurt_hoechst.462.5429", 1, 0xb10d7a12b7551439ull, 0x4d25767f9dce13f5ull, 116150, 334932, 0x50e7f46065d23d1eull},  // 1 0 0
+{"frankfurt_hoechst.463.5429", 13, 0xc02b7d2de606438eull, 0x5c569877000ae3b5ull, 469419, 1467489, 0xa82aaac72f93eba2ull},  // 2 11 0
+{"frankfurt_hoechst.464.5429", 15, 0x168aba52494ca3edull, 0xf87b38c6cf34ac55ull, 492810, 1499013, 0x831897fd45c0581full},  // 1 14 0
 {"frankfurt_hoechst.465.5429", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 1122, 2400, 0x98bd457a6f96f0bbull},  // 0 0 0
 {"frankfurt_hoechst.463.5430", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 7524, 16416, 0x7339ed2ba2585ce6ull},  // 0 0 0
 {"hoechst_a66.452.5419", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 48680, 116520, 0x2ce204f2a5ab4825ull},  // 0 0 0
-{"hoechst_a66.452.5419.holed", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 43344, 103524, 0x041ac3c26b267e15ull},  // 0 0 0
+{"hoechst_a66.452.5419.holed", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 43344, 103524, 0x41ac3c26b267e15ull},  // 0 0 0
 {"hoechst_a66.453.5420", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 105934, 252714, 0x5febfb1d66798d22ull},  // 0 0 0
 {"hoechst_a66.453.5420.holed", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 94322, 224214, 0x2b410fdb41d2277bull},  // 0 0 0
-{"hoechst_a66.454.5420", 4, 0x1ee0985dd09a6027ull, 0x88201fb960ff6465ull, 120962, 292311, 0xd04f46b0d352810bull},  // 4 0 0
-{"hoechst_a66.454.5420.holed", 4, 0x1ee0985dd09a6027ull, 0x88201fb960ff6465ull, 104014, 248877, 0x14c5073a11295a51ull},  // 4 0 0
-{"hoechst_a66.455.5420", 10, 0xc88e316b1f3505cfull, 0x40d69e0cf0f65c45ull, 144097, 421080, 0x9bdd7fad78043b47ull},  // 6 2 2
-{"hoechst_a66.455.5420.holed", 10, 0xc88e316b1f3505cfull, 0x40d69e0cf0f65c45ull, 137261, 402498, 0xef81ffe04a0f03fdull},  // 6 2 2
-{"hoechst_a66.456.5420", 1, 0x6fc916c59968bb13ull, 0x4d25767f9dce13f5ull, 93215, 274944, 0x7be3073af15b8d4full},  // 0 1 0
-{"hoechst_a66.456.5420.holed", 1, 0x6fc916c59968bb13ull, 0x4d25767f9dce13f5ull, 88983, 263943, 0x5b47c1fd7eea6217ull},  // 0 1 0
-{"hoechst_a66.454.5421", 20, 0x33159c04760a6735ull, 0xfdf0fb7cef54e96full, 86611, 281601, 0xac853194bac132c9ull},  // 6 13 1
-{"hoechst_a66.454.5421.holed", 20, 0x33159c04760a6735ull, 0xfdf0fb7cef54e96full, 70013, 220980, 0x9738162a07ddf5f8ull},  // 6 13 1
-{"hoechst_a66.455.5421", 30, 0x8b22af850ea28b0eull, 0x2ad0baf66972b24full, 607313, 2006079, 0x6a5f3726c20deb15ull},  // 11 17 2
-{"hoechst_a66.455.5421.holed", 30, 0x8b22af850ea28b0eull, 0x2ad0baf66972b24full, 531585, 1706409, 0x6aa01c1ce49217cfull},  // 11 17 2
-{"hoechst_a66.456.5421", 1, 0x6fc916c59968bb13ull, 0x4d25767f9dce13f5ull, 180451, 525396, 0x2bb8494e1f3a7b37ull},  // 0 1 0
-{"hoechst_a66.456.5421.holed", 1, 0x6fc916c59968bb13ull, 0x4d25767f9dce13f5ull, 157653, 460149, 0x881f6491728596b4ull},  // 0 1 0
+{"hoechst_a66.454.5420", 4, 0xddb23d0e0da2f058ull, 0x88201fb960ff6465ull, 120957, 292242, 0x1c165ad68a606899ull},  // 4 0 0
+{"hoechst_a66.454.5420.holed", 4, 0xddb23d0e0da2f058ull, 0x88201fb960ff6465ull, 104031, 248850, 0xe289453b1c7b994eull},  // 4 0 0
+{"hoechst_a66.455.5420", 10, 0x7d789588aef0d30bull, 0x40d69e0cf0f65c45ull, 143952, 428760, 0x30082193383c303eull},  // 6 2 2
+{"hoechst_a66.455.5420.holed", 10, 0x7d789588aef0d30bull, 0x40d69e0cf0f65c45ull, 137177, 411009, 0xae7b31e2e5ad47d4ull},  // 6 2 2
+{"hoechst_a66.456.5420", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 92612, 273966, 0x17dfda349761d5fcull},  // 0 1 0
+{"hoechst_a66.456.5420.holed", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 88503, 263586, 0xdbabd27af959a79cull},  // 0 1 0
+{"hoechst_a66.454.5421", 20, 0x14cf4a94102f6acfull, 0xfdf0fb7cef54e96full, 86439, 279150, 0xcfad153519eb1ce2ull},  // 6 13 1
+{"hoechst_a66.454.5421.holed", 20, 0x14cf4a94102f6acfull, 0xfdf0fb7cef54e96full, 70552, 220017, 0x8cc55a2f2b78825eull},  // 6 13 1
+{"hoechst_a66.455.5421", 30, 0x9c504c7ef97464c8ull, 0x2ad0baf66972b24full, 605987, 2004939, 0x8012a09ac9af40cull},  // 11 17 2
+{"hoechst_a66.455.5421.holed", 30, 0x9c504c7ef97464c8ull, 0x2ad0baf66972b24full, 528866, 1697067, 0x3d503259884146f0ull},  // 11 17 2
+{"hoechst_a66.456.5421", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 179276, 523764, 0xa2f83e0fd8eb5412ull},  // 0 1 0
+{"hoechst_a66.456.5421.holed", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 156622, 458805, 0x14971db717aa8a34ull},  // 0 1 0
 {"hoechst_a66.453.5422", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 13916, 32802, 0x10e7064c69629478ull},  // 0 0 0
 {"hoechst_a66.453.5422.holed", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 11924, 28014, 0x5e496b6e451d900eull},  // 0 0 0
-{"hoechst_a66.454.5422", 14, 0x28b4aff554d3b4acull, 0xdbef9daa3f6c85cfull, 94239, 265107, 0x50d2fa89f287cb22ull},  // 4 10 0
-{"hoechst_a66.454.5422.holed", 14, 0x28b4aff554d3b4acull, 0xdbef9daa3f6c85cfull, 77129, 200040, 0xf5ad9a303630aa7bull},  // 4 10 0
-{"hoechst_a66.455.5422", 14, 0x28b4aff554d3b4acull, 0xdbef9daa3f6c85cfull, 135940, 369303, 0x4127eb675991b5ddull},  // 4 10 0
-{"hoechst_a66.455.5422.holed", 14, 0x28b4aff554d3b4acull, 0xdbef9daa3f6c85cfull, 132186, 359715, 0xc0e15b10249c252full},  // 4 10 0
+{"hoechst_a66.454.5422", 14, 0x6db1b852c3e3b785ull, 0xdbef9daa3f6c85cfull, 93491, 263715, 0x21fb9b1556f507c8ull},  // 4 10 0
+{"hoechst_a66.454.5422.holed", 14, 0x6db1b852c3e3b785ull, 0xdbef9daa3f6c85cfull, 76387, 198654, 0x5bcd03882667f37dull},  // 4 10 0
+{"hoechst_a66.455.5422", 14, 0x6db1b852c3e3b785ull, 0xdbef9daa3f6c85cfull, 135685, 368733, 0x23ace6e9e7eadefcull},  // 4 10 0
+{"hoechst_a66.455.5422.holed", 14, 0x6db1b852c3e3b785ull, 0xdbef9daa3f6c85cfull, 131939, 359157, 0x4543653fb43ae873ull},  // 4 10 0
 {"hoechst_a66.456.5422", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 14823, 32526, 0xe676d7b7623451a8ull},  // 0 0 0
 {"hoechst_a66.456.5422.holed", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 13071, 29214, 0x52732ac453df80c2ull},  // 0 0 0
-{"overpass.h10.sep", 3, 0xba465b32f69a2c1full, 0x5467b0da1d106495ull, 91888, 228558, 0xabb38973dfe3e526ull},  // 1 0 2
-{"overpass.h10", 1, 0x9d1581150f8e5658ull, 0x4d25767f9dce13f5ull, 92128, 228918, 0x5190eb0a3da0cbccull},  // 1 0 0
-{"overpass.h25.sep", 1, 0xe17d6ab1108f3071ull, 0x4d25767f9dce13f5ull, 91728, 228192, 0xaa6b7e91a1edee07ull},  // 1 0 0
-{"overpass.h25", 1, 0xe17d6ab1108f3071ull, 0x4d25767f9dce13f5ull, 91728, 228192, 0xaa6b7e91a1edee07ull},  // 1 0 0
-{"structure_scene.sep", 5, 0xbfacf6972f8cf9a6ull, 0xee85fafd354b0935ull, 53836, 128208, 0xd7c4788ea4f9b994ull},  // 1 2 2
+{"overpass.h10.sep", 3, 0xa3d31cff2d5321e4ull, 0x5467b0da1d106495ull, 91840, 228486, 0xa4bd950e3f43b161ull},  // 1 0 2
+{"overpass.h10", 1, 0xb6622fe54b9d6808ull, 0x4d25767f9dce13f5ull, 92128, 228918, 0x2a4901fb7a76bbbcull},  // 1 0 0
+{"overpass.h25.sep", 3, 0x9b90e446a065cb4full, 0x5467b0da1d106495ull, 91680, 228120, 0xdca8455f3f4d4bb4ull},  // 1 0 2
+{"overpass.h25", 1, 0xeebb0b57cbaddc94ull, 0x4d25767f9dce13f5ull, 91728, 228192, 0x58426309081264e7ull},  // 1 0 0
+{"structure_scene.sep", 5, 0x7e5b86d1dfff2e22ull, 0xee85fafd354b0935ull, 53836, 128208, 0x2f4aa71a28a37b90ull},  // 1 2 2
 {"hoechst_a66.452.5419.sep", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 48680, 116520, 0x2ce204f2a5ab4825ull},  // 0 0 0
 {"hoechst_a66.453.5420.sep", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 105934, 252714, 0x5febfb1d66798d22ull},  // 0 0 0
-{"hoechst_a66.454.5420.sep", 4, 0x1ee0985dd09a6027ull, 0x88201fb960ff6465ull, 120962, 292311, 0xd04f46b0d352810bull},  // 4 0 0
-{"hoechst_a66.455.5420.sep", 10, 0xc88e316b1f3505cfull, 0x40d69e0cf0f65c45ull, 144097, 421080, 0x9bdd7fad78043b47ull},  // 6 2 2
-{"hoechst_a66.456.5420.sep", 1, 0x6fc916c59968bb13ull, 0x4d25767f9dce13f5ull, 93215, 274944, 0x7be3073af15b8d4full},  // 0 1 0
-{"hoechst_a66.454.5421.sep", 20, 0x33159c04760a6735ull, 0xfdf0fb7cef54e96full, 86611, 281601, 0xac853194bac132c9ull},  // 6 13 1
-{"hoechst_a66.455.5421.sep", 30, 0x8b22af850ea28b0eull, 0x2ad0baf66972b24full, 607313, 2006079, 0x6a5f3726c20deb15ull},  // 11 17 2
-{"hoechst_a66.456.5421.sep", 1, 0x6fc916c59968bb13ull, 0x4d25767f9dce13f5ull, 180451, 525396, 0x2bb8494e1f3a7b37ull},  // 0 1 0
+{"hoechst_a66.454.5420.sep", 4, 0xddb23d0e0da2f058ull, 0x88201fb960ff6465ull, 120957, 292242, 0x1c165ad68a606899ull},  // 4 0 0
+{"hoechst_a66.455.5420.sep", 10, 0x7d789588aef0d30bull, 0x40d69e0cf0f65c45ull, 143952, 428760, 0x30082193383c303eull},  // 6 2 2
+{"hoechst_a66.456.5420.sep", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 92612, 273966, 0x17dfda349761d5fcull},  // 0 1 0
+{"hoechst_a66.454.5421.sep", 20, 0x14cf4a94102f6acfull, 0xfdf0fb7cef54e96full, 86439, 279150, 0xcfad153519eb1ce2ull},  // 6 13 1
+{"hoechst_a66.455.5421.sep", 30, 0x9c504c7ef97464c8ull, 0x2ad0baf66972b24full, 605987, 2004939, 0x8012a09ac9af40cull},  // 11 17 2
+{"hoechst_a66.456.5421.sep", 1, 0x9f003ef61f223abfull, 0x4d25767f9dce13f5ull, 179276, 523764, 0xa2f83e0fd8eb5412ull},  // 0 1 0
 {"hoechst_a66.453.5422.sep", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 13916, 32802, 0x10e7064c69629478ull},  // 0 0 0
-{"hoechst_a66.454.5422.sep", 14, 0x28b4aff554d3b4acull, 0xdbef9daa3f6c85cfull, 94239, 265107, 0x50d2fa89f287cb22ull},  // 4 10 0
-{"hoechst_a66.455.5422.sep", 14, 0x28b4aff554d3b4acull, 0xdbef9daa3f6c85cfull, 135940, 369303, 0x4127eb675991b5ddull},  // 4 10 0
+{"hoechst_a66.454.5422.sep", 14, 0x6db1b852c3e3b785ull, 0xdbef9daa3f6c85cfull, 93491, 263715, 0x21fb9b1556f507c8ull},  // 4 10 0
+{"hoechst_a66.455.5422.sep", 14, 0x6db1b852c3e3b785ull, 0xdbef9daa3f6c85cfull, 135685, 368733, 0x23ace6e9e7eadefcull},  // 4 10 0
 {"hoechst_a66.456.5422.sep", 0, 0xcbf29ce484222325ull, 0xcbf29ce484222325ull, 14823, 32526, 0xe676d7b7623451a8ull},  // 0 0 0

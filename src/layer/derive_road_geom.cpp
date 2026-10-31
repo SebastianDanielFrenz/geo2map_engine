@@ -117,13 +117,23 @@ std::string road_geom_config_text() {
         // for every length) and the accepted-bridge anchors with the walk over every incident bridge edge.
         " tunnel-floor=" + std::string(c.tunnel_floors ? "" : "off/") + option_value(c.tunnel_spacing_m) + "/" + option_value(c.tunnel_max_grade) + "/" + option_value(c.tunnel_min_radius_m) +
         "/chord:" + option_value(c.tunnel_chord_min_length_m) +
+        // D65: short tunnels through a bank (open cuts): max length / hump band, chord floor.
+        " tunnel-cut=" + option_value(c.tunnel_cut_max_length_m) + "/" + option_value(c.tunnel_cut_hump_min_m) + "/" + option_value(c.tunnel_cut_hump_max_m) +
         " bridge-anchor-reuse=" + (c.bridge_anchor_reuse ? "1" : "0") +
         // D48 (terrain migration phase 5): the walk budget above is 200 m; its DEM and graph reads are covered by the
         // stage-2 squares of this half-width around every node of the incident bridges.
         " bridge-walk-margin=" + std::to_string(kRoadBridgeWalkMarginMm / 1000) +
         // D53-D58: underpass decks (encoding 9, section 8); the parameters are de.json's underpass block (in the rules
-        // hash above); crossing-context=1: the roads.graph tiles of every way crossing a tile way's segment (D57).
-        " underpass=" + std::string(builtin_road_rules_de().underpass.enabled ? "1" : "off") + " crossing-context=1 underpass-tags=D61";
+        // hash above); crossing-context=1: the roads.graph tiles of every way crossing a tile way's segment (D57);
+        // underpass-join: covered crossings at a degree-two way boundary give both ways the node's rim-chord plane, the
+        // crossing tiles adding the squares of this half-width (mm) around every tile way's end nodes (D63).
+        " underpass=" + std::string(builtin_road_rules_de().underpass.enabled ? "1" : "off") + " crossing-context=1 underpass-tags=D61 underpass-join=D63/" + std::to_string(kRoadUnderpassJoinMarginMm) +
+        // D64: a ground stretch under an upper bridge (a higher layer, bridge=*) masks the hump the bare-earth DEM holds there with the lower rim chord and takes its end planes from it.
+        " overpass-mask=D64"
+        // G2M-024: reference fits keep within half the road width plus a margin of the OSM chord (de.json reference block,
+        // percent/mm), else the rounded fallback; the values are in the rules hash too, the token versions the algorithm.
+        " reference-chord=G2M-024/" + std::to_string(builtin_road_rules_de().reference.chord_half_width_percent) + "/" +
+        std::to_string(builtin_road_rules_de().reference.chord_margin_mm);
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {
@@ -143,7 +153,7 @@ Result<DeriveResult> RoadGeomDeriver::derive(const DeriveRequest& request) const
     expected->push_back({std::string(kRoadGraphLayer), request.target}); std::sort(expected->begin(), expected->end());
     if (request.inputs.size() != expected->size()) return make_error(ErrorCode::InvalidArgument, "roads.geom: incomplete dependency set");
     std::set<InputTileRef> seen; std::vector<HeightTile> heights; std::vector<RoadGraphTile> context_tiles, crossing_tiles;
-    std::optional<VerticalDatum> datum; std::size_t bytes = 0;
+    std::optional<VerticalDatum> datum, known_datum; std::size_t bytes = 0;
     for (const auto& input : request.inputs) {
         if (!std::binary_search(expected->begin(), expected->end(), input.ref) || !seen.insert(input.ref).second)
             return make_error(ErrorCode::Malformed, "roads.geom: unexpected or duplicate dependency");
@@ -161,9 +171,17 @@ Result<DeriveResult> RoadGeomDeriver::derive(const DeriveRequest& request) const
             if (in_context) context_tiles.push_back(std::move(*tile));
             continue;
         }
-        if (input.header->datum != VerticalDatum::DHHN2016 && input.header->datum != VerticalDatum::EGM2008)
+        const VerticalDatum input_datum = input.header->datum;
+        if (input_datum != VerticalDatum::DHHN2016 && input_datum != VerticalDatum::EGM2008 &&
+            input_datum != VerticalDatum::Unspecified)
             return make_error(ErrorCode::Unsupported, "roads.geom: unknown elevation datum");
-        if (datum && *datum != input.header->datum) return make_error(ErrorCode::Malformed, "roads.geom: mixed elevation datums"); datum = input.header->datum;
+        if (input_datum != VerticalDatum::Unspecified) {
+            if (known_datum && *known_datum != input_datum)
+                return make_error(ErrorCode::Malformed, "roads.geom: mixed elevation datums");
+            known_datum = input_datum;
+        }
+        if (!datum || input_datum == VerticalDatum::Unspecified)
+            datum = input_datum;
         const auto body = decode_body(input.body); if (!body) return body.error();
         heights.emplace_back(); const auto decoded = decode_height_tile(*body, input.ref.key, heights.back()); if (!decoded) return decoded.error();
         for (auto& height : heights.back().h) if (height != kHeightNoData) {

@@ -114,6 +114,26 @@ TEST_CASE("container: encode_header rejects bad input", "[layer][container]") {
     CHECK_FALSE(encode_header(h));
 }
 
+TEST_CASE("container: unspecified vertical datum round trips distinctly from None", "[layer][container]") {
+    TileHeader header = sample_header();
+    header.datum = VerticalDatum::Unspecified;
+    auto encoded = encode_header(header);
+    REQUIRE(encoded);
+    auto decoded = decode_header(*encoded);
+    REQUIRE(decoded);
+    CHECK(decoded->datum == VerticalDatum::Unspecified);
+
+    header.datum = VerticalDatum::None;
+    auto no_datum = encode_header(header);
+    REQUIRE(no_datum);
+    auto decoded_none = decode_header(*no_datum);
+    REQUIRE(decoded_none);
+    CHECK(decoded_none->datum == VerticalDatum::None);
+    CHECK(decoded->datum != decoded_none->datum);
+
+    header.datum = static_cast<VerticalDatum>(4);
+    CHECK_FALSE(encode_header(header));
+}
 TEST_CASE("container: every single-byte flip is detected", "[layer][container]") {
     const auto body = encode_body(sample_body());
     REQUIRE(body);

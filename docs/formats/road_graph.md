@@ -42,6 +42,13 @@ code of 10 or more, a value whose kind does not match, an out-of-order or duplic
 record with both or neither of via node and via ways, more than 16 via ways, a record the tile does not
 hold, more than 200,000 records, a count larger than the remaining bytes allows.
 
+The 16-via-way limit belongs to the format (a reader that accepts more would accept tiles an encoding-6
+reader rejects), and it equals the router's own limit. A relation with more via ways is therefore not
+stored: the deriver leaves it out of every tile and counts it (`DeriveResult::diagnostics`
+`restrictions_dropped_over_via_ways`, `relations_dropped_over_via_ways`) instead of failing the tile.
+Home region (rhein-main-hessen-2026-10r1): one relation, 12421749 (`no_right_turn`, from the A 3, 34 via
+ways), out of 153 via-way relations; the others have 1 to 4.
+
 **Node tags.** Only these keys are kept, because shared nodes also carry addresses, names and
 other tags no road consumer reads: `barrier`, `crossing`, `crossing:markings`, `direction`,
 `height`, `highway`, `kerb`, `length`, `traffic_calming`, `traffic_calming:length`,

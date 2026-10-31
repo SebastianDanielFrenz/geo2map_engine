@@ -48,6 +48,7 @@
 #include <vector>
 
 namespace g2m {
+class ITransport;
 struct TerrainClassTile; // g2m/layer/terrain_class.h (include it to use terrain_class())
 struct FieldTile;        // g2m/layer/field_tile.h (include it to use fields())
 struct FieldRecord;      // g2m/layer/field_tile.h
@@ -75,12 +76,20 @@ struct LayerOptIn {
     bool geometry = true;   // g2m.roads.geom (needs roads)
     bool carved = false;    // g2m.terrain.carved; when set, height() serves it instead of g2m.terrain.height
     bool classes = false;   // g2m.terrain.class (phase 6); implies the carved layer in the release (height() still follows `carved`)
+    bool rail = false;      // g2m.rail.geom (railways R1/R2); independent of the road layers, needs only src.osm and elev.base
     bool fields = false;    // g2m.fields.geom (farm field polygons); reads g2m.src.osm only, independent of the road layers
     bool soil = false;      // g2m.soil.grid (soil facts per 32 m cell); reads g2m.src.soil (+ g2m.src.landcover), independent of every other derived layer
 };
 
 struct TerrainServiceConfig {
+    // Optional remote mode: pinned manifest and a shared, thread-safe transport.
+    // Skips all local stores/derivers. The existing scheduler and decoded cache remain.
+    std::shared_ptr<ITransport> remote_transport;
+    std::optional<ReleaseManifest> remote_manifest;
     StoreConfig stores;
+    // Explicit imported source; defaults preserve established DGM1 releases.
+    // Caller imports/reprojects this layer before opening the service.
+    std::string elevation_source = "g2m.src.elev.dgm1";
     LayerOptIn layers;
     // The session frame (local metres): zone and the origin in whole kilometres.
     geo::UtmZone zone{32, geo::Hemisphere::North};
@@ -104,6 +113,7 @@ class ProductContext {
 public:
     Outcome<HeightTile> height(const TileKey& key);
     Outcome<RoadGeomTile> road_geom(const TileKey& l2);
+    Outcome<RailGeomTile> rail_geom(const TileKey& l2);
     Outcome<RoadSegmentsTile> road_segments(const TileKey& l2);
     Outcome<OsmTile> source_osm(const TileKey& l2);
     Outcome<RawTile> raw_tile(const std::string& layer, const TileKey& key);
@@ -231,6 +241,9 @@ public:
     // road_geom / road_segments / source_osm: `key` is the level-2 tile (a finer key is mapped to its level-2
     // ancestor, so L0 and L2 requests for the same area share one job).
     Ticket<RoadGeomTile> road_geom(const TileKey& l2, Priority priority);
+    // The decoded g2m.rail.geom tile (level 2; railway pieces owned by the tile). Failed at once when the release has no
+    // rail layer (LayerOptIn::rail off).
+    Ticket<RailGeomTile> rail_geom(const TileKey& l2, Priority priority);
     Ticket<RoadSegmentsTile> road_segments(const TileKey& l2, Priority priority);
     Ticket<OsmTile> source_osm(const TileKey& l2, Priority priority);
     // The decoded g2m.fields.geom tile (farm field polygons; level 2, a finer key maps to its ancestor). Failed at once
@@ -253,6 +266,7 @@ public:
     std::shared_ptr<const HeightTile> peek_height(const TileKey& key) const noexcept;
     std::shared_ptr<const TerrainClassTile> peek_terrain_class(const TileKey& key) const noexcept;
     std::shared_ptr<const RoadGeomTile> peek_road_geom(const TileKey& l2) const noexcept;
+    std::shared_ptr<const RailGeomTile> peek_rail_geom(const TileKey& l2) const noexcept;
     std::shared_ptr<const RoadSegmentsTile> peek_road_segments(const TileKey& l2) const noexcept;
     std::shared_ptr<const OsmTile> peek_source_osm(const TileKey& l2) const noexcept;
     std::shared_ptr<const FieldTile> peek_fields(const TileKey& l2) const noexcept;

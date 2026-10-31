@@ -185,6 +185,55 @@ bool half_station(const RoadReferenceLine& ref, std::int64_t h) noexcept {
     }
     return false;
 }
+// D65: a tunnel entry that is an open cut through an embankment - at most de.json's tunnel.cut_max_length_m long and
+// its floor a straight line (within 1 cm of the chord of its two end heights, which is what the completion's cut rule
+// serves): carved like a ground road, so the road runs through the bank instead of the ground standing over it.
+bool is_tunnel_cut(const RoadProfile& p, const CarveOptions& options, const TunnelRules& rules) {
+    const double length = p.reference.length_m;
+    if (!options.tunnel_cut || rules.cut_max_length_m <= 0 || !(length > 0) || length > static_cast<double>(rules.cut_max_length_m)) return false;
+    const auto a = p.at(0), b = p.at(length);
+    if (!a || !b) return false;
+    for (double s = 1.0; s < length; s += 1.0) {
+        const auto v = p.at(s);
+        if (!v) return false;
+        if (std::fabs(v->height_m - (a->height_m + (b->height_m - a->height_m) * s / length)) > 0.01) return false;
+    }
+    return true;
+}
+// D65: is the tunnel entry `e` crossed in plan by a ground road (neither bridge nor tunnel)? Such a road runs over the
+// tunnel (a motorway on its embankment over a service tunnel): the cut's lower core must not slot the road above it, and
+// the road above is what the terrain there is for, so that tunnel stays uncarved as before D65. Proper crossings of the
+// two reference lines only (a ground neighbour that ends at the tunnel's own end node does not count).
+bool crossed_by_ground_road(const RoadGeomTile& tile, std::size_t e) {
+    const auto polyline = [](const RoadReferenceLine& ref) {
+        std::vector<std::pair<double, double>> pts;
+        const double L = ref.length_m;
+        for (double s = 0; s < L; s += 2.0) { const auto q = ref.at(s); if (q) pts.emplace_back(q->x, q->y); }
+        const auto q = ref.at(L); if (q) pts.emplace_back(q->x, q->y);
+        return pts;
+    };
+    const auto mine = polyline(tile.entries[e].profile->reference);
+    if (mine.size() < 2) return false;
+    double x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18;
+    for (const auto& [x, y] : mine) { x0 = std::min(x0, x); y0 = std::min(y0, y); x1 = std::max(x1, x); y1 = std::max(y1, y); }
+    const auto side = [](double ax, double ay, double bx, double by, double cx, double cy) { return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax); };
+    for (std::size_t f = 0; f < tile.entries.size(); ++f) {
+        const RoadGeomEntry& other = tile.entries[f];
+        if (f == e || !other.profile || other.profile->attributes.tunnel || other.profile->attributes.bridge) continue;
+        const auto theirs = polyline(other.profile->reference);
+        for (std::size_t j = 0; j + 1 < theirs.size(); ++j) {
+            const auto [cx, cy] = theirs[j]; const auto [dx, dy] = theirs[j + 1];
+            if (std::max(cx, dx) < x0 - 1.0 || std::min(cx, dx) > x1 + 1.0 || std::max(cy, dy) < y0 - 1.0 || std::min(cy, dy) > y1 + 1.0) continue;
+            for (std::size_t i = 0; i + 1 < mine.size(); ++i) {
+                const auto [ax, ay] = mine[i]; const auto [bx, by] = mine[i + 1];
+                const double d1 = side(ax, ay, bx, by, cx, cy), d2 = side(ax, ay, bx, by, dx, dy);
+                const double d3 = side(cx, cy, dx, dy, ax, ay), d4 = side(cx, cy, dx, dy, bx, by);
+                if (d1 * d2 < 0 && d3 * d4 < 0) return true;
+            }
+        }
+    }
+    return false;
+}
 // The stations bracketing s in that set (equal when s is one).
 std::pair<double, double> station_bracket(const RoadReferenceLine& ref, double s) noexcept {
     const double L = ref.length_m;
@@ -487,7 +536,10 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
         const RoadGeomEntry& entry = m.kept.entries[e];
         if (!entry.profile || !entry.cross_section) continue;
         const RoadProfile& p = *entry.profile;
-        if (p.attributes.tunnel) { if (stats) ++stats->tunnel_entries; continue; }
+        if (p.attributes.tunnel && !(is_tunnel_cut(p, options, rules.tunnel) && !(options.tunnel_cut_crossing_check && crossed_by_ground_road(m.kept, e)))) {
+            if (stats) ++stats->tunnel_entries;
+            continue;
+        }
         const bool bridge = p.attributes.bridge;
         if (stats) ++(bridge ? stats->bridge_entries : stats->ground_entries);
         const RoadReferenceLine& ref = p.reference;
@@ -797,8 +849,8 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
                 double wall = 1.0;   // D59: fades the blend to the terrain over kUnderpassWallFadeM past a deck end plane
                 if (m.options.underpass_steep_walls) {
                     double past = 0.0;
-                    for (const Station::DeckPlane* q : {&a.deck_lo, &a.deck_hi})
-                        if (q->on) past = std::max(past, (x - q->x) * q->nx + (y - q->y) * q->ny);
+                    for (const Station::DeckPlane* plane : {&a.deck_lo, &a.deck_hi})
+                        if (plane->on) past = std::max(past, (x - plane->x) * plane->nx + (y - plane->y) * plane->ny);
                     if (past >= kUnderpassWallFadeM) continue;
                     if (past > 0.0) wall = 1.0 - road_smooth_step(past / kUnderpassWallFadeM);
                 }
@@ -1044,7 +1096,7 @@ LayerDesc terrain_carved_desc() {
 
 std::string terrain_carved_config_text() {
     const auto& sha = builtin_carve_default().content_sha256;
-    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 carve=" +
+    return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 tunnel-cut=D65/" + std::to_string(builtin_road_rules_de().tunnel.cut_max_length_m) + " carve=" +
         to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even";
 }
 
@@ -1084,7 +1136,7 @@ std::vector<CarveGeomInput> CarveL0Inputs::geom() const {
 Result<void> decode_carve_l0_inputs(const TileKey& target, std::span<const InputTile> inputs, CarveL0Inputs& out,
     std::string_view what_view) {
     const std::string what(what_view);
-    std::optional<VerticalDatum> datum;
+    std::optional<VerticalDatum> datum, known_datum;
     bool centre = false;
     std::size_t bytes = 0;
     for (const auto& in : inputs) {
@@ -1100,10 +1152,17 @@ Result<void> decode_carve_l0_inputs(const TileKey& target, std::span<const Input
             const std::int64_t dx = static_cast<std::int64_t>(in.ref.key.x) - target.x, dy = static_cast<std::int64_t>(in.ref.key.y) - target.y;
             if (dx < -1 || dx > 1 || dy < -1 || dy > 1 || in.ref.key.level != 0) return make_error(ErrorCode::Malformed, what + ": elev.base outside the window");
             const std::size_t slot = static_cast<std::size_t>((dy + 1) * 3 + (dx + 1));
-            if (in.header->datum != VerticalDatum::DHHN2016 && in.header->datum != VerticalDatum::EGM2008)
+            const VerticalDatum input_datum = in.header->datum;
+            if (input_datum != VerticalDatum::DHHN2016 && input_datum != VerticalDatum::EGM2008 &&
+                input_datum != VerticalDatum::Unspecified)
                 return make_error(ErrorCode::Unsupported, what + ": unknown elevation datum");
-            if (datum && *datum != in.header->datum) return make_error(ErrorCode::Malformed, what + ": mixed elevation datums");
-            datum = in.header->datum;
+            if (input_datum != VerticalDatum::Unspecified) {
+                if (known_datum && *known_datum != input_datum)
+                    return make_error(ErrorCode::Malformed, what + ": mixed elevation datums");
+                known_datum = input_datum;
+            }
+            if (!datum || input_datum == VerticalDatum::Unspecified)
+                datum = input_datum;
             if (auto ok = decode_height_tile(*body, in.ref.key, out.dem[slot]); !ok) return ok.error();
             for (auto& h : out.dem[slot].h) if (h != kHeightNoData) {
                 const auto adjusted = static_cast<std::int64_t>(h) + in.header->height_offset;
@@ -1120,10 +1179,22 @@ Result<void> decode_carve_l0_inputs(const TileKey& target, std::span<const Input
         }
     }
     if (!centre) return make_error(ErrorCode::NotFound, what + ": g2m.elev.base input missing");
-    // roads.geom heights are in the DEM's datum (or None for a tile without profiles).
-    for (const auto& in : inputs)
-        if (in.header && in.ref.layer == kRoadGeomLayer && in.header->datum != VerticalDatum::None && in.header->datum != *datum)
-            return make_error(ErrorCode::Malformed, what + ": roads.geom datum differs from the DEM");
+    // None marks geometry without height profiles; known references must agree.
+    for (const auto& in : inputs) {
+        if (!in.header || in.ref.layer != kRoadGeomLayer || in.header->datum == VerticalDatum::None)
+            continue;
+        const VerticalDatum road_datum = in.header->datum;
+        if (road_datum != VerticalDatum::DHHN2016 && road_datum != VerticalDatum::EGM2008 &&
+            road_datum != VerticalDatum::Unspecified)
+            return make_error(ErrorCode::Unsupported, what + ": unknown roads.geom datum");
+        if (road_datum != VerticalDatum::Unspecified) {
+            if (known_datum && *known_datum != road_datum)
+                return make_error(ErrorCode::Malformed, what + ": mixed known elevation datums");
+            known_datum = road_datum;
+        } else {
+            datum = VerticalDatum::Unspecified;
+        }
+    }
     out.datum = *datum;
     return {};
 }
@@ -1166,5 +1237,10 @@ Result<DeriveResult> TerrainCarvedDeriver::derive(const DeriveRequest& request) 
     auto encoded = encode_height_tile(*tile); if (!encoded) return encoded.error();
     auto body = encode_body(*encoded); if (!body) return body.error();
     return DeriveResult{std::move(*body), in.datum, 0};
+}
+
+bool tunnel_entry_is_carved(const RoadGeomTile& tile, std::size_t entry, const CarveOptions& options, const TunnelRules& rules) {
+    if (entry >= tile.entries.size() || !tile.entries[entry].profile || !tile.entries[entry].profile->attributes.tunnel) return false;
+    return is_tunnel_cut(*tile.entries[entry].profile, options, rules) && !(options.tunnel_cut_crossing_check && crossed_by_ground_road(tile, entry));
 }
 } // namespace g2m

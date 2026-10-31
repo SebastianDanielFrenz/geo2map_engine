@@ -261,7 +261,7 @@ TEST_CASE("junction gradient D42: the drivable junction surface stays within the
             "where 2 F_paved <= B %.4f; over the limit %zu (D22-D24 %zu)\n",
             tilted ? "tilted" : "flat", n.junctions, n.with_interior, n.worst, o.worst, kTol, n.meets_bound, o.meets_bound, kTol, n.impossible, n.blend_short,
             n.worst_allowed_interior, n.over, o.over);
-        CHECK(n.junctions > (tilted ? 15u : 60u));
+        CHECK(n.junctions > (tilted ? 15u : 50u));   // 50: the junctions at landed merge ramps are declined (G2M-028), 54 remain
         CHECK(n.over == 0);
         CHECK(n.worst_allowed_interior <= kTol);   // the brief's bound B + kTol where the data allow it
     }

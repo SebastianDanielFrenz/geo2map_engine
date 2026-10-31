@@ -52,8 +52,9 @@ constexpr ProductKind kKindRibbons = 7;
 constexpr ProductKind kKindBuildings = 8;
 constexpr ProductKind kKindWarm = 9;
 constexpr ProductKind kKindTerrainClass = 10;
-constexpr ProductKind kKindFields = 11;
-constexpr ProductKind kKindSoil = 12;
+constexpr ProductKind kKindRailGeom = 11;
+constexpr ProductKind kKindFields = 12;
+constexpr ProductKind kKindSoil = 13;
 constexpr ProductKind kFirstUserKind = 100;
 
 // Type identity used by the scheduler and the cache. hash_code() is equal for equal types in one
@@ -114,7 +115,7 @@ struct TerrainService::Impl {
         std::function<ErasedOutcome()> fn;
     };
 
-    explicit Impl(const TerrainServiceConfig& c) : cfg(c), cache(c.cache_bytes) {}
+    explicit Impl(const TerrainServiceConfig& c) : cfg(c), derivers(c.elevation_source), cache(c.cache_bytes) {}
 
     TerrainServiceConfig cfg;
     std::unique_ptr<TileStore> sources;
@@ -122,7 +123,7 @@ struct TerrainService::Impl {
     BuiltinTerrainDerivers derivers;
     std::optional<LocalSourceUpstream> upstream;
     std::unique_ptr<Server> server;
-    std::optional<InProcessTransport> transport;
+    std::shared_ptr<ITransport> transport;
     ReleaseManifest manifest;
     std::string rid_hex;
     std::unique_ptr<geo::SessionFrame> frame;
@@ -242,6 +243,20 @@ struct TerrainService::Impl {
                    }};
     }
 
+    Job job_rail_geom(const TileKey& l2) {
+        return Job{{kKindRailGeom, l2.packed(), 0}, &typeid(RailGeomTile), [this, l2]() -> ErasedOutcome {
+                       const std::string_view layer = kRailGeomLayer;
+                       const Fetched f = fetch_container(layer, l2);
+                       if (f.status != Status::Ok) return status_outcome(f, layer, l2);
+                       const Result<TileBody> body = open_body(f, layer, l2);
+                       if (!body.ok()) return failed(std::string(layer) + " " + to_string(l2) + ": " + body.error().message);
+                       Result<RailGeomTile> tile = decode_rail_geom(body.value(), l2);
+                       if (!tile.ok()) return failed(std::string(layer) + " " + to_string(l2) + ": " + tile.error().message);
+                       auto p = std::make_shared<const RailGeomTile>(std::move(tile.value()));
+                       return detail::erase<RailGeomTile>(Outcome<RailGeomTile>::ready(std::move(p), f.container.size() * 4 + 4096));
+                   }};
+    }
+
     Job job_fields(const TileKey& l2) {
         return Job{{kKindFields, l2.packed(), 0}, &typeid(FieldTile), [this, l2]() -> ErasedOutcome {
                        const std::string_view layer = kFieldsGeomLayer;
@@ -339,6 +354,9 @@ struct TerrainService::Impl {
 // ---------------------------------------------------------------------------------------------
 
 Outcome<HeightTile> ProductContext::height(const TileKey& key) { return svc_.impl_->join<HeightTile>(svc_.impl_->job_height(key)); }
+Outcome<RailGeomTile> ProductContext::rail_geom(const TileKey& l2) {
+    return svc_.impl_->join<RailGeomTile>(svc_.impl_->job_rail_geom(to_level2(l2)));
+}
 Outcome<RoadGeomTile> ProductContext::road_geom(const TileKey& l2) {
     return svc_.impl_->join<RoadGeomTile>(svc_.impl_->job_road_geom(to_level2(l2)));
 }
@@ -554,53 +572,92 @@ Result<std::unique_ptr<TerrainService>> TerrainService::open(const TerrainServic
     if (config.e0_m % 1000 != 0 || config.n0_m % 1000 != 0)
         return bad(ErrorCode::InvalidArgument, "e0_m/n0_m must be multiples of 1000 m");
     if (config.layers.geometry && !config.layers.roads) return bad(ErrorCode::InvalidArgument, "layers.geometry needs layers.roads");
-    if (config.stores.source_scope.empty()) return bad(ErrorCode::InvalidArgument, "stores.source_scope is empty");
+    if (bool(config.remote_transport) != bool(config.remote_manifest))
+        return bad(ErrorCode::InvalidArgument, "remote transport and manifest must be supplied together");
+    if (!config.remote_transport && config.stores.source_scope.empty()) return bad(ErrorCode::InvalidArgument, "stores.source_scope is empty");
 
+    if (!config.elevation_source.starts_with(kSrcElevPrefix) ||
+        !is_valid_layer_name(config.elevation_source) ||
+        config.elevation_source.substr(kSrcElevPrefix.size()).find('.') != std::string::npos)
+        return make_error(ErrorCode::InvalidArgument, "invalid elevation source layer");
     auto impl = std::make_unique<Impl>(config);
     Impl& m = *impl;
-
-    TileStoreConfig sc;
-    sc.dir = config.stores.source_dir;
-    sc.name = config.stores.source_name;
-    sc.read_only = config.stores.source_read_only;
-    auto sr = TileStore::open(sc);
-    if (!sr.ok()) return bad(sr.error().code, "source store \"" + sc.dir.string() + "\": " + sr.error().message);
-    m.sources = std::move(sr.value());
-
-    TileStoreConfig dc;
-    dc.dir = config.stores.derived_dir;
-    dc.name = config.stores.derived_name;
-    auto dr = TileStore::open(dc);
-    if (!dr.ok()) return bad(dr.error().code, "derived store \"" + dc.dir.string() + "\": " + dr.error().message);
-    m.derived = std::move(dr.value());
-
-    m.upstream.emplace(*m.sources);
 
     const bool carved = config.layers.carved;
     const bool classes = config.layers.classes;
     const bool fields = config.layers.fields;
     const bool soil = config.layers.soil;
-    const bool roads = config.layers.roads || carved || classes;
-    const bool geometry = config.layers.geometry || carved || classes;
-    LocalReleaseParams params =
-        builtin_local_release_params(config.stores.source_scope, m.derivers, config.attribution, roads, geometry, carved, classes, fields, soil);
-    params.world_seed = config.world_seed;
-    for (const IDeriver* d : config.extra_derivers) params.derivers.push_back(d);
-    auto manifest = make_local_release(*m.sources, params);
-    if (!manifest.ok()) return bad(manifest.error().code, "make_local_release: " + manifest.error().message);
-    m.manifest = std::move(manifest.value());
-    m.rid_hex = to_hex(m.manifest.rid);
+    if (config.remote_transport) {
+        if (!config.remote_manifest) return bad(ErrorCode::InvalidArgument, "remote transport needs a pinned manifest");
+        if (!config.extra_derivers.empty()) return bad(ErrorCode::InvalidArgument, "remote mode cannot use local derivers");
+        m.manifest = *config.remote_manifest;
+        m.rid_hex = to_hex(m.manifest.rid);
+        const auto needs = [&](bool enabled, const char* layer) {
+            return !enabled || m.manifest.find_layer(layer) != nullptr;
+        };
+        if (!needs(true, carved ? "g2m.terrain.carved" : "g2m.terrain.height") ||
+            !needs(config.layers.roads, "g2m.roads.graph") || !needs(config.layers.geometry, "g2m.roads.geom") ||
+            !needs(classes, "g2m.terrain.class") || !needs(config.layers.rail, "g2m.rail.geom") ||
+            !needs(fields, "g2m.fields.geom") || !needs(soil, "g2m.soil.grid"))
+            return bad(ErrorCode::InvalidArgument, "remote release lacks required terrain layers");
+        m.transport = config.remote_transport;
+    } else {
+        TileStoreConfig sc;
+        sc.dir = config.stores.source_dir;
+        sc.name = config.stores.source_name;
+        sc.read_only = config.stores.source_read_only;
+        auto sr = TileStore::open(sc);
+        if (!sr.ok()) return bad(sr.error().code, "source store \"" + sc.dir.string() + "\": " + sr.error().message);
+        m.sources = std::move(sr.value());
 
-    ServerConfig sv;
-    sv.server_id = "g2m.terrain_service";
-    sv.offline = true; // the only upstream is the local source store
-    sv.derived_store = m.derived.get();
-    sv.derivers = params.derivers;
-    sv.upstreams = {&*m.upstream};
-    m.server = std::make_unique<Server>(sv);
-    const Result<void> added = m.server->add_release(m.manifest, config.stores.source_scope);
-    if (!added.ok()) return bad(added.error().code, "add_release: " + added.error().message);
-    m.transport.emplace(*m.server);
+        TileStoreConfig dc;
+        dc.dir = config.stores.derived_dir;
+        dc.name = config.stores.derived_name;
+        auto dr = TileStore::open(dc);
+        if (!dr.ok()) return bad(dr.error().code, "derived store \"" + dc.dir.string() + "\": " + dr.error().message);
+        m.derived = std::move(dr.value());
+
+        m.upstream.emplace(*m.sources);
+
+        const bool roads = config.layers.roads || carved || classes;
+        const bool geometry = config.layers.geometry || carved || classes;
+        LocalReleaseParams params =
+            builtin_local_release_params(config.stores.source_scope, m.derivers, config.attribution, roads, geometry, carved, classes, config.layers.rail, fields, soil);
+        LayerRegistry source_registry = LayerRegistry::builtin();
+        if (config.elevation_source != kSrcElevDgm1Layer) {
+            auto registered = source_registry.add(make_raw_elev_layer(config.elevation_source.substr(kSrcElevPrefix.size())));
+            if (!registered) return bad(registered.error().code, registered.error().message);
+        }
+        // A scope can contain several imported elevation products. Register
+        // their raw descriptors even when this release selects another one.
+        auto source_index = m.sources->index(config.stores.source_scope);
+        if (!source_index) return bad(source_index.error().code, source_index.error().message);
+        for (const auto& entry : *source_index) {
+            if (entry.layer.starts_with(kSrcElevPrefix) && !source_registry.find(entry.layer)) {
+                auto registered = source_registry.add(make_raw_elev_layer(entry.layer.substr(kSrcElevPrefix.size())));
+                if (!registered) return bad(registered.error().code, registered.error().message);
+            }
+        }
+        params.registry = &source_registry;
+        params.world_seed = config.world_seed;
+        for (const IDeriver* d : config.extra_derivers) params.derivers.push_back(d);
+        auto manifest = make_local_release(*m.sources, params);
+        if (!manifest.ok()) return bad(manifest.error().code, "make_local_release: " + manifest.error().message);
+        m.manifest = std::move(manifest.value());
+        m.rid_hex = to_hex(m.manifest.rid);
+
+        ServerConfig sv;
+        sv.server_id = "g2m.terrain_service";
+        sv.offline = true; // the only upstream is the local source store
+        sv.derived_store = m.derived.get();
+        sv.derivers = params.derivers;
+        sv.upstreams = {&*m.upstream};
+        m.server = std::make_unique<Server>(sv);
+        const Result<void> added = m.server->add_release(m.manifest, config.stores.source_scope);
+        if (!added.ok()) return bad(added.error().code, "add_release: " + added.error().message);
+        m.transport = std::make_shared<InProcessTransport>(*m.server);
+
+    }
 
     m.frame = std::make_unique<geo::SessionFrame>(config.zone, config.e0_m, config.n0_m);
     m.height_layer = std::string(carved ? kTerrainCarvedLayer : kTerrainHeightLayer);
@@ -683,6 +740,11 @@ Ticket<TerrainClassTile> TerrainService::terrain_class(const TileKey& key, Prior
                                                         failed("g2m.terrain.class is not in the release (LayerOptIn::classes)"));
     return impl_->ticket<TerrainClassTile>(impl_->job_terrain_class(key), priority);
 }
+Ticket<RailGeomTile> TerrainService::rail_geom(const TileKey& l2, Priority priority) {
+    if (!has_layer(kRailGeomLayer))
+        return impl_->finished_ticket<RailGeomTile>({kKindRailGeom, to_level2(l2).packed(), 0}, failed("g2m.rail.geom is not in the release (LayerOptIn::rail)"));
+    return impl_->ticket<RailGeomTile>(impl_->job_rail_geom(to_level2(l2)), priority);
+}
 Ticket<RoadGeomTile> TerrainService::road_geom(const TileKey& l2, Priority priority) {
     return impl_->ticket<RoadGeomTile>(impl_->job_road_geom(to_level2(l2)), priority);
 }
@@ -760,6 +822,10 @@ std::shared_ptr<const HeightTile> TerrainService::peek_height(const TileKey& key
 std::shared_ptr<const TerrainClassTile> TerrainService::peek_terrain_class(const TileKey& key) const noexcept {
     return std::static_pointer_cast<const TerrainClassTile>(
         impl_->cache.peek({kKindTerrainClass, key.packed(), 0}, type_id(typeid(TerrainClassTile))));
+}
+std::shared_ptr<const RailGeomTile> TerrainService::peek_rail_geom(const TileKey& l2) const noexcept {
+    return std::static_pointer_cast<const RailGeomTile>(
+        impl_->cache.peek({kKindRailGeom, to_level2(l2).packed(), 0}, type_id(typeid(RailGeomTile))));
 }
 std::shared_ptr<const RoadGeomTile> TerrainService::peek_road_geom(const TileKey& l2) const noexcept {
     return std::static_pointer_cast<const RoadGeomTile>(

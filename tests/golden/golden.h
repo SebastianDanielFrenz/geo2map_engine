@@ -83,6 +83,10 @@ std::vector<Entry> compute_g3d();
 // with synthetic land cover - the four g3d tiles' planes and one level-1 tile; testdata/golden/g3c_golden.txt.
 std::vector<Entry> compute_g3c();
 
+// G3rail (golden_g3rail.cpp, railways R1/R2): the g2m.rail.geom tiles of the same fixtures on the same DEM - pieces, chain
+// anchoring, ground profile and codec bytes; testdata/golden/g3rail_golden.txt.
+std::vector<Entry> compute_g3rail();
+
 // G3f (golden_g3f.cpp, farm fields): g2m.fields.geom over the same two OSM fixtures, every level-2 tile with a field or a
 // decline (container bytes and record hash) plus per-fixture totals; testdata/golden/g3f_golden.txt.
 std::vector<Entry> compute_g3f();

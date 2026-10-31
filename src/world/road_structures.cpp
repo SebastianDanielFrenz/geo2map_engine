@@ -4,6 +4,7 @@
 #include "g2m/world/road_structures.h"
 
 #include "g2m/core/det_math.h"
+#include "g2m/layer/road_surface.h"
 
 #include <algorithm>
 #include <cmath>
@@ -34,8 +35,8 @@ int osm_layer(const RoadGraphWay& w) {
     return 0;
 }
 
-std::shared_ptr<const RoadDeck> deck(const RoadProfile& profile, std::int64_t id, std::uint32_t start_ref, double from, double to,
-                                     bool inferred) {
+std::shared_ptr<RoadDeck> deck(const RoadProfile& profile, std::int64_t id, std::uint32_t start_ref, double from, double to,
+                                     bool inferred, const std::optional<RoadCrossSection>& xs = {}) {
     if (to - from < .5 || to - from > 1000) return {};
     auto output = std::make_shared<RoadDeck>();
     output->way_id = id;
@@ -48,6 +49,7 @@ std::shared_ptr<const RoadDeck> deck(const RoadProfile& profile, std::int64_t id
     output->tunnel_floor = profile.attributes.tunnel;
     output->inferred = inferred;
     output->land_class = profile.attributes.land_class;
+    output->cross_section = xs;
     auto first = profile.reference.at(from);
     if (!first) return {};
     output->mesh.origin[0] = first->x;
@@ -67,12 +69,17 @@ std::shared_ptr<const RoadDeck> deck(const RoadProfile& profile, std::int64_t id
         // Five vertices across the carriageway give a rounded crown and identical geometry to collision, rather than
         // a visible-only slab.
         for (int j = 0; j < 5; ++j) {
-            const double offset = half * (j - 2) / 2;
-            const double camber = profile.attributes.crown_per_mille / 1000.0 * (det::sqrt(offset * offset + .25) - .5);
+            const auto f = xs ? carve_footprint(*xs, station) : CarveFootprint{};
+            const double offset = xs ? f.roadbed_right + (f.roadbed_left - f.roadbed_right) * j / 4 : half * (j - 2) / 2;
+            if(xs) output->half_width = std::max(output->half_width, std::max(std::abs(f.roadbed_left),std::abs(f.roadbed_right)));
+            const double crossfall = profile.attributes.crown_per_mille / 1000.0;
+            const double camber = xs ? road_crown_m(f.crown,crossfall,-f.crown_pivot,.5)-road_crown_m(f.crown,crossfall,offset-f.crown_pivot,.5)
+                                    : crossfall * (det::sqrt(offset * offset + .25) - .5);
             m.positions.insert(m.positions.end(), {static_cast<float>(xy->x + nx * offset - m.origin[0]),
                                                    static_cast<float>(xy->y + ny * offset - m.origin[1]),
                                                    static_cast<float>(z->height_m - camber)});
-            const double cross_grade = -profile.attributes.crown_per_mille / 1000.0 * offset / det::sqrt(offset * offset + .25);
+            const double cross_grade = xs ? (f.crown==CrownKind::OneSidedRight?crossfall:f.crown==CrownKind::OneSidedLeft?-crossfall:
+                -crossfall*std::clamp((offset-f.crown_pivot)/.5,-1.0,1.0)) : -crossfall * offset / det::sqrt(offset * offset + .25);
             double gx = z->grade * ch + cross_grade * nx, gy = z->grade * sh + cross_grade * ny;
             const double scale = 1 / det::sqrt(1 + gx * gx + gy * gy);
             m.normals.insert(m.normals.end(), {static_cast<float>(-gx * scale), static_cast<float>(-gy * scale), static_cast<float>(scale)});
@@ -146,13 +153,18 @@ void add_approach_decks(const RoadGeomTile& geometry, const RoadSeparation& sep,
         const auto& e = geometry.entries[i];
         if (!ground(e)) continue;
         const auto& p = *e.profile;
-        const double core = p.attributes.width_mm / 2000.0 + p.attributes.shoulder_mm / 1000.0;
         const int count = std::max(1, static_cast<int>(std::ceil(p.reference.length_m)));
         for (int k = 0; k <= count; ++k) {
             const double station = k == count ? p.reference.length_m : p.reference.length_m * k / count;
             auto xy = p.reference.at(station);
             auto z = p.at(station);
             if (!xy || !z) continue;
+            double core=p.attributes.width_mm/2000.0+p.attributes.shoulder_mm/1000.0;
+            if(e.cross_section) {
+                const auto f=carve_footprint(*e.cross_section,station);const double offset=(f.outer_left+f.outer_right)*.5;
+                core=(f.outer_left-f.outer_right)*.5;
+                xy->x-=det::sin(xy->heading)*offset;xy->y+=det::cos(xy->heading)*offset;
+            }
             bins[{bin(xy->x), bin(xy->y)}].push_back(samples.size());
             samples.push_back({xy->x, xy->y, z->height_m, core, i});
         }
@@ -166,7 +178,11 @@ void add_approach_decks(const RoadGeomTile& geometry, const RoadSeparation& sep,
         if (!w || e.stretch.end_ref >= w->node_ids.size()) continue;
         const auto& p = *e.profile;
         const double length = p.reference.length_m;
-        const double core = p.attributes.width_mm / 2000.0 + p.attributes.shoulder_mm / 1000.0, radius = core + reach_core + sep.margin_m;
+        double core=p.attributes.width_mm/2000.0+p.attributes.shoulder_mm/1000.0;
+        if(e.cross_section)for(double at:{0.0,length*.5,length}) {
+            const auto f=carve_footprint(*e.cross_section,at);core=std::max(core,(f.outer_left-f.outer_right)*.5);
+        }
+        const double radius = core + reach_core + sep.margin_m;
         for (int end = 0; end < 2; ++end) {
             if (!bridge_ends.contains(w->node_ids[end ? e.stretch.end_ref : e.stretch.start_ref])) continue;
             const int steps = static_cast<int>(std::floor(std::min(sep.approach_reach_m, length)));
@@ -176,6 +192,12 @@ void add_approach_decks(const RoadGeomTile& geometry, const RoadSeparation& sep,
                 auto xy = p.reference.at(station);
                 auto z = p.at(station);
                 if (!xy || !z) continue;
+                double station_core=core;
+                if(e.cross_section) {
+                    const auto f=carve_footprint(*e.cross_section,station);const double offset=(f.outer_left+f.outer_right)*.5;
+                    station_core=(f.outer_left-f.outer_right)*.5;
+                    xy->x-=det::sin(xy->heading)*offset;xy->y+=det::cos(xy->heading)*offset;
+                }
                 bool overlap = false;
                 for (int by = bin(xy->y - radius); by <= bin(xy->y + radius) && !overlap; ++by)
                     for (int bx = bin(xy->x - radius); bx <= bin(xy->x + radius) && !overlap; ++bx) {
@@ -185,7 +207,7 @@ void add_approach_decks(const RoadGeomTile& geometry, const RoadSeparation& sep,
                             const auto& s = samples[index];
                             if (s.entry == i) continue;
                             if (z->height_m - s.z <= sep.clearance_m) continue;
-                            if (det::hypot(xy->x - s.x, xy->y - s.y) <= core + s.core + sep.margin_m) {
+                            if (det::hypot(xy->x - s.x, xy->y - s.y) <= station_core + s.core + sep.margin_m) {
                                 overlap = true;
                                 break;
                             }
@@ -195,7 +217,7 @@ void add_approach_decks(const RoadGeomTile& geometry, const RoadSeparation& sep,
             }
             if (covered < 0) continue;
             const double reach = std::min(length, covered + 1.0); // the sample spacing: the overlap may lie up to 1 m beyond
-            if (auto d = end ? deck(p, e.way_id, e.stretch.start_ref, length - reach, length, true) : deck(p, e.way_id, e.stretch.start_ref, 0, reach, true))
+            if (auto d = end ? deck(p, e.way_id, e.stretch.start_ref, length - reach, length, true, e.cross_section) : deck(p, e.way_id, e.stretch.start_ref, 0, reach, true, e.cross_section))
                 result.push_back(std::move(d));
         }
     }
@@ -210,6 +232,10 @@ std::optional<double> road_deck_height(const RoadDeck& deck, double station, dou
     --it;
     auto pose = it->at(std::clamp(station, it->station_m, it->station_m + it->length_m));
     if (!pose) return {};
+    if(deck.cross_section) {
+        const auto f=carve_footprint(*deck.cross_section,station);
+        return pose->height_m+road_crown_m(f.crown,deck.crown,lateral-f.crown_pivot,.5)-road_crown_m(f.crown,deck.crown,-f.crown_pivot,.5);
+    }
     return pose->height_m - deck.crown * (det::sqrt(lateral * lateral + .25) - .5);
 }
 
@@ -217,7 +243,11 @@ std::vector<std::shared_ptr<const RoadDeck>> build_road_decks(const RoadGeomTile
     std::vector<std::shared_ptr<const RoadDeck>> result;
     for (const auto& entry : geometry.entries)
         if (entry.profile && (entry.profile->attributes.bridge || entry.profile->attributes.tunnel)) {
-            if (auto d = deck(*entry.profile, entry.way_id, entry.stretch.start_ref, 0, entry.profile->reference.length_m, false)) result.push_back(std::move(d));
+            if (auto d = deck(*entry.profile, entry.way_id, entry.stretch.start_ref, 0, entry.profile->reference.length_m, false, entry.cross_section)) {
+                if (const auto* way = find_way(geometry.source.graph, entry.way_id))
+                    d->appearance = build_bridge_visual(*d, bridge_facts(*way));
+                result.push_back(std::move(d));
+            }
         }
     // Underpass decks (roads.geom encoding 9, D56): the served span of a ground stretch over a lower road in a DEM
     // cutting, carrying the stretch's own (masked) profile; inferred like a roof.
@@ -225,7 +255,7 @@ std::vector<std::shared_ptr<const RoadDeck>> build_road_decks(const RoadGeomTile
         if (u.entry_index >= geometry.entries.size()) continue;
         const auto& entry = geometry.entries[u.entry_index];
         if (!entry.profile) continue;
-        if (auto d = deck(*entry.profile, entry.way_id, entry.stretch.start_ref, u.start_m, u.end_m, true)) result.push_back(std::move(d));
+        if (auto d = deck(*entry.profile, entry.way_id, entry.stretch.start_ref, u.start_m, u.end_m, true, entry.cross_section)) result.push_back(std::move(d));
     }
     const auto in_underpass = [&](std::size_t entry_index, double station) {
         for (const auto& u : geometry.underpasses)
@@ -266,7 +296,7 @@ std::vector<std::shared_ptr<const RoadDeck>> build_road_decks(const RoadGeomTile
                     // Preserve approach grade as well as height: a straight roof inserted into a sloping profile
                     // creates a wheel-impact kink.
                     upper_profile.vertical.segments = {{from, to - from, z0->height_m, z1->height_m, z0->grade, z1->grade}};
-                    if (auto d = deck(upper_profile, entry.way_id, entry.stretch.start_ref, from, to, true)) result.push_back(std::move(d));
+                    if (auto d = deck(upper_profile, entry.way_id, entry.stretch.start_ref, from, to, true, entry.cross_section)) result.push_back(std::move(d));
                 }
             }
         }

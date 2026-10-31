@@ -227,6 +227,7 @@ enum class JunctionDecline : std::uint16_t {
     SingleApproach = 3,   // fewer than two used approaches
     Degenerate = 4,       // even the hull fallback has < 3 non-collinear vertices
     Underground = 5,      // every approach is a tunnel
+    MergeLane = 6,        // a merge ramp lands on the node (JoinKind::Landing, G2M-028): no patch
 };
 struct RoadJunction {
     std::vector<std::int64_t> nodes;            // ascending OSM ids; nodes.front() is the owner node
@@ -2527,6 +2528,44 @@ phase 6).**
   section 10.2); `ViewStreamer::set_source` still rebuilds only on a road LOD key change, which is also what a class
   window needs, but swapping `class_lookup` for `terrain_classes` at runtime is not detected as a change (a consumer
   switches sources at load, not while streaming).
+
+**D63. A covered crossing at an OSM way boundary is supported by the boundary node, for both ways (the A 66 westbound
+join, racing_game brief `terrain-a66-boundary`).**
+- Defect: the A 66 westbound is split at node 3306247908 (degree two: way 313879319 ends, way 323855192 begins), on the
+  west rim of a ~5 m DEM cutting that a service-road tunnel (way 5436745, tunnel=yes, layer=-1) runs through just
+  before the node. Per stretch, D55 declined that crossing on way 313879319 (`reaches_end`: its span ran into the
+  stretch end), way 323855192 never saw it (no crossing of its own segments), and both took their shared end plane
+  from `junction_plane` at the cutting's edge: way 313879319 (completion) dipped 2.5 m below the rim, and way 323855192
+  (202.766 m) was declined outright ("estimated endpoint slope exceeds class bound").
+- Decision: the support is a pure function of the boundary NODE (`RoadUnderpassFinder::join`): exactly two incident
+  context edges of two different ground ways on one layer (no bridge, tunnel or D61 storey); a path along both node
+  polylines away from the node (p < 0 along the way of the first edge, p > 0 along the other); the D55 window h(k),
+  k = -W..W, centred on the node; the D55/D61 crossings of the path's segments within W of the node, each fitted
+  exactly as D55 steps 3-5 on that window (`fit_crossing`, shared with the stretch path, which keeps t = 0 and so its
+  arithmetic bit for bit); spans merged (step 6). A merged span whose extent widened by the end clearance contains the
+  node and one of whose rim chords spans it (inclusive: on the A 66 the node IS the west rim) REACHES the node: if it is covered (all lower ways tunnels, D61) it is the
+  support; if it is a deck, the node stays unsupported (decks still never cross a stretch end). The anchor plane is
+  the rim chord at the node (height, chord slope along the reference lines' shared-bisector heading, no cross slope).
+  Both stretches ending at the node take it as their end anchor in `build_road_profile` and in the completion's ground
+  step, BEFORE any endpoint grade check, mask the support span's part on their side with the same chord
+  (`RoadUnderpassStats::join_spans`) and hand their own crossing of a supported lower way to it (`joined`). Rims are
+  the measured DEM; no bound is loosened, no clearance removed, nothing levelled.
+- Inputs: the node's context (both ways complete: stage-1 stretch context), the lower ways crossing either way within W
+  of the node (`road_crossing_dependencies` now also adds the roads.graph tiles touching the 61 m square,
+  `kRoadUnderpassJoinMarginMm` = largest window 60 m + 1 m, around the first and last node of every tile way) and the
+  DEM within W + 3.5 m of the node (inside the 65 m DEM margin). So every tile holding either way computes the same
+  support.
+- Rejected: (a) dropping `reaches_end` for covered spans on the stretch alone: the next way still anchors in the
+  cutting and still declines; (b) a flat or 32 m inferred override at the node (as for bridge boundaries): not
+  measured, and the brief rules out flat-road overrides; (c) loosening the endpoint grade bound or clamping harder:
+  hides the cause and changes every steep join; (d) merging consecutive ways into one stretch: changes stretch
+  identity, entry ownership and every downstream consumer.
+- Config text: roads.geom `underpass-join=D63/61000`; the crossing dependency set grows by the end-node squares, so
+  release ids move. Tests `[d63]` in `tests/layer/test_road_underpass.cpp`: a synthetic covered cutting split 9 m past
+  the crossing, on the shoulder (before: way 100 declined, "estimated endpoint slope exceeds class bound"; after: both
+  ways profiled, equal height 100.191 m and grade 0.02002 at the node, within 0.003 m of the rim plane throughout), an
+  open lower road, a storey tunnel, a valley without a lower road and a measured slope (no support), tile invariance
+  across two tiles, and the end-node squares of the dependency set.
 
 ---
 

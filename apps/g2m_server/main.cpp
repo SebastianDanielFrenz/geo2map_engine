@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
     }
 
     g2m::BuiltinTerrainDerivers derivers;
-    g2m::LocalReleaseParams params = g2m::builtin_local_release_params(*scope, derivers, {}, roads, geometry, carved, /*include_classes=*/false, args.flag("fields"), args.flag("soil"));
+    g2m::LocalReleaseParams params = g2m::builtin_local_release_params(*scope, derivers, {}, roads, geometry, carved, /*include_classes=*/false, /*include_rail=*/false, args.flag("fields"), args.flag("soil"));
     params.world_seed = *world_seed;
     auto manifest = g2m::make_local_release(**sources, params);
     if (!manifest) {

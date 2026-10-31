@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace g2m {
@@ -39,6 +40,11 @@ enum TurnBit : std::uint16_t {
     kTurnSharpLeft = 1u << 4, kTurnRight = 1u << 5, kTurnSlightRight = 1u << 6, kTurnSharpRight = 1u << 7,
     kTurnReverse = 1u << 8, kTurnMergeToLeft = 1u << 9, kTurnMergeToRight = 1u << 10,
     kTurnDefinedMask = (1u << 11) - 1 };
+// One value token of turn:lanes (a single piece between ';', no '|'): its TurnBit. An empty token and "none" give
+// kTurnNone; nullopt = not an OSM value. The one token table: parse_turn of the cross-section resolver and the road
+// ribbons' turn arrows (g2m::world, road_ribbons.cpp) both read it, so what the resolver calls a merge the painter
+// draws as one.
+std::optional<std::uint16_t> parse_turn_token(std::string_view token);
 
 struct WidthRamp {                  // one end of a band
     std::int32_t length_mm = 0;     // 0 = no ramp at this end
@@ -84,7 +90,8 @@ struct OffsetCorrection {           // lateral shift c(s) added to the anchor po
 };
 
 enum class JoinKind : std::uint8_t { None = 0 /*junction or dead end*/, Consistent = 1, LaneChange = 2,
-                                     InferredAlignment = 3, PlacementConflict = 4 };
+                                     InferredAlignment = 3, PlacementConflict = 4,
+                                     Landing = 5 /* a merge / exit ramp's end, landed on the added lane of the single arm (G2M-028): neighbour = that way, raw_delta_mm = the landing offset */ };
 struct JoinRecord {
     JoinKind kind = JoinKind::None;
     std::int64_t neighbour_way_id = 0;   // 0 when kind == None

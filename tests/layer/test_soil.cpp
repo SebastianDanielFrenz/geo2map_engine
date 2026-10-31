@@ -620,11 +620,11 @@ TEST_CASE("Soil layer: server and parallel bake produce identical pinned contain
         REQUIRE((*sources)->put({"soil_test", lc.ref.layer, k}, *lc.header, lc.body, true));
     }
     BuiltinTerrainDerivers derivers;
-    const auto manifest = make_local_release(**sources, builtin_local_release_params("soil_test", derivers, {}, false, false, false, false, false, true));
+    const auto manifest = make_local_release(**sources, builtin_local_release_params("soil_test", derivers, {}, false, false, false, false, false, false, true));
     REQUIRE(manifest);
     LocalSourceUpstream upstream(**sources);
     ServerConfig config; config.offline = true; config.derived_store = live->get();
-    config.derivers = derivers.ordered(false, false, false, false, false, true); config.upstreams = {&upstream};
+    config.derivers = derivers.ordered(false, false, false, false, false, false, true); config.upstreams = {&upstream};
     Server server(config); REQUIRE(server.add_release(*manifest, "soil_test"));
     std::string release_hex;
     for (const int jobs : {1, 4}) {

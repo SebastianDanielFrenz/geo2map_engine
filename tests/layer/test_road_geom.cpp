@@ -75,11 +75,20 @@ TEST_CASE("roads.geom discovers complete DEM dependencies and applies offsets on
     const auto graph = source(); RoadGeomDeriver deriver;
     std::vector<InputTile> inputs{input(std::string(kRoadGraphLayer), graph.key, *encode_road_graph(graph))};
     const auto deps = deriver.additional_inputs_for({graph.key, 0, inputs}); REQUIRE(deps); REQUIRE_FALSE(deps->empty());
+    std::size_t graph_deps = 0;
     for (const auto& dep : *deps) {
+        if (dep.layer == kRoadGraphLayer) {
+            // D63: the roads.graph tiles of the 61 m squares around the ways' end nodes (here the three neighbours of the
+            // tile corner the nodes sit 10 m from); empty, as no other way is there.
+            ++graph_deps;
+            inputs.push_back(input(dep.layer, dep.key, *encode_road_graph(*select_road_graph_tile(RoadGraph{}, dep.key))));
+            continue;
+        }
         HeightTile t; t.key = dep.key; t.h.fill(25600);
         auto entry = input(dep.layer, dep.key, *encode_height_tile(t), VerticalDatum::DHHN2016);
         entry.header->height_offset = 256; inputs.push_back(std::move(entry));
     }
+    CHECK(graph_deps == 3);
     std::sort(inputs.begin(), inputs.end(), [](const auto& a, const auto& b) { return a.ref < b.ref; });
     const auto result = deriver.derive({graph.key, 0, inputs}); REQUIRE(result);
     CHECK(result->height_offset == 0); CHECK(result->datum == VerticalDatum::DHHN2016);
@@ -87,9 +96,28 @@ TEST_CASE("roads.geom discovers complete DEM dependencies and applies offsets on
     REQUIRE(decoded->entries[0].profile); CHECK(decoded->entries[0].profile->at(50)->height_m == 101);
     std::reverse(inputs.begin(), inputs.end()); const auto reversed = deriver.derive({graph.key, 0, inputs}); REQUIRE(reversed); CHECK(reversed->body == result->body);
     auto absent = inputs; absent.front().header.reset(); CHECK_FALSE(deriver.derive({graph.key, 0, absent}));
+    auto unspecified = inputs;
+    for (auto& in : unspecified) if (in.ref.layer == kElevBaseLayer) in.header->datum = VerticalDatum::Unspecified;
+    const auto unknown_datum = deriver.derive({graph.key, 0, unspecified}); REQUIRE(unknown_datum);
+    CHECK(unknown_datum->datum == VerticalDatum::Unspecified);
+    auto not_height = unspecified;
+    for (auto& in : not_height) if (in.ref.layer == kElevBaseLayer) { in.header->datum = VerticalDatum::None; break; }
+    CHECK_FALSE(deriver.derive({graph.key, 0, not_height}));
     auto conflict = inputs;
     for (auto& i : conflict) if (i.ref.layer == kElevBaseLayer) { i.header->datum = VerticalDatum::EGM2008; break; }
     CHECK_FALSE(deriver.derive({graph.key, 0, conflict}));
+    auto triad = inputs;
+    std::sort(triad.begin(), triad.end(), [](const auto& a, const auto& b) { return a.ref < b.ref; });
+    std::vector<std::size_t> elevation_indices;
+    for (std::size_t i = 0; i < triad.size(); ++i)
+        if (triad[i].ref.layer == kElevBaseLayer) elevation_indices.push_back(i);
+    REQUIRE(elevation_indices.size() >= 3);
+    for (const auto i : elevation_indices) triad[i].header->datum = VerticalDatum::Unspecified;
+    triad[elevation_indices.front()].header->datum = VerticalDatum::DHHN2016;
+    triad[elevation_indices.back()].header->datum = VerticalDatum::EGM2008;
+    CHECK_FALSE(deriver.derive({graph.key, 0, triad}));
+    std::reverse(triad.begin(), triad.end());
+    CHECK_FALSE(deriver.derive({graph.key, 0, triad}));
     CHECK(BuiltinTerrainDerivers{}.ordered().size() == 2);
     CHECK(BuiltinTerrainDerivers{}.ordered(false, true).size() == 4);
 }

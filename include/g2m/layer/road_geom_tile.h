@@ -6,9 +6,14 @@
 #include <optional>
 namespace g2m {
 inline constexpr std::string_view kRoadGeomLayer = "g2m.roads.geom";
+// Encoding 10 (merge lanes and exits, decision G2M-028): the byte layout of encoding 9. The value domains grew: JoinKind 5
+// (Landing) in the cross-section joins and JunctionDecline 6 (MergeLane) in section 5, so an encoding-9 decoder rejects
+// such a tile. The deriver writes 10.
+inline constexpr std::uint16_t kRoadGeomEncoding = 10;
 // Encoding 9 (underpass decks, decisions D53-D58): encoding 8 plus section 8, the underpass deck spans of ground
-// stretches over a lower road in a DEM cutting (RoadGeomTile::underpasses). The deriver writes 9.
-inline constexpr std::uint16_t kRoadGeomEncoding = 9;
+// stretches over a lower road in a DEM cutting (RoadGeomTile::underpasses). Still decoded, and written when
+// RoadGeomTile::encoding asks for it.
+inline constexpr std::uint16_t kRoadGeomEncodingUnderpass = 9;
 // Encoding 8 (terrain migration phase 4, decision D47): the byte layout of encoding 7, with provenance 4 (TunnelFloor)
 // allowed in section 7 and a profile on a tunnel stretch carrying it. Still decoded, and written when
 // RoadGeomTile::encoding asks for it (a tile without underpass decks).
@@ -23,6 +28,8 @@ inline constexpr std::uint16_t kRoadGeomEncodingJunctions = 7;
 inline constexpr std::uint16_t kRoadGeomEncodingPrevious = 6;
 // The previous body format (profiles only, no cross-sections); still decoded, never written.
 inline constexpr std::uint16_t kRoadGeomEncodingLegacy = 5;
+// The encodings that carry section 8 (the underpass decks): 9 and 10.
+inline constexpr bool has_underpass_section(std::uint16_t encoding) { return encoding == kRoadGeomEncoding || encoding == kRoadGeomEncodingUnderpass; }
 struct RoadGeomEntry {
     std::int64_t way_id = 0;
     RoadStretch stretch;
@@ -84,6 +91,10 @@ struct RoadCompletionOptions {
     double tunnel_max_grade = 0.30;
     double tunnel_min_radius_m = 20;
     double tunnel_chord_min_length_m = 0;
+    // D65: a tunnel shorter than tunnel_chord_min_length_m but at most tunnel_cut_max_length_m long whose DEM rises
+    // between tunnel_cut_hump_min_m and tunnel_cut_hump_max_m above its portal chord also takes the chord (an open cut
+    // through an embankment, the terrain carve cuts the bank); 0 = never. Served from de.json's tunnel block.
+    double tunnel_cut_max_length_m = 0, tunnel_cut_hump_min_m = 0, tunnel_cut_hump_max_m = 0;
     // D47: at a bridge end node the end plane of an accepted bridge stretch ending there (its height, its end grade
     // along its heading) takes precedence over the walk, as the game's anchor map does; the walk tries every incident
     // bridge edge in order, not only the first.
@@ -99,6 +110,9 @@ inline constexpr double kRoadCompletionMinTunnelRadiusM = 20;
 inline RoadCompletionOptions served_road_completion_options() {
     RoadCompletionOptions o; o.enabled = true;
     o.tunnel_chord_min_length_m = builtin_road_rules_de().tunnel.straight_grade_min_length_m;
+    o.tunnel_cut_max_length_m = builtin_road_rules_de().tunnel.cut_max_length_m;
+    o.tunnel_cut_hump_min_m = static_cast<double>(builtin_road_rules_de().tunnel.cut_hump_min_mm) / 1000.0;
+    o.tunnel_cut_hump_max_m = static_cast<double>(builtin_road_rules_de().tunnel.cut_hump_max_mm) / 1000.0;
     return o;
 }
 // What the completion tier did, per kind (design 6.6; diagnostics only, never stored).
@@ -109,7 +123,7 @@ struct RoadCompletionStats {
     std::size_t ground_bridge_anchored = 0;  // completed stretches with at least one end on a bridge abutment plane
     std::size_t ground_grades_eased = 0;     // completed only after easing both end grades toward the chord (D43)
     std::size_t ground_base_fallback = 0;    // completed on the base anchors after the accepted bridge planes left no cubic (D47)
-    std::size_t tunnel_candidates = 0, tunnel_completed = 0, tunnel_chord = 0, tunnel_failed = 0;
+    std::size_t tunnel_candidates = 0, tunnel_completed = 0, tunnel_chord = 0, tunnel_cut = 0, tunnel_failed = 0;
     std::size_t bridge_anchor_reused = 0;    // end nodes whose plane came from an accepted bridge stretch (D47), once per node
     std::size_t walk_other_side = 0;         // bridging nodes whose walk found support only away from a later bridge edge (D47)
     std::size_t strict_anchors = 0;          // bridging end nodes that took the strict pass's anchor (D30), once per node
@@ -147,7 +161,7 @@ struct RoadGeomTile {
     // (adjust_features_for_junctions), which only the owner tile holds, so a consumer applies them with the junctions
     // it has loaded. Sorted by (entry_index, station bits, node_id).
     std::vector<ProfileFeature> features;
-    // 9 for everything built with the underpass pass, else 8; 7, 6 or 5 for a decoded older body. 8 has no underpass
+    // 10 for everything built with the underpass pass, else 8; 9 for a decoded body without merge lanes; 7, 6 or 5 for a decoded older body. 8 has no underpass
     // decks; 7 has no tunnel floors; 6 has no junctions, furniture
     // or origins; 5 also no cross-sections or features (consumers fall back to the symmetric RoadAttributes::width_mm path).
     std::uint16_t encoding = kRoadGeomEncodingTunnels;

@@ -18,6 +18,8 @@ struct RoadReferenceLine {
     std::vector<RoadReferenceSegment> segments;
     std::vector<RoadReferenceAnchor> anchors; // endpoints and branching junctions
     bool curvature_exception = false;
+    // The chord bound (ReferenceFitLimits::chord_*) made the stretch unfittable, so it keeps its unbounded fit.
+    bool chord_bound_relaxed = false;
     double requested_min_radius_m = 0;
     double fitted_min_radius_m = 0; // certified bound, not a measured radius
     Result<geom::CurvePose> at(double station) const;
@@ -31,6 +33,14 @@ struct ReferenceFitLimits {
     std::size_t max_segments = 100000;
     double max_length_m = 100000;
     bool allow_curvature_exceptions = false; // bounded retries; corridor/budgets stay fixed
+    // Bound on how far a fitted clothoid may leave the OSM polyline (vault G2M-024). The clothoid of a knot pair takes
+    // its end headings from the neighbours (join bisectors, extrapolation) and may bow far from the chord the mapper
+    // drew; max_bow_m (32 m) only stops absurd cases. Per segment the curve may be at most
+    //   chord_half_width_factor * (half the way's resolved width) + chord_margin_m
+    // away from the chord (perpendicular distance to the segment), else the stretch takes the rounded straight/arc
+    // fallback. Both zero = no bound (the fitter's behaviour before G2M-024). Set from the road rules (reference block).
+    double chord_half_width_factor = 0;
+    double chord_margin_m = 0;
 };
 struct RoadStretch { std::uint32_t start_ref = 0, end_ref = 0; };
 // The single other way at a degree-two stretch end (a way join), as seen in the
@@ -43,6 +53,14 @@ struct RoadStretchJoin {
     std::uint32_t ref = 0;
     bool leaves_node = false;
     friend bool operator==(const RoadStretchJoin&, const RoadStretchJoin&) = default;
+};
+// One edge ending at a node, seen from the node: `ref` is the index of the node in the way's node_ids, `leaves_node`
+// whether the way's refs run away from the node (increasing index) or arrive at it.
+struct RoadNodeArm {
+    std::int64_t way_id = 0;
+    std::uint32_t ref = 0;
+    bool leaves_node = false;
+    friend bool operator==(const RoadNodeArm&, const RoadNodeArm&) = default;
 };
 struct RoadStretchFit { RoadStretch stretch; Result<RoadReferenceLine> reference; };
 // Fits a G1 chain through a complete way with shared bisector tangents.
@@ -71,6 +89,8 @@ public:
     Result<RoadReferenceLine> fit(std::int64_t way_id, const ReferenceFitLimits& limits = {}) const;
     // Edges ending at a node of the builder's graph (0 when the node is absent).
     std::uint32_t degree(std::int64_t node_id) const;
+    // The edges ending at a node of the builder's graph, in graph edge order (empty when the node is absent).
+    std::vector<RoadNodeArm> arms(std::int64_t node_id) const;
     // The neighbour way at a stretch end whose node has degree two and whose
     // second edge is not part of the stretch itself; nullopt at junctions, dead
     // ends and closed rings. `end` selects the stretch end (false = start).

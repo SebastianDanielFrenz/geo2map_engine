@@ -12,6 +12,7 @@ reject anything that breaks a rule stated here.
 | [src_osm.md](src_osm.md) | body encoding 3: `g2m.src.osm` columnar OSM | `g2m/layer/src_osm.h`, `osm_clip.h`, `osm_data.h` |
 | [road_graph.md](road_graph.md) | `g2m.roads.graph` encodings 4/5: complete road ways, node tags, edge ownership | `g2m/layer/road_graph_tile.h` |
 | [road_geom.md](road_geom.md) | `g2m.roads.geom` encoding 5: reference line, vertical profile, declines | `g2m/layer/road_geom_tile.h` |
+| [rail_geom.md](rail_geom.md) | `g2m.rail.geom` encoding 1: railway pieces with a line-based height profile, structure flags, track attributes | `g2m/layer/rail_geom_tile.h`, `rail_rules.h` |
 | [terrain_carved.md](terrain_carved.md) | `g2m.terrain.carved`: carved terrain pyramid on body encoding 1 (inputs, values, header) | `g2m/layer/terrain_carve.h` |
 | [terrain_class.md](terrain_class.md) | `g2m.terrain.class`: surface classification pyramid, body encoding 7 (257 × 257 nodes, four planes) | `g2m/layer/terrain_class.h` |
 | [fields_geom.md](fields_geom.md) | `g2m.fields.geom`: farm field polygons (OSM blocks cut along tracks, water, hedges), encoding 10 | `g2m/layer/field_tile.h` |

@@ -900,11 +900,11 @@ TEST_CASE("Field layer: server and parallel bake produce identical pinned contai
         REQUIRE((*sources)->put({"fields_test", source.ref.layer, k}, *source.header, source.body, true));
     }
     BuiltinTerrainDerivers derivers;
-    const auto manifest = make_local_release(**sources, builtin_local_release_params("fields_test", derivers, {}, false, false, false, false, true));
+    const auto manifest = make_local_release(**sources, builtin_local_release_params("fields_test", derivers, {}, false, false, false, false, false, true));
     REQUIRE(manifest);
     LocalSourceUpstream upstream(**sources);
     ServerConfig config; config.offline = true; config.derived_store = live->get();
-    config.derivers = derivers.ordered(false, false, false, false, true); config.upstreams = {&upstream};
+    config.derivers = derivers.ordered(false, false, false, false, false, true); config.upstreams = {&upstream};
     Server server(config); REQUIRE(server.add_release(*manifest, "fields_test"));
     import::BakeOptions options; options.layers = {std::string(kFieldsGeomLayer)};
     options.min_level = options.max_level = 2; options.jobs = 4; options.pin = true;

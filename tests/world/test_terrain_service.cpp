@@ -12,6 +12,7 @@
 #include "soil_world.h"
 
 #include "g2m/core/hash.h"
+#include "g2m/layer/rail_geom_tile.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/src_elev.h"
 #include "g2m/layer/src_osm.h"
@@ -139,7 +140,7 @@ struct World {
     TempDir dir;
     std::filesystem::path sources_dir() const { return dir.path() / "sources"; }
 
-    explicit World(bool with_field = false, bool with_soil = false) {
+    explicit World(bool with_field = false, bool with_soil = false, bool rail = false) {
         auto sources = TileStore::open({sources_dir(), "tiles"});
         REQUIRE(sources);
         const geo::Utm utm(geo::kGRS80);
@@ -172,6 +173,17 @@ struct World {
                         builder.add_node(++id, static_cast<std::int32_t>(std::llround(p.lat * 1e7)), static_cast<std::int32_t>(std::llround(p.lon * 1e7)));
                     }
                     builder.add_way(9101, {id - 1, id}, {{"highway", "track"}});
+                }
+                if (rail && x == 0 && y == 0) {
+                    // Railways R1/R2: a ground way, a bridge and a ground way in a row, 300 m north of the road.
+                    std::int64_t nid = 50000;
+                    for (const double dx : {100.0, 250.0, 400.0, 460.0, 520.0, 700.0, 880.0}) {
+                        const auto p = utm.reverse(kZone, x * 1024.0 + dx, north + 290);
+                        builder.add_node(nid++, static_cast<std::int32_t>(std::llround(p.lat * 1e7)), static_cast<std::int32_t>(std::llround(p.lon * 1e7)));
+                    }
+                    builder.add_way(60001, {50000, 50001, 50002}, {{"railway", "rail"}});
+                    builder.add_way(60002, {50002, 50003, 50004}, {{"bridge", "yes"}, {"layer", "1"}, {"railway", "rail"}});
+                    builder.add_way(60003, {50004, 50005, 50006}, {{"railway", "rail"}});
                 }
                 const auto data = builder.build();
                 REQUIRE(data);
@@ -1102,4 +1114,94 @@ TEST_CASE("service: soil grid ticket, peek, point queries and field aggregates",
     far.bbox = ring_bbox(far.polygon.outer); far.anchor.x += 5 * 1024 * 1000;
     const SoilFieldSummary missing = svc->field_soil(far);
     CHECK(missing.missing == missing.samples); CHECK(missing.valid == 0);
+}
+
+TEST_CASE("service: g2m.rail.geom is opt-in, served end to end and independent of the worker count", "[world][terrain_service][rail]") {
+    World w(false, false, true);
+    // Not opted in: no layer, the ticket fails with the reason, the release id is the one without it.
+    auto plain = w.open("derived_plain");
+    CHECK_FALSE(plain->has_layer(kRailGeomLayer));
+    auto refused = plain->rail_geom(l2(0, 0), Priority::Render);
+    REQUIRE(refused.wait_for(kLong));
+    CHECK(refused.state() == TileState::Failed);
+    CHECK(refused.message().find("LayerOptIn::rail") != std::string::npos);
+
+    TerrainServiceConfig c1 = w.config("derived_rail1", 1);
+    c1.layers.rail = true;
+    auto one = w.open(c1);
+    CHECK(one->has_layer(kRailGeomLayer));
+    CHECK(one->release_id() != plain->release_id());
+    // Existing releases are untouched by the new layer: the plain id equals the manifest built without the rail flag.
+    BuiltinTerrainDerivers derivers;
+    auto sources = TileStore::open({w.sources_dir(), "tiles"});
+    REQUIRE(sources);
+    auto manifest = make_local_release(**sources, builtin_local_release_params(kScope, derivers, {}, true, true));
+    REQUIRE(manifest);
+    CHECK(plain->release_id() == manifest->rid);
+    auto manifest_rail = make_local_release(**sources, builtin_local_release_params(kScope, derivers, {}, true, true, false, false, true));
+    REQUIRE(manifest_rail);
+    CHECK(one->release_id() == manifest_rail->rid);
+
+    auto ticket = one->rail_geom(l2(0, 0), Priority::Render);
+    REQUIRE(ticket.wait_for(kLong));
+    REQUIRE(ticket.state() == TileState::Ready);
+    const auto tile = ticket.value();
+    REQUIRE(tile);
+    REQUIRE(tile->pieces.size() == 3);
+    CHECK(tile->pieces[0].way_id == 60001); CHECK(tile->pieces[0].flags == 0);
+    CHECK(tile->pieces[1].way_id == 60002); CHECK(tile->pieces[1].flags == kRailBridge); CHECK(tile->pieces[1].layer == 1);
+    CHECK(tile->pieces[2].way_id == 60003);
+    for (const auto& piece : tile->pieces) {
+        CHECK_FALSE((piece.flags & kRailDeclined));
+        for (const auto z : piece.z) CHECK(std::abs(z - 25600) <= 1);   // the flat 100 m DEM, bridge included
+    }
+    CHECK(one->peek_rail_geom(l2(0, 0)) == tile);
+    // The tile is owned by the tile of the first vertex only: a neighbour has no pieces.
+    auto neighbour = one->rail_geom(l2(1, 0), Priority::Render);
+    REQUIRE(neighbour.wait_for(kLong));
+    REQUIRE(neighbour.state() == TileState::Ready);
+    CHECK(neighbour.value()->pieces.empty());
+
+    // 1 worker vs 4 workers: the same bytes.
+    TerrainServiceConfig c4 = w.config("derived_rail4", 4);
+    c4.layers.rail = true;
+    auto four = w.open(c4);
+    CHECK(four->release_id() == one->release_id());
+    auto other = four->rail_geom(l2(0, 0), Priority::Render);
+    REQUIRE(other.wait_for(kLong));
+    REQUIRE(other.state() == TileState::Ready);
+    CHECK(*other.value() == *tile);
+    const auto bytes_one = one->raw_tile(std::string(kRailGeomLayer), l2(0, 0), Priority::Render);
+    const auto bytes_four = four->raw_tile(std::string(kRailGeomLayer), l2(0, 0), Priority::Render);
+    REQUIRE(bytes_one.wait_for(kLong)); REQUIRE(bytes_four.wait_for(kLong));
+    REQUIRE(bytes_one.state() == TileState::Ready); REQUIRE(bytes_four.state() == TileState::Ready);
+    CHECK(bytes_one.value()->header.body_hash == bytes_four.value()->header.body_hash);
+    CHECK(bytes_one.value()->container == bytes_four.value()->container);
+}
+
+TEST_CASE("service: explicitly imported global elevation serves heights and preserves its datum", "[world][geographic_source]") {
+    World w;
+    {
+        auto store = TileStore::open({w.sources_dir(), "tiles"}); REQUIRE(store);
+        ElevTile tile{*tile_georef(l2(0,0),1024,SampleRegistration::Cell,RowOrder::NorthToSouth),HeightRaster(1024,1024,112*256)};
+        auto raw = input_tile("g2m.src.elev.glo30",l2(0,0),*encode_src_elev(tile),VerticalDatum::EGM2008);
+        REQUIRE((*store)->put({kScope,raw.ref.layer,raw.ref.key},*raw.header,raw.body,true));
+    }
+    auto c = w.config("global");c.elevation_source="g2m.src.elev.glo30";
+    c.layers.roads=false;c.layers.geometry=false;
+    auto service=w.open(c);
+    for(int level : {0,1,2}) {
+        TileKey target{kZone,level,0,0};
+        auto height=service->height(target,Priority::Physics);REQUIRE(height.wait_for(kLong));
+        INFO(height.message());REQUIRE(height.value());
+        REQUIRE(height.value()->h[0]==112*256);
+        auto raw=service->raw_tile("g2m.terrain.height",target,Priority::Physics);
+        REQUIRE(raw.wait_for(kLong));REQUIRE(raw.value());
+        REQUIRE(raw.value()->header.datum==VerticalDatum::EGM2008);
+    }
+    auto original=w.open("original");
+    auto old=original->height(l0(0,0),Priority::Physics);REQUIRE(old.wait_for(kLong));REQUIRE(old.value());
+    REQUIRE(old.value()->h[0]==100*256);
+    REQUIRE(service->release_id()!=original->release_id());
+    c.elevation_source="g2m.src.osm";REQUIRE_FALSE(TerrainService::open(c));
 }

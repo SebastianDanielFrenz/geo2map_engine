@@ -203,6 +203,7 @@ struct JoinOutcome {
     std::int32_t delta = 0;
     JoinKind kind = JoinKind::Consistent;
     std::int32_t corr_u = 0, corr_d = 0;
+    bool split = false;   // the sides' direction groups do not match (section 4.7)
 };
 
 std::int32_t floor_div2(std::int32_t v) { return v >= 0 ? v / 2 : -((-v + 1) / 2); }
@@ -261,6 +262,7 @@ JoinOutcome resolve_join(const Side& U, const Side& D, const RoadRules& rules) {
     }
     if (plan.split) match_outer(U, D, plan);
     evaluate_widths(U, D, plan, out.u, out.d);
+    out.split = plan.split;
     out.delta = residual(U, D, plan, out.u, out.d);
 
     const int prio_u0 = U.xs.anchor.source == PlacementSource::Transition ? 0 : U.xs.anchor.source == PlacementSource::Absent ? 1 : 2;
@@ -310,6 +312,147 @@ const RoadGraphWay* find_way(const RoadGraph& g, std::int64_t id) {
     return it != g.ways.end() && it->osm_id == id ? &*it : nullptr;
 }
 
+// ---- Merge lanes and lane drops at a node of degree three (vault G2M-028) ----
+//
+// A one-way link that meets two one-way carriageways at a node, where the carriageway on the other side has exactly the
+// link's counted lanes more than the through arm on the link's side, models a parallel lane (Einfaedelungs- or
+// Ausfaedelungsstreifen): the two carriageways (the through arm T and the single arm S) join like at a degree-two node
+// (a lane-add / lane-drop join, the width ramp of the added lane from the class taper), and the link R lands on the
+// centre line of the added lanes instead of the way line. The classification reads the three ways' tags, the node
+// positions and the rules only, and is symmetric in the three arms, so each of the three stretches, derived in any
+// tile, reaches the same verdict.
+struct MergeNode {
+    bool merge = true;                       // false: a diverge (a lane drop with an exit)
+    std::int64_t through_id = 0, single_id = 0, ramp_id = 0;
+    bool through_leaves = false, single_leaves = false; // direction of each arm at the node
+    std::int32_t landing_mm = 0;             // the ramp's offset at its node end (its own frame, + = left)
+    std::int32_t landing_length_mm = 0;
+};
+
+const RoadGraphNode* find_node(const RoadGraph& g, std::int64_t id) {
+    const auto it = std::lower_bound(g.nodes.begin(), g.nodes.end(), id, [](const RoadGraphNode& n, std::int64_t v) { return n.osm_id < v; });
+    return it != g.nodes.end() && it->osm_id == id ? &*it : nullptr;
+}
+
+struct NodeArm {
+    RoadNodeArm arm;
+    const RoadGraphWay* way = nullptr;
+    const RoadClassRules* cls = nullptr;
+    RoadCrossSection xs;
+    int counted = 0;
+    double fx = 0, fy = 0;     // from the node to a point of the way at least direction_probe_m away (metres, UTM)
+    double dx = 0, dy = 0;     // unit travel direction at the node
+};
+
+bool make_arm(const RoadReferenceBuilder& builder, const RoadRules& rules, const RoadNodeArm& arm, const RoadGraphNode& node, NodeArm& out) {
+    const RoadGraph& g = builder.graph();
+    out.arm = arm;
+    out.way = find_way(g, arm.way_id);
+    if (!out.way) return false;
+    out.cls = rules.find_class(highway_of(*out.way));
+    if (!out.cls) return false;
+    auto base = resolve_cross_section_base(*out.way, rules);
+    if (!base || !base->xs) return false;
+    out.xs = std::move(*base->xs);
+    if (!(out.xs.flags & kXsOneway) || (out.xs.flags & kXsReversedOneway)) return false;   // a one-way carriageway driven along its refs
+    for (const auto& b : out.xs.bands) if (b.counted) out.counted += 1;
+    if (out.counted < 1) return false;
+    // The point at least direction_probe_m away along the way (the last node if the way ends sooner).
+    const double probe = static_cast<double>(rules.merge_lane.direction_probe_m);
+    const std::ptrdiff_t step = arm.leaves_node ? 1 : -1;
+    std::optional<geom::PointMm> far;
+    for (auto k = static_cast<std::ptrdiff_t>(arm.ref) + step; k >= 0 && k < static_cast<std::ptrdiff_t>(out.way->node_ids.size()); k += step) {
+        const auto* n = find_node(g, out.way->node_ids[static_cast<std::size_t>(k)]);
+        if (!n) return false;
+        if (n->position == node.position) continue;
+        far = n->position;
+        const double fx = static_cast<double>(far->x - node.position.x) / 1000.0, fy = static_cast<double>(far->y - node.position.y) / 1000.0;
+        if (std::sqrt(fx * fx + fy * fy) >= probe) break;
+    }
+    if (!far) return false;
+    out.fx = static_cast<double>(far->x - node.position.x) / 1000.0;
+    out.fy = static_cast<double>(far->y - node.position.y) / 1000.0;
+    const double len = std::sqrt(out.fx * out.fx + out.fy * out.fy);
+    if (!(len > 0)) return false;
+    out.dx = (arm.leaves_node ? out.fx : -out.fx) / len;
+    out.dy = (arm.leaves_node ? out.fy : -out.fy) / len;
+    return true;
+}
+
+double angle_deg(double cos_angle) { return det::acos(std::clamp(cos_angle, -1.0, 1.0)) * 180.0 / det::kPi; }
+
+std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules) {
+    const MergeLaneRules& ml = rules.merge_lane;
+    if (!ml.enabled) return {};
+    auto arms = builder.arms(node_id);
+    if (arms.size() != 3) return {};
+    std::sort(arms.begin(), arms.end(), [](const RoadNodeArm& a, const RoadNodeArm& b) { return a.way_id != b.way_id ? a.way_id < b.way_id : a.ref < b.ref; });
+    if (arms[0].way_id == arms[1].way_id || arms[1].way_id == arms[2].way_id) return {};   // a way passing through is no merge lane
+    const RoadGraphNode* node = find_node(builder.graph(), node_id);
+    if (!node) return {};
+    std::array<NodeArm, 3> a;
+    for (std::size_t i = 0; i < 3; ++i) if (!make_arm(builder, rules, arms[i], *node, a[i])) return {};
+    const int leaving = static_cast<int>(a[0].arm.leaves_node) + static_cast<int>(a[1].arm.leaves_node) + static_cast<int>(a[2].arm.leaves_node);
+    if (leaving != 1 && leaving != 2) return {};
+    MergeNode out;
+    out.merge = leaving == 1;                  // one arm leaves: two roads merge
+    // The single arm is the one alone in its direction.
+    std::size_t si = 0;
+    for (std::size_t i = 0; i < 3; ++i) if (a[i].arm.leaves_node == out.merge) si = i;
+    const std::size_t xi = (si + 1) % 3, yi = (si + 2) % 3;
+    const NodeArm& S = a[si];
+    const double cos_x = a[xi].dx * S.dx + a[xi].dy * S.dy, cos_y = a[yi].dx * S.dx + a[yi].dy * S.dy;
+    const bool x_through = cos_x > cos_y || (cos_x == cos_y && a[xi].arm.way_id < a[yi].arm.way_id);
+    const NodeArm& T = x_through ? a[xi] : a[yi];
+    const NodeArm& R = x_through ? a[yi] : a[xi];
+    if (angle_deg(x_through ? cos_x : cos_y) > static_cast<double>(ml.max_through_deflection_deg)) return {};
+    if (angle_deg(R.dx * S.dx + R.dy * S.dy) > static_cast<double>(ml.max_ramp_angle_deg)) return {};
+    const auto hw = highway_of(*R.way);
+    if (hw.size() < 5 || hw.substr(hw.size() - 5) != "_link") return {};
+    if (S.counted != T.counted + R.counted) return {};
+    // The ramp's side of the carriageway: the left normal of S's travel direction against the ramp's far point.
+    const bool ramp_right = R.fx * -S.dy + R.fy * S.dx < 0;
+    // The through pair as a join in travel order: upstream = the arriving one.
+    const NodeArm& upstream = out.merge ? T : S;
+    const NodeArm& downstream = out.merge ? S : T;
+    const Side U = make_side(upstream.xs, upstream.cls, upstream.arm.way_id), D = make_side(downstream.xs, downstream.cls, downstream.arm.way_id);
+    const JoinOutcome join = resolve_join(U, D, rules);
+    if (join.split) return {};
+    // The added lanes: the counted bands of the single arm that meet no band of the through arm (join width 0).
+    const Side& wide = out.merge ? D : U;
+    const SideEval& wide_eval = out.merge ? join.d : join.u;
+    int first_added = -1, last_added = -1, added = 0;
+    for (int i = wide.first_counted; i <= wide.last_counted; ++i) {
+        if (!wide.xs.bands[static_cast<std::size_t>(i)].counted || wide_eval.jw[static_cast<std::size_t>(i)] != 0) continue;
+        if (first_added < 0) first_added = i;
+        last_added = i;
+        ++added;
+    }
+    if (added != R.counted || last_added - first_added + 1 != added) return {};   // one contiguous group, the ramp's lanes
+    // ... on the ramp's side: no matched counted band beyond it.
+    for (int i = wide.first_counted; i <= wide.last_counted; ++i) {
+        if (!wide.xs.bands[static_cast<std::size_t>(i)].counted || (i >= first_added && i <= last_added)) continue;
+        if (ramp_right ? i > first_added : i < last_added) return {};
+    }
+    // The centre line of the added lanes seen from the single arm's way line, with the join's own correction of that arm.
+    std::array<double, 33> edge{};
+    if (wide.xs.bands.size() > 32 || !wide.xs.boundaries_at(0.0, std::span<double>(edge.data(), wide.xs.bands.size() + 1))) return {};
+    const double centre_m = (edge[static_cast<std::size_t>(first_added)] + edge[static_cast<std::size_t>(last_added) + 1]) / 2;
+    const std::int32_t correction = out.merge ? join.corr_d : join.corr_u;
+    const double target_mm = std::round(centre_m * 1000.0) + static_cast<double>(correction);
+    const double cos_phi = R.dx * S.dx + R.dy * S.dy;
+    if (!(cos_phi > 0)) return {};
+    const double landing = std::round(target_mm / cos_phi);
+    if (std::fabs(landing) > static_cast<double>(ml.max_landing_offset_mm)) return {};
+    out.through_id = T.arm.way_id; out.single_id = S.arm.way_id; out.ramp_id = R.arm.way_id;
+    out.through_leaves = T.arm.leaves_node; out.single_leaves = S.arm.leaves_node;
+    out.landing_mm = static_cast<std::int32_t>(landing);
+    const std::int64_t length = std::clamp<std::int64_t>(static_cast<std::int64_t>(ml.landing_m_per_m) * std::abs(out.landing_mm),
+        static_cast<std::int64_t>(ml.landing_min_m) * 1000, static_cast<std::int64_t>(ml.landing_max_m) * 1000);
+    out.landing_length_mm = static_cast<std::int32_t>(out.landing_mm == 0 ? 0 : length);
+    return out;
+}
+
 struct EndResult {
     bool present = false;
     std::vector<WidthRamp> ramps;    // per band of A (A's frame)
@@ -339,10 +482,25 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
     const std::size_t n = xs.bands.size();
 
     std::array<EndResult, 2> ends; // 0 = start, 1 = end
+    std::array<std::int32_t, 2> landing{0, 0}, landing_length{0, 0};   // the end of a merge ramp (G2M-028)
+    std::array<std::int64_t, 2> landing_single{0, 0};                    // ... and the single arm it lands beside
     for (int e = 0; e < 2; ++e) {
         const bool at_end = e == 1;
-        const auto join = builder.join(way_id, stretch, at_end);
+        auto join = builder.join(way_id, stretch, at_end);
         if (!join) return join.error();
+        if (!*join && rules.merge_lane.enabled) {
+            // A node of degree three: the through pair of a merge lane / lane drop joins like a degree-two node, the ramp lands.
+            const auto node = way->node_ids[at_end ? stretch.end_ref : stretch.start_ref];
+            if (const auto merge = classify_merge_node(builder, node, rules)) {
+                if (merge->through_id == way_id) join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->single_id, 0, merge->single_leaves}};
+                else if (merge->single_id == way_id) join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->through_id, 0, merge->through_leaves}};
+                else if (merge->ramp_id == way_id) {
+                    landing[static_cast<std::size_t>(e)] = merge->landing_mm;
+                    landing_length[static_cast<std::size_t>(e)] = merge->landing_length_mm;
+                    landing_single[static_cast<std::size_t>(e)] = merge->single_id;
+                }
+            }
+        }
         if (!*join) continue;
         const auto* other = find_way(graph, (*join)->way_id);
         if (!other) continue;
@@ -392,6 +550,17 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
         } else {
             xs.offset = {OffsetMode::Ramps, c0, c0 != 0 ? shift_len(c0) : 0, c1, c1 != 0 ? shift_len(c1) : 0};
         }
+    }
+
+    // A merge ramp's landing (G2M-028): the end of the link shifts to the centre line of the added lane over its own ramp. It
+    // fills a free end of the ramp offsets; a hold or transition offset (a whole stretch shifted) keeps its own.
+    for (int e = 0; e < 2; ++e) {
+        const auto k = static_cast<std::size_t>(e);
+        if (landing[k] == 0 || landing_length[k] <= 0) continue;
+        if (xs.offset.mode == OffsetMode::None) xs.offset = {OffsetMode::Ramps, 0, 0, 0, 0};
+        if (xs.offset.mode != OffsetMode::Ramps) continue;
+        if (e == 0 && xs.offset.start_mm == 0) { xs.offset.start_mm = landing[0]; xs.offset.start_length_mm = landing_length[0]; ends[0].present = true; ends[0].record = {JoinKind::Landing, landing_single[0], landing[0]}; }
+        if (e == 1 && xs.offset.end_mm == 0) { xs.offset.end_mm = landing[1]; xs.offset.end_length_mm = landing_length[1]; ends[1].present = true; ends[1].record = {JoinKind::Landing, landing_single[1], landing[1]}; }
     }
 
     // Band ramps (4.2) and exactness clipping (4.5).
