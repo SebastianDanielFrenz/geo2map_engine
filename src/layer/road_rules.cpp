@@ -123,6 +123,31 @@ bool read_tunnel_rules(Reader& rd, const json& root, TunnelRules& out) {
            (out.cut_hump_min_mm <= out.cut_hump_max_mm || rd.fail("tunnel: cut_hump_min_mm exceeds cut_hump_max_mm"));
 }
 
+bool read_structure_rules(Reader& rd, const json& root, StructureRules& out) {
+    const auto* s = rd.field(root, "root", "structure");
+    static constexpr const char* kPath = "structure";
+    static constexpr const char* kClasses[kStructureClassCount] = {"road", "rail", "subway", "light_rail", "tram", "narrow_gauge"};
+    if (!s || !rd.keys(*s, kPath, {"clearance_mm", "roof_mm", "max_grade_per_mille", "min_tube_m", "min_gap_m", "bored_min_length_m",
+            "bored_min_cover_m", "box_wall_mm", "bored_lining_mm", "box_side_margin_mm", "bored_segments"})) return false;
+    const auto per_class = [&](const char* key, std::int64_t lo, std::int64_t hi, std::array<std::int32_t, kStructureClassCount>& dst) {
+        const std::string path = std::string(kPath) + "." + key;
+        const auto* m = rd.field(*s, kPath, key);
+        if (!m || !rd.keys(*m, path, {"road", "rail", "subway", "light_rail", "tram", "narrow_gauge"})) return false;
+        for (std::size_t i = 0; i < kStructureClassCount; ++i) if (!rd.integer(*m, path, kClasses[i], lo, hi, dst[i])) return false;
+        return true;
+    };
+    if (!per_class("clearance_mm", 2000, 20000, out.clearance_mm) || !per_class("max_grade_per_mille", 1, 300, out.max_grade_per_mille)) return false;
+    return rd.integer(*s, kPath, "roof_mm", 100, 10000, out.roof_mm) &&
+           rd.integer(*s, kPath, "min_tube_m", 1, 1000, out.min_tube_m) &&
+           rd.integer(*s, kPath, "min_gap_m", 1, 1000, out.min_gap_m) &&
+           rd.integer(*s, kPath, "bored_min_length_m", 1, 100000, out.bored_min_length_m) &&
+           rd.integer(*s, kPath, "bored_min_cover_m", 1, 1000, out.bored_min_cover_m) &&
+           rd.integer(*s, kPath, "box_wall_mm", 1, 10000, out.box_wall_mm) &&
+           rd.integer(*s, kPath, "bored_lining_mm", 1, 10000, out.bored_lining_mm) &&
+           rd.integer(*s, kPath, "box_side_margin_mm", 0, 10000, out.box_side_margin_mm) &&
+           rd.integer(*s, kPath, "bored_segments", 8, 256, out.bored_segments);
+}
+
 bool read_underpass_rules(Reader& rd, const json& root, UnderpassRules& out) {
     const auto* u = rd.field(root, "root", "underpass");
     static constexpr const char* kPath = "underpass";
@@ -195,7 +220,7 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
     Reader rd;
     const auto fail = [&]() { return make_error(ErrorCode::InvalidArgument, "road rules: " + rd.err); };
     if (!rd.keys(j, "root", {"format", "country", "min_lane_mm", "added_lane_side", "cycle_lane_mm", "sidewalk_mm", "tagged_shoulder_mm",
-            "parking_mm", "traffic_calming", "junction", "furniture", "tunnel", "underpass", "reference", "merge_lane", "min_edge_radius_m", "classes", "sources"})) return fail();
+            "parking_mm", "traffic_calming", "junction", "furniture", "tunnel", "structure", "underpass", "reference", "merge_lane", "min_edge_radius_m", "classes", "sources"})) return fail();
     std::string format;
     if (!rd.text(j, "root", "format", format)) return fail();
     if (format != "g2m.road_rules/1") return make_error(ErrorCode::Unsupported, "road rules: format '" + format + "'");
@@ -230,7 +255,7 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
                 !rd.integer(*entry, path, "width_mm", 0, 100000, out.width_mm)) return fail();
         }
     }
-    if (!read_junction_rules(rd, j, rules.junction) || !read_furniture_rules(rd, j, rules.furniture) || !read_tunnel_rules(rd, j, rules.tunnel) ||
+    if (!read_junction_rules(rd, j, rules.junction) || !read_furniture_rules(rd, j, rules.furniture) || !read_tunnel_rules(rd, j, rules.tunnel) || !read_structure_rules(rd, j, rules.structure) ||
         !read_underpass_rules(rd, j, rules.underpass) || !read_reference_rules(rd, j, rules.reference) ||
         !read_merge_lane_rules(rd, j, rules.merge_lane)) return fail();
     const auto* sources = rd.field(j, "root", "sources");

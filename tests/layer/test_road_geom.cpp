@@ -175,7 +175,7 @@ TEST_CASE("roads.geom discovers the far end of an incident bridge in a second st
         {20, 3, {4, 5, 6}, {{"bridge", "yes"}, {"highway", "tertiary"}}}};
     for (const auto& w : world.ways) for (std::size_t i = 1; i < w.node_ids.size(); ++i)
         world.edges.push_back({w.osm_id, static_cast<std::uint32_t>(i - 1), w.node_ids[i - 1], w.node_ids[i]});
-    const RoadGeomDeriver deriver; CHECK(deriver.discovery_stages() == 2);
+    const RoadGeomDeriver deriver; CHECK(deriver.discovery_stages() == 24);
     const TileKey west{zone, 2, 0, 0}, east{zone, 2, 1, 0};
     const InputTileRef far_graph{std::string(kRoadGraphLayer), {zone, 2, 2, 0}};
     struct Run { std::vector<InputTileRef> stage1, stage2; Result<DeriveResult> result; };

@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "42f310beba4023da5542a6c22145cd6881d442a45e499822ac7015af090afd50");
+    CHECK(to_hex(digest) == "4db794471a35aa96650c058a78d7e8de7ecab724fc34215a878886ea6d10bc54");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -281,4 +281,29 @@ TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add
     REQUIRE(at != std::string::npos);
     sharp.replace(at, rate.size(), "\"landing_m_per_m\": 1");
     CHECK(load_text(sharp));
+}
+
+TEST_CASE("The structure block of the German rules (terrain migration phase 7a-2)", "[layer][road_rules][structure]") {
+    const auto& s = builtin_road_rules_de().structure;
+    CHECK(s.clearance_mm[static_cast<std::size_t>(StructureClass::Road)] == 4700);
+    CHECK(s.clearance_mm[static_cast<std::size_t>(StructureClass::Rail)] == 6000);
+    CHECK(s.clearance_mm[static_cast<std::size_t>(StructureClass::Subway)] == 4500);
+    CHECK(s.max_grade_per_mille[static_cast<std::size_t>(StructureClass::Road)] == 50);
+    CHECK(s.max_grade_per_mille[static_cast<std::size_t>(StructureClass::Rail)] == 40);
+    CHECK(s.max_grade_per_mille[static_cast<std::size_t>(StructureClass::Tram)] == 50);
+    CHECK(s.roof_mm == 1000); CHECK(s.min_tube_m == 10); CHECK(s.min_gap_m == 10);
+    CHECK(s.bored_min_length_m == 300); CHECK(s.bored_min_cover_m == 15);
+    CHECK(s.box_wall_mm == 800); CHECK(s.bored_lining_mm == 500); CHECK(s.box_side_margin_mm == 1000); CHECK(s.bored_segments == 32);
+    // The classification thresholds are the library defaults for a road (the unit tests' Thresholds).
+    const auto t = s.thresholds(StructureClass::Road);
+    CHECK(t.clearance_m == 4.7); CHECK(t.roof_m == 1.0); CHECK(t.max_grade == 0.05); CHECK(t.cover_needed() == 5.7);
+    CHECK(s.thresholds(StructureClass::Rail).max_grade == 0.04);
+    // Strict loader: unknown/missing keys, a missing class, non-integers and out-of-range values are rejected.
+    CHECK_FALSE(load_text(mutated("\"roof_mm\": 1000,", "\"roof_mm\": 1000, \"bogus\": 1,")));
+    CHECK_FALSE(load_text(mutated("\"roof_mm\": 1000,", "")));
+    CHECK_FALSE(load_text(mutated("\"narrow_gauge\": 4500 },\n    \"roof_mm\"", "\"narrow_gaugex\": 4500 },\n    \"roof_mm\"")));
+    CHECK_FALSE(load_text(mutated("\"roof_mm\": 1000", "\"roof_mm\": 1000.5")));
+    CHECK_FALSE(load_text(mutated("\"roof_mm\": 1000", "\"roof_mm\": 0")));
+    CHECK_FALSE(load_text(mutated("\"bored_segments\": 32", "\"bored_segments\": 4")));
+    CHECK_FALSE(load_text(mutated("\"road\": 50, \"rail\": 40", "\"road\": 0, \"rail\": 40")));
 }

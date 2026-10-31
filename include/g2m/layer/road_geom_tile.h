@@ -106,6 +106,14 @@ struct RoadCompletionOptions {
     // at a node without a ground way share the junction plane. A ground stretch still declined after the strict pass
     // and the retry then ends on that plane (step 3). Default off: the previous release's tunnel step (the game's).
     bool tunnel_portal_anchor = false;
+    // Terrain migration phase 7a-2 (docs/structure_classification.md sections 3.2 and 5): the tunnel floor is the design floor of
+    // the whole connected tunnel component (structure_floor.h): the highest profile that stays structure_clearance_m +
+    // structure_roof_m under the bare earth (except within that depth / structure_max_grade of a portal), meets every portal
+    // anchor and climbs at most structure_max_grade, one value at every shared node. It replaces the D47/D52/D65 floors (the
+    // chord and cut options are then unused). Needs tunnel_floors and tunnel_portal_anchor. Anchors the floor cannot meet
+    // under the grade are handled by the 7a-1 reach rule on the adjacent portal pairs (the ground gives way). Default off.
+    bool tunnel_design_floor = false;
+    double structure_clearance_m = 4.7, structure_roof_m = 1.0, structure_max_grade = 0.05;
 };
 // The outer bounds of the tunnel options; the validator certifies a TunnelFloor profile against them.
 inline constexpr double kRoadCompletionMaxTunnelGrade = 0.30;
@@ -121,6 +129,10 @@ inline RoadCompletionOptions served_road_completion_options() {
     o.tunnel_cut_hump_min_m = static_cast<double>(builtin_road_rules_de().tunnel.cut_hump_min_mm) / 1000.0;
     o.tunnel_cut_hump_max_m = static_cast<double>(builtin_road_rules_de().tunnel.cut_hump_max_mm) / 1000.0;
     o.tunnel_portal_anchor = true;
+    {   // 7a-2: the design floor of the tunnel components, the road column of de.json's structure block
+        const auto t = builtin_road_rules_de().structure.thresholds(StructureClass::Road);
+        o.tunnel_design_floor = true; o.structure_clearance_m = t.clearance_m; o.structure_roof_m = t.roof_m; o.structure_max_grade = t.max_grade;
+    }
     return o;
 }
 // What the completion tier did, per kind (design 6.6; diagnostics only, never stored).
@@ -148,6 +160,21 @@ struct RoadCompletionStats {
     std::size_t ground_tunnel_anchored = 0;  // declined ground stretches completed on a tunnel portal plane
     std::size_t ground_tunnel_chord = 0;     // ... completed on the chord from the portal (the stretch departs from the DEM's grade)
     std::size_t ground_tunnel_unfit = 0;     // ... whose portal plane left no cubic (completed on the DEM planes, or declined)
+    // 7a-2 design floor, per connected tunnel component solved in this call (a component is solved once, whichever of its
+    // stretches asks first; a component that crosses the tile is counted by every tile that reads it).
+    std::size_t floor_components = 0, floor_stretches = 0, floor_stations = 0, floor_portals = 0, floor_free_portals = 0;
+    std::size_t floor_pairs = 0, floor_pairs_shifted = 0, floor_pairs_beyond_grade = 0, floor_pairs_still_beyond_grade = 0, floor_anchor_misses = 0;
+    std::size_t floor_not_converged = 0, floor_unsolved = 0;   // components that hit the pass cap / that have no finite floor or an unreadable stretch
+    std::size_t floor_entries = 0, floor_entry_own_grades = 0, floor_entry_straight = 0, floor_entry_failed = 0;   // entries fitted: designed grades / own-side slopes / straight chord / no profile
+    std::size_t floor_fit_over_250mm = 0;    // entries whose fitted floor leaves the design floor by more than 0.25 m
+    double floor_fit_max_deviation_m = 0;    // the largest |fitted floor - design floor| over the entries
+    double floor_max_shift_m = 0;            // the largest anchor move of the reach handler
+    struct FloorComponentReport {
+        std::int64_t first_way = 0; std::uint32_t first_start_ref = 0;   // the lowest (way id, start ref) of the component: its identity
+        std::size_t stretches = 0, stations = 0, portals = 0, free_portals = 0, pairs = 0, pairs_shifted = 0, pairs_beyond_grade = 0, pairs_still_beyond_grade = 0, passes = 0;
+        double length_m = 0, max_shift_m = 0; bool ok = false;
+    };
+    std::vector<FloorComponentReport> floor_reports;
 };
 // Encoding 9, section 8 (decisions D53-D58): a deck span of a ground stretch over a lower road that runs in a DEM
 // cutting under it without a bridge tag (road_underpass.h). The profile over [start_m, end_m] is the rim chord, not
@@ -256,8 +283,9 @@ public:
     std::span<const std::string> coverage_inputs() const override { return std::span<const std::string>(desc_.inputs).first(1); }
     std::vector<InputTileRef> inputs_for(const TileKey& target) const override;
     Result<std::vector<InputTileRef>> additional_inputs_for(const DeriveRequest& request) const override;
-    // Two stages (D35): the stretch context first, then the far ends of the bridges incident to the tile's nodes.
-    std::size_t discovery_stages() const override { return 2; }
+    // Up to 24 stages: the stretch context first (D35), then the far ends of the bridges incident to the tile's nodes, then one stage per
+    // ring of roads.graph tiles the tile's tunnel components reach (7a-2, road_component_dependencies); a tile with no tunnel stops at 2.
+    std::size_t discovery_stages() const override { return 24; }
     Result<DeriveResult> derive(const DeriveRequest& request) const override;
 private:
     LayerDesc desc_;

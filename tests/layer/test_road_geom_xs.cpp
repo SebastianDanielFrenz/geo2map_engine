@@ -366,8 +366,11 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
     CHECK(deriver.config_hash() != Sha256::of(d65));
     // Phase 7a-1 (portal and join continuity): a tunnel floor end and the ground stretch meeting it share one portal plane.
     const std::string after = d65 + " portal-anchor=7a1";
-    CHECK(road_geom_config_text() == after);
-    CHECK(deriver.config_hash() == Sha256::of(after));
+    CHECK(road_geom_config_text() != after);   // the 7a-1 text is no longer served
+    // Phase 7a-2: the tunnel floor is the design floor of the connected component (de.json structure block, road column).
+    const std::string design = after + " tunnel-design-floor=7a2/4.7000000000000002/1/0.050000000000000003/reach:0.9 component-walk=1";
+    CHECK(road_geom_config_text() == design);
+    CHECK(deriver.config_hash() == Sha256::of(design));
     CHECK(road_geom_desc().encoding == 10);
     // The text is built from served_road_completion_options(): pin those values, so a changed default fails here and
     // in the literal text above together.

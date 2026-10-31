@@ -341,3 +341,25 @@ TEST_CASE("Underpass decks (D56): the served span becomes an inferred deck, noth
         CHECK(upper == 1);
     }
 }
+
+// Hidden: prints road_mesh_pins.inc's case lines from g2m::world over the same inputs (the pins moved with the inputs, e.g. 7a-2's tunnel
+// floors, where the game's own code has no change to reproduce): g2m_world_tests "[regen]" > lines, keep the header comments of the file.
+TEST_CASE("print the mesh pin lines", "[.][regen]") {
+    for (const auto& c : cases()) {
+        const auto separation = separation_of(c);
+        const auto set = g2m::world::build_structure_set(c.tile, separation);
+        g2m::Fnv1a64 h, refs;
+        int bridges = 0, tunnels = 0, inferred = 0;
+        for (const auto& d : set.decks) {
+            g2m_mesh_test::hash_deck(h, *d, [](const g2m::world::RoadDeck& deck, double s, double t) { return g2m::world::road_deck_height(deck, s, t); });
+            refs.u32(d->start_ref);
+            inferred += d->inferred;
+            tunnels += !d->inferred && d->tunnel_floor;
+            bridges += !d->inferred && !d->tunnel_floor;
+        }
+        const auto ribbon = g2m::world::build_road_ribbons(c.tile, c.key, [&](double e, double n) { return g2m_mesh_test::case_ground(c, e, n); }, c.lift, separation, point_sampled());
+        std::printf("{\"%s\", %zu, 0x%016llxull, 0x%016llxull, %zu, %zu, 0x%016llxull},  // %d %d %d\n", c.name.c_str(), set.decks.size(),
+            static_cast<unsigned long long>(h.value()), static_cast<unsigned long long>(refs.value()), ribbon.vertices.size(), ribbon.indices.size(),
+            static_cast<unsigned long long>(g2m_mesh_test::hash_ribbon(ribbon)), bridges, tunnels, inferred);
+    }
+}

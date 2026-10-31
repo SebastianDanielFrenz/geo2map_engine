@@ -35,10 +35,11 @@ add_executable(g2m_unit_tests
   test_bake.cpp
   test_osm_tag_probe.cpp
   test_structure_classify.cpp
+  test_structure_floor.cpp
 )
 target_link_libraries(g2m_unit_tests PRIVATE g2m_core g2m_decode g2m_import g2m_server g2m_client
                                               g2m_test_catch_main g2m_warnings g2m_options
-                                              libdeflate::libdeflate_static g2m_osm_tag_probe_lib g2m_structure_census_lib)
+                                              libdeflate::libdeflate_static g2m_osm_tag_probe_lib)
 target_compile_definitions(g2m_unit_tests PRIVATE G2M_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 # test_tiler_cli_args.cpp includes apps/g2m_tiler/cli_args.h directly (it is
 # header-only precisely so this test needs no new library target, G1c I7).

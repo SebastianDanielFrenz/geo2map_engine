@@ -3,7 +3,7 @@
 // phase 7a (docs/structure_classification.md).
 //
 //   g2m_structure_census STORE SCOPE ZONE EMIN EMAX NMIN NMAX [--csv CHAINS.csv] [--runs RUNS.csv]
-//                        [--under UNDER.csv] [--dump WAY_ID FILE.csv] [--spot E N]
+//                        [--under UNDER.csv] [--dump WAY_ID FILE.csv] [--spot E N] [--portals FILE] [--component-cost]
 //
 // Reads every level-2 g2m.src.osm tile intersecting the box once (complete ways) and the g2m.src.elev.dgm1 tiles the
 // samples need (raw DGM1, bare earth, 1 m). Never writes the store.
@@ -22,7 +22,8 @@
 // higher layer that shares no node with it. At the crossing, the DEM along the lower road is compared with the chord of
 // the DEM 30 m before and after: the hump is the largest excess within the bridge footprint (DGM1 interpolates over the
 // removed deck; D64 masks it for road bridges only).
-#include "structure_classify.h"
+#include "g2m/layer/structure_classify.h"
+#include "g2m/layer/structure_floor.h"
 
 #include "g2m/core/geo/utm.h"
 #include "g2m/core/geom/project.h"
@@ -38,9 +39,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -237,6 +240,7 @@ int main(int argc, char** argv) {
     const geo::UtmZone zone{std::atoi(argv[3]), geo::Hemisphere::North};
     const double emin = std::atof(argv[4]), emax = std::atof(argv[5]), nmin = std::atof(argv[6]), nmax = std::atof(argv[7]);
     std::string csv_path, runs_path, under_path, dump_path, portals_path;
+    bool component_cost = false;
     std::int64_t dump_way = 0;
     std::vector<P> spots;
     for (int i = 8; i < argc; ++i) {
@@ -246,6 +250,7 @@ int main(int argc, char** argv) {
         else if (a == "--under" && i + 1 < argc) under_path = argv[++i];
         else if (a == "--dump" && i + 2 < argc) { dump_way = std::atoll(argv[i + 1]); dump_path = argv[i + 2]; i += 2; }
         else if (a == "--portals" && i + 1 < argc) { portals_path = argv[++i]; }
+        else if (a == "--component-cost") component_cost = true;
         else if (a == "--spot" && i + 2 < argc) { spots.push_back({std::atof(argv[i + 1]), std::atof(argv[i + 2])}); i += 2; }
         else { std::cerr << "unknown option " << a << '\n'; return 1; }
     }
@@ -593,6 +598,77 @@ int main(int argc, char** argv) {
         }
     }
     std::cout << "tunnel chains with the first vertex in the box: " << chains.size() << " (no DEM under a sample: " << nodata << ")\n";
+    if (component_cost) {
+        // 7a-2 measurement: the served component solve (structure::network_design_floor) over the chains joined at their end nodes
+        // (a chain end that is no portal joins another chain there). Each chain is one stretch with the census ground; every
+        // portal end is anchored at the DEM sample at the node, no portal is free. Timing lives here, never in the library.
+        std::vector<std::size_t> uf(chains.size());
+        for (std::size_t i = 0; i < uf.size(); ++i) uf[i] = i;
+        const std::function<std::size_t(std::size_t)> root = [&](std::size_t x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
+        std::map<std::pair<int, std::int64_t>, std::size_t> first_at;
+        for (std::size_t i = 0; i < chains.size(); ++i) {
+            if (chains[i].nodata) continue;
+            for (int e = 0; e < 2; ++e) {
+                const auto key = std::make_pair(static_cast<int>(chains[i].kind), chains[i].portal_node[static_cast<std::size_t>(e)]);
+                const auto it = first_at.find(key);
+                if (it == first_at.end()) first_at.emplace(key, i); else uf[root(i)] = root(it->second);
+            }
+        }
+        std::map<std::size_t, std::vector<std::size_t>> groups;
+        for (std::size_t i = 0; i < chains.size(); ++i) if (!chains[i].nodata) groups[root(i)].push_back(i);
+        struct Stat { std::size_t chains = 0, stations = 0, portals = 0, passes = 0, shifted = 0, beyond = 0, still = 0; double ms = 0; bool ok = false, converged = false; double max_shift = 0; };
+        std::map<int, std::vector<Stat>> by_kind;
+        double total_ms = 0; std::size_t total_stations = 0, unsolved = 0, unconverged = 0, shifted = 0, beyond = 0, still = 0, misses = 0, multi = 0;
+        Stat largest;
+        for (const auto& [r, members] : groups) {
+            (void)r;
+            std::map<std::int64_t, int> index;
+            const auto node_of = [&](std::int64_t id) { const auto it = index.find(id); if (it != index.end()) return it->second; const int k = static_cast<int>(index.size()); index[id] = k; return k; };
+            st::FloorNetwork net; std::set<int> portal_done; double grade = 0.05, needed = 0;
+            for (const auto i : members) {
+                const auto& c = chains[i];
+                const auto t = nominal_of(c);
+                grade = std::min(grade, t.max_grade); needed = std::max(needed, t.cover_needed());
+                st::FloorStretch s; s.from = node_of(c.portal_node[0]); s.to = node_of(c.portal_node[1]); s.length_m = c.length; s.ground = c.ground;
+                net.stretches.push_back(std::move(s));
+                const bool portal[2] = {c.portal0, c.portal1};
+                const double z[2] = {c.z0, c.z1};
+                for (int e = 0; e < 2; ++e) {
+                    const int n = e == 0 ? net.stretches.back().from : net.stretches.back().to;
+                    if (portal[e] && portal_done.insert(n).second) net.portals.push_back({n, z[e], false});
+                }
+            }
+            net.node_count = static_cast<int>(index.size());
+            st::NetworkFloorParams params; params.max_grade = grade; params.needed = needed; params.reach_factor = 0.9; params.quantum_m = 1.0 / 256.0;
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto result = st::network_design_floor(net, params);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            Stat s; s.chains = members.size(); s.ok = result.ok; s.converged = result.converged; s.passes = result.passes; s.ms = ms; s.portals = net.portals.size();
+            for (const auto& str : net.stretches) s.stations += st::station_count(str.length_m);
+            s.shifted = result.pairs_shifted; s.beyond = result.pairs_beyond_grade; s.still = result.pairs_still_beyond_grade;
+            for (const double m : result.portal_shift_m) s.max_shift = std::max(s.max_shift, std::fabs(m));
+            by_kind[static_cast<int>(chains[members.front()].kind)].push_back(s);
+            total_ms += ms; total_stations += s.stations; shifted += s.shifted; beyond += s.beyond; still += s.still; misses += result.anchor_misses;
+            if (!s.ok) ++unsolved;
+            if (!s.converged) ++unconverged;
+            if (members.size() > 1) ++multi;
+            if (s.stations > largest.stations) largest = s;
+        }
+        std::cout << "component solve (7a-2): " << groups.size() << " components of " << chains.size() << " chains (" << multi << " with more than one chain), " << total_stations
+                  << " stations, " << total_ms << " ms in all; unsolved " << unsolved << ", not converged " << unconverged << ", anchor misses " << misses
+                  << "; adjacent pairs beyond the grade outright " << beyond << ", beyond the reach (anchors moved) " << shifted << ", still beyond after the move " << still << '\n';
+        std::cout << "  largest component: " << largest.chains << " chains, " << largest.stations << " stations, " << largest.portals << " portals, " << largest.passes << " passes, "
+                  << largest.ms << " ms\n";
+        for (const auto& [k, v] : by_kind) {
+            double ms = 0, worst = 0; std::size_t n = 0, sh = 0, bg = 0;
+            for (const auto& s : v) { ms += s.ms; worst = std::max(worst, s.ms); ++n; sh += s.shifted; bg += s.beyond; }
+            std::cout << "  " << (k == static_cast<int>(Kind::Rail) ? "rail" : "road") << ": " << n << " components, " << ms << " ms, slowest " << worst << " ms, pairs beyond the grade " << bg << ", beyond the reach " << sh << '\n';
+        }
+        std::vector<Stat> all; for (const auto& [k, v] : by_kind) all.insert(all.end(), v.begin(), v.end());
+        std::sort(all.begin(), all.end(), [](const Stat& a, const Stat& b) { return a.ms > b.ms; });
+        for (std::size_t i = 0; i < std::min<std::size_t>(5, all.size()); ++i)
+            std::cout << "  slowest " << i + 1 << ": " << all[i].chains << " chains, " << all[i].stations << " stations, " << all[i].portals << " portals, " << all[i].passes << " passes, " << all[i].ms << " ms\n";
+    }
     std::cout << "chains by class (kind variant class: chains, km)\n";
     for (const auto& [k, v] : table) { char b[200]; std::snprintf(b, sizeof b, "  %-36s %6zu %8.2f\n", k.c_str(), v.n, v.km); std::cout << b; }
     std::cout << "chains by dominant structure above -> nominal class\n";

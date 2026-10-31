@@ -64,6 +64,47 @@ Result<std::optional<std::vector<InputTileRef>>> bridge_dependencies(const RoadG
     std::sort(bridges->begin(), bridges->end()); bridges->erase(std::unique(bridges->begin(), bridges->end()), bridges->end());
     return std::optional<std::vector<InputTileRef>>(std::move(*bridges));
 }
+// Stage 3.. (7a-2): the connected tunnel components the tile's tunnel ways belong to. road_component_dependencies is one
+// round of the walk over the context known so far; the roads.graph tiles it names that are not in the context yet extend
+// the context (decoded from `inputs` when resolved) and the walk runs again, until a round names no new graph tile. Absent
+// from `inputs` = the caller must resolve it first (complete = false, the refs so far are returned, a later stage repeats).
+// A pure function of (tile, inputs) once complete: the closure is the component, whatever tile asks.
+Result<std::vector<InputTileRef>> component_dependencies(const RoadGraphTile& graph, geo::UtmZone zone, std::span<const InputTile> inputs,
+    std::span<const InputTileRef> stage_one_context, bool* complete) {
+    std::set<InputTileRef> known(stage_one_context.begin(), stage_one_context.end());
+    std::vector<RoadGraphTile> tiles;
+    for (const auto& ref : stage_one_context) {
+        if (ref.layer != kRoadGraphLayer) continue;
+        const InputTile* found = nullptr;
+        for (const auto& input : inputs) if (input.ref == ref) { found = &input; break; }
+        if (!found) { *complete = false; return std::vector<InputTileRef>{}; }
+        if (!found->header) continue;
+        auto tile = decode_graph_input(*found); if (!tile) return tile.error();
+        tiles.push_back(std::move(*tile));
+    }
+    std::vector<InputTileRef> refs;
+    for (int round = 0; round < 256; ++round) {
+        std::vector<const RoadGraph*> graphs{&graph.graph};
+        for (const auto& tile : tiles) graphs.push_back(&tile.graph);
+        const auto context = merge_road_graphs(graphs); if (!context) return context.error();
+        auto step = road_component_dependencies(graph.graph, *context, zone, &graph.key); if (!step) return step.error();
+        refs = std::move(*step);
+        bool progress = false, missing = false;
+        for (const auto& ref : refs) {
+            if (ref.layer != kRoadGraphLayer || !known.insert(ref).second) continue;
+            progress = true;
+            const InputTile* found = nullptr;
+            for (const auto& input : inputs) if (input.ref == ref) { found = &input; break; }
+            if (!found) { missing = true; continue; }
+            if (!found->header) continue;
+            auto tile = decode_graph_input(*found); if (!tile) return tile.error();
+            tiles.push_back(std::move(*tile));
+        }
+        if (missing) { *complete = false; return refs; }
+        if (!progress) return refs;
+    }
+    return make_error(ErrorCode::LimitExceeded, "roads.geom: tunnel component closure did not converge");
+}
 // The roads.graph tiles holding every way that crosses a segment of the tile's ways (D57, underpass decks); empty with
 // the rules' underpass block off. Part of stage 1.
 Result<std::vector<InputTileRef>> crossing_dependencies(const RoadGraphTile& graph, geo::UtmZone zone) {
@@ -76,11 +117,18 @@ Result<std::vector<InputTileRef>> all_dependencies(const RoadGraphTile& graph, g
     bool* complete = nullptr, std::vector<InputTileRef>* context_out = nullptr, std::vector<InputTileRef>* crossings_out = nullptr) {
     auto deps = dependencies(graph, zone); if (!deps) return deps.error();
     const auto bridges = bridge_dependencies(graph, zone, inputs); if (!bridges) return bridges.error();
-    if (complete) *complete = bridges->has_value();
+    bool is_complete = bridges->has_value();
     if (*bridges) {
         deps->insert(deps->end(), (*bridges)->begin(), (*bridges)->end());
         std::sort(deps->begin(), deps->end()); deps->erase(std::unique(deps->begin(), deps->end()), deps->end());
     }
+    if (is_complete && served_road_completion_options().tunnel_design_floor) {   // 7a-2: the tunnel components of the tile
+        const auto stage = *deps;
+        const auto components = component_dependencies(graph, zone, inputs, stage, &is_complete); if (!components) return components.error();
+        deps->insert(deps->end(), components->begin(), components->end());
+        std::sort(deps->begin(), deps->end()); deps->erase(std::unique(deps->begin(), deps->end()), deps->end());
+    }
+    if (complete) *complete = is_complete;
     if (context_out) *context_out = *deps;
     const auto crossings = crossing_dependencies(graph, zone); if (!crossings) return crossings.error();
     if (crossings_out) *crossings_out = *crossings;
@@ -139,7 +187,10 @@ std::string road_geom_config_text() {
         std::to_string(builtin_road_rules_de().reference.chord_margin_mm)
         // 7a-1: a tunnel floor end and the ground stretch meeting it take one portal plane (the adjacent ground profile's end,
         // else the approach level); the stage-2 set adds the incident ground ways' DEM and node tiles at every portal.
-        + std::string(c.tunnel_portal_anchor ? " portal-anchor=7a1" : "");
+        + std::string(c.tunnel_portal_anchor ? " portal-anchor=7a1" : "")
+        // 7a-2: the tunnel floor is the design floor of the connected tunnel component (clearance + roof, max grade, reach share), the
+        // stage-3 set walks the component to its closure; replaces the D47 chord and D65 cut floors above when on.
+        + (c.tunnel_design_floor ? " tunnel-design-floor=7a2/" + option_value(c.structure_clearance_m) + "/" + option_value(c.structure_roof_m) + "/" + option_value(c.structure_max_grade) + "/reach:0.9 component-walk=1" : std::string());
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {

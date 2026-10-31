@@ -591,7 +591,9 @@ RoadDeck meshes today. Mesh changes therefore cost no release id.
 |---|---|---|---|---|---|
 | 7a-0 | census + rule library + this design | S | none | geo2map | - |
 | 7a-1 | portal and join continuity | M | roads.geom bump (batched #3) | geo2map | - |
-| 7a-2 | design floor, component solve, runs served (roads.geom enc 10, rail.geom enc 2, de.json `structure`) | L | bump (batched #3) | geo2map | 7a-1 |
+| 7a-2 | design floor, component solve, runs served (roads.geom enc 11, rail.geom enc 2, de.json `structure`) | L | bump (batched #3) | geo2map | 7a-1 |
+|   7a-2 first half | structure_classify served, de.json `structure` block, design floor over tunnel components with the dependency walk (delivered, branch claude/design-floor) | - | roads.geom and rail.geom (de.json sha), roads.geom config token, terrain.carved config token | geo2map | 7a-1 |
+|   7a-2 second half | served runs in roads.geom enc 11 and rail.geom enc 2, rail floor at 4 %, Above-input for roads (not started) | - | - | geo2map | 7a-2 first half |
 | 7a-3 | carve: non-tube runs cut, D65 replaced, D64 on rail bridges, implied decks served | M | bump (batched #3) | geo2map | 7a-2 |
 | 7a-4 | structure meshes in g2m_world: box, bored, portals, slabs, patches, exposed roofs | L | none | geo2map | 7a-2 |
 | 7a-5 | physics holes + StructureInstaller in g2m_ps_bridge | M | none | geo2map (bridge), racing_game (call site) | 9, 7a-4 |
@@ -639,6 +641,59 @@ RoadDeck meshes today. Mesh changes therefore cost no release id.
     solve must be a function of the component, not the tile, so a dependency walk like `road_dem_dependencies` is
     needed);
   - the encoding change touches every roads.geom reader.
+
+**Delivered: first half (branch claude/design-floor, stacked on claude/portal-continuity).**
+- **Items 1-3 of "What" are in**; the encodings (served runs in roads.geom enc 11 and rail.geom enc 2, the Above-input for
+  roads, the rail floor at 4 %) are the second half and not started. `structure_classify` is `src/layer/structure_classify.*`
+  (the census tool links it); de.json `structure` block (pin `eec3ec54...b813`); `structure_floor.h/.cpp` is the pure network
+  floor; `road_completion.cpp` step 2a fits each tunnel entry from its component's floor (CLAUDE.md "Design floor and component
+  solve 7a-2" has the mechanics and the option/config names). Where anchors are not reachable under the grade the 7a-1 reach
+  rule is the handler with `max_grade` in place of 30 %.
+- **Release ids (batched bump #3, what changed exactly):** (1) `data/road_rules/de.json` gained the `structure` block and its
+  `sources` entry, so its sha and with it every config hash that carries the rules sha (roads.geom, rail.geom, terrain.carved
+  through the road rules) change; (2) the roads.geom config text gained ` tunnel-design-floor=7a2/<clearance>/<roof>/<max_grade>/reach:0.9
+  component-walk=1` (only with the option on, which the served options do); (3) the terrain.carved config text gained `+hump`
+  (the carve's hump check, below). Encodings, layouts and readers are untouched in this half: no roads.geom or rail.geom byte
+  layout changed, encoding 9 and 2 as before.
+- **Why the carve changed:** the design floor of a tunnel stretch is its chord whenever the stretch is shorter than twice
+  needed/G (about 228 m at 4.7 m clearance + 1 m roof and 5 %), because the ground term is skipped within needed/G of a
+  portal. Measured on the home store, 1052 of 1608 tunnel floors are then straight within 1 cm and 1018 of them are at most
+  80 m long, which is exactly how the D65 carve recognises an open cut: the first census gave 1329 stretches carved as cuts
+  (7a-1: 378), i.e. trenches through hills over short tunnel pieces. Two measures keep D65 what it was: the completion takes the
+  exact chord only for D65's hump rule (ground over the chord rising by 1-8 m, measured on the per-station ground the floor was
+  solved against) and holds the portal grade itself on every other short stretch; and the carve now also asks for the hump
+  (`tunnel_cut_hump_ok`, `CarveOptions::tunnel_cut_hump_check`, tolerance 0.25 m on the cell DEM at 1 m stations). Census of the
+  home store after both: 186 stretches carved as cuts and 54 left uncarved only because a ground road crosses them. A 4.5 km
+  window compared with 7a-1: of 88 short straight floors the hump check refuses 56 (hump below 1 m, nothing to cut, or above
+  8 m, a hill) and 16 more are refused for the crossing; the 26 short straight floors of 7a-1 there include 16 that are straight only because the DEM over them is (three inspected: 0.2-6 mm off the chord, nothing to cut). Phase 7a-3
+  replaces this test; until then it keeps the carved terrain as served in 7a-1.
+- **Census of the home store (rhein-main, `g2m_spot_dump --census 22500 --portals`), 7a-1 build against this branch.** The two
+  builds derive different tile sets (1091 against 1118 tiles; the 7a-1 build leaves 90 tunnel stretches declined, this one 1),
+  so totals are not like for like.
+  - Class counts of the structure census (`g2m_structure_census`, tool unchanged by the served rule): reproduced exactly,
+    rail 96 / 74 / 140 chains (real cover / mixed / no cover) and road 18 / 63 / 948, km 41.92 / 62.82 / 12.87 and 1.34 / 12.53 / 20.34.
+  - Tunnel floors: 1453 (7a-1) -> 1608. Portals with a ground join 1478 -> 1646; all portals 1686 -> 1867.
+  - Steps at portals larger than 0.01 m: 14 -> 68 (49 of the 67 "unreachable" lines are strict or retry ground ends beside a
+    shifted portal; 31 steps are 0.1 m or less, 26 between 0.1 and 0.5 m, 11 above 0.5 m; 7a-1: 2 above 0.5 m). Worst step
+    3.234 -> 2.043 m, worst grade difference 0.529 -> 0.228. More steps are the price of 5 % against 30 %: the reach is now
+    0.9 x 5 % x length, and a strict ground end cannot be re-fitted, so the tunnel floor moves and the step is counted.
+  - Grade differences above 0.02 at portals: 174 -> 291. 163 of the 291 are at ground roads steeper than the structure's 5 %
+    (the floor cannot take their grade), 44 differ by more than 0.1.
+  - Leftovers of 7a-1: nodes 9625993388 / 9625993389 (3.2 m step): dz 3.234 / 3.133 -> 0 / 0, grade difference 0.290 / 0.252 ->
+    0.015 / 0.007. Node 3909993585: dz 0 -> 0, grade difference 0.370 -> 0.093 (the ground road there climbs 11.5 %, the floor 2.2 %).
+  - Infeasible anchor pairs, fixtures (`[portal 7a-2]` lines): frankfurt tilted 17 of 31 adjacent pairs beyond the grade, anchors
+    moved up to 0.879 m, 0 still beyond; a66 tilted 4 of 41, 0.113 m, 0 still beyond; flat fixtures 0. Census-wide DEM anchors:
+    111 pairs beyond grade, 122 beyond the reach, 0 still beyond after the move, 0 anchor misses.
+  - Component solve cost (`g2m_structure_census --component-cost`): the City-Tunnel component, 37 chains / 19474 stations /
+    16 portals, 4 passes, 7.38 ms; all 1210 components 15.5 ms; the slowest road component 0.035 ms.
+- **Tests:** `test_structure_floor.cpp` (18 cases, sabotages S5-S7), `test_road_completion.cpp` Y component with the recorded
+  sabotage "chains solved separately / no component walk" (14 failures), four-tile invariance, golden bytes (tile 455, fnv
+  0x3028837f4a976ec2), `test_portal_continuity` (7a-1 checks plus the `[portal 7a-2]` counters), `test_road_overpass.cpp` hump rule
+  under the design floor and the carve case with the recorded sabotage (hump check off: a 15 m hill is trenched). Goldens
+  g3xs/g3j/g3d and the road mesh pins were re-recorded (the tunnel floors moved as intended; mesh pins from `g2m::world`).
+- **Deviations:** (1) strict ground ends beside a shifted portal stay stepped (the provenance rule), counted, instead of being
+  re-fitted; (2) `discovery_stages` 24 for roads.geom and `kMaxDiscoveryStages` 32 (the component walk needs rounds); (3) the
+  D65 interplay above; (4) carving a design floor (a floor below ground without D65's hump) is 7a-3.
 
 ### 7a-3 carve
 

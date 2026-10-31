@@ -1,4 +1,4 @@
-// tools/structure_census/structure_classify.h - the structure classification rule of terrain migration phase 7a
+// g2m/layer/structure_classify.h - the structure classification rule of terrain migration phase 7a
 // (docs/structure_classification.md), as a pure function over one tunnel chain's measured cover profile.
 //
 // It is the rule the census tool (g2m_structure_census) applies, and the reference the served implementation

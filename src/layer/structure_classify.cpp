@@ -1,5 +1,5 @@
-// tools/structure_census/structure_classify.cpp - see structure_classify.h.
-#include "structure_classify.h"
+// src/layer/structure_classify.cpp - see g2m/layer/structure_classify.h.
+#include "g2m/layer/structure_classify.h"
 
 #include <algorithm>
 #include <limits>

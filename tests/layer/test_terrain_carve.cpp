@@ -800,7 +800,7 @@ TEST_CASE("carve: layer description, inputs and config text", "[layer][carve]") 
     for (int l = 0; l <= 6; ++l) CHECK(has_level(d.levels, l));
     CHECK_FALSE(has_level(d.levels, 7));
     const auto& sha = builtin_carve_default().content_sha256;
-    CHECK(terrain_carved_config_text() == "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 tunnel-cut=D65/80 carve=" +
+    CHECK(terrain_carved_config_text() == "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 tunnel-cut=D65/80+hump carve=" +
         to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even");
     // carve_road_geom_keys: one level-2 tile in the middle, four at a level-2 corner.
     CHECK(carve_road_geom_keys(l0(1821, 21685)).size() == 1);

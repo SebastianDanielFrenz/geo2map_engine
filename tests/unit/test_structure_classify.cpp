@@ -1,5 +1,5 @@
 // tests/unit/test_structure_classify.cpp - the structure classification rule of terrain migration phase 7a
-// (tools/structure_census/structure_classify.h, docs/structure_classification.md): the design floor and the run / class /
+// (include/g2m/layer/structure_classify.h, docs/structure_classification.md): the design floor and the run / class /
 // shape rule on hand-built profiles, plus the measured profile of the Unterliederbach underpass (way 4812754, the
 // Königsteiner Straße under the rail embankment, DGM1 via g2m_structure_census --dump).
 //
@@ -13,7 +13,7 @@
 //      "bored needs length AND natural cover" fails (300 m tubes with design cover 20 m and natural cover 14.9 / 10 m
 //      turn bored).
 //   S4 the gap rule's `>=` against min_gap_m as `>`: "a cut gap inside a tube ..." fails at a span of exactly 10 m.
-#include "structure_classify.h"
+#include "g2m/layer/structure_classify.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>

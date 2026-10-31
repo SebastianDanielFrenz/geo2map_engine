@@ -6,6 +6,7 @@
 // its SHA-256 enters the roads.geom config hash.
 #pragma once
 #include "g2m/core/result.h"
+#include "g2m/layer/structure_classify.h"
 #include "g2m/layer/tile_container.h"
 #include <array>
 #include <cstddef>
@@ -91,6 +92,27 @@ struct TunnelRules {
     std::int32_t cut_max_length_m = 0, cut_hump_min_mm = 0, cut_hump_max_mm = 0;
     friend bool operator==(const TunnelRules&, const TunnelRules&) = default;
 };
+// Structure classification (terrain migration phase 7a-2, docs/structure_classification.md 3.2/3.3): the design floor and run
+// thresholds per structure class. Roads read StructureClass::Road; the rail classes are read by rail.geom. All lengths are
+// integer mm / m, so a decision made from them is platform independent.
+enum class StructureClass : std::uint8_t { Road = 0, Rail = 1, Subway = 2, LightRail = 3, Tram = 4, NarrowGauge = 5 };
+inline constexpr std::size_t kStructureClassCount = 6;
+struct StructureRules {
+    std::array<std::int32_t, kStructureClassCount> clearance_mm{}, max_grade_per_mille{};
+    std::int32_t roof_mm = 0, min_tube_m = 0, min_gap_m = 0, bored_min_length_m = 0, bored_min_cover_m = 0;
+    std::int32_t box_wall_mm = 0, bored_lining_mm = 0, box_side_margin_mm = 0, bored_segments = 0;
+    friend bool operator==(const StructureRules&, const StructureRules&) = default;
+    // The classification thresholds of one structure class (metres and a fractional grade).
+    structure::Thresholds thresholds(StructureClass c) const {
+        structure::Thresholds t;
+        const auto i = static_cast<std::size_t>(c);
+        t.clearance_m = static_cast<double>(clearance_mm[i]) / 1000.0; t.roof_m = static_cast<double>(roof_mm) / 1000.0;
+        t.min_tube_m = min_tube_m; t.min_gap_m = min_gap_m;
+        t.bored_min_length_m = bored_min_length_m; t.bored_min_cover_m = bored_min_cover_m;
+        t.max_grade = static_cast<double>(max_grade_per_mille[i]) / 1000.0;
+        return t;
+    }
+};
 // Underpass decks (owner decision 2026-10-15, racing_game PR #5; design D53-D58): where a ground stretch crosses a
 // lower road (a lower OSM layer or a tunnel, not a bridge) over a DEM cutting, the profile ignores the cutting and the
 // span over it is served as a deck (roads.geom encoding 9, section 8). All lengths integer mm or m; road_underpass.h
@@ -171,6 +193,7 @@ struct RoadRules {
     JunctionRules junction;
     FurnitureRules furniture;
     TunnelRules tunnel;
+    StructureRules structure;
     UnderpassRules underpass;
     ReferenceRules reference;
     MergeLaneRules merge_lane;

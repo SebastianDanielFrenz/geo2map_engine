@@ -23,6 +23,7 @@
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/road_junction.h"
 #include "g2m/layer/road_rules.h"
+#include <functional>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -83,6 +84,7 @@ struct CarveOptions {
     bool underpass_steep_walls = true;      // D59 sabotage: false lets a ground end's blend cap reach into its deck (abutment slope)
     bool tunnel_cut = true;                 // D65 sabotage: false leaves a short straight tunnel floor under the bank (never carved)
     bool tunnel_cut_crossing_check = true;  // D65 sabotage: false also cuts a tunnel a ground road runs over (a slot in that road)
+    bool tunnel_cut_hump_check = true;      // 7a-2 sabotage: false opens every short straight tunnel floor as a cut (the design floor of a short tunnel is straight by construction)
     std::uint64_t candidate_order_seed = 0; // T14: visit the candidates of a bucket in a seeded permutation (0 = stored order)
 };
 
@@ -205,9 +207,19 @@ LayerDesc terrain_carved_desc();
 // The text TerrainCarvedDeriver hashes into its config hash (design 9.3).
 std::string terrain_carved_config_text();
 
+using CutGroundAt = std::function<double(double, double)>;   // ground height (m) at zone metres, NaN = no data
+
 // D65 diagnostic (tools/spot_dump census): is entry `entry` of `tile` a tunnel the carve opens as a cut (short straight floor, not
 // crossed by a ground road)? The same decision the carve loop takes; false for any other entry.
-bool tunnel_entry_is_carved(const RoadGeomTile& tile, std::size_t entry, const CarveOptions& options, const TunnelRules& rules);
+bool tunnel_entry_is_carved(const RoadGeomTile& tile, std::size_t entry, const CarveOptions& options, const TunnelRules& rules, const CutGroundAt* ground_m = nullptr);
+
+// D65 under the 7a-2 design floor: a straight tunnel floor is no longer proof of an open cut (the design floor of a short tunnel
+// stretch is its chord by construction), so the carve also asks for the ground the cut is for: along the reference, the ground
+// (`ground_m(x, y)` in zone metres, NaN = no data) must rise over the chord of the two end heights by between the rules'
+// cut_hump_min_mm and cut_hump_max_mm, each widened by kTunnelCutHumpToleranceM (the completion measured the hump on its own
+// 5 m samples of the bilinear DEM, this reads 1 m stations of the cell DEM).
+inline constexpr double kTunnelCutHumpToleranceM = 0.25;
+bool tunnel_cut_hump_ok(const RoadProfile& p, const TunnelRules& rules, const CutGroundAt& ground_m);
 
 // g2m.terrain.carved. L0: inputs = the 3 x 3 g2m.elev.base neighbourhood (absent = NoData; an absent centre is
 // NotFound, as g2m.terrain.height) and carve_road_geom_keys (absent = no roads there). Offsets are applied once; the
