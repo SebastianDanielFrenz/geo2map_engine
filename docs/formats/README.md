@@ -15,6 +15,9 @@ reject anything that breaks a rule stated here.
 | [rail_geom.md](rail_geom.md) | `g2m.rail.geom` encoding 1: railway pieces with a line-based height profile, structure flags, track attributes | `g2m/layer/rail_geom_tile.h`, `rail_rules.h` |
 | [terrain_carved.md](terrain_carved.md) | `g2m.terrain.carved`: carved terrain pyramid on body encoding 1 (inputs, values, header) | `g2m/layer/terrain_carve.h` |
 | [terrain_class.md](terrain_class.md) | `g2m.terrain.class`: surface classification pyramid, body encoding 7 (257 × 257 nodes, four planes) | `g2m/layer/terrain_class.h` |
+| [fields_geom.md](fields_geom.md) | `g2m.fields.geom`: farm field polygons (OSM blocks cut along tracks, water, hedges), encoding 10 | `g2m/layer/field_tile.h` |
+| [src_soil.md](src_soil.md) | body encoding 11: `g2m.src.soil` raw soil lattice window (42 planes: sand, silt, clay, soc, pH, coarse fragments, bulk density at 6 depths) | `g2m/layer/src_soil.h` |
+| [soil_grid.md](soil_grid.md) | `g2m.soil.grid`: soil facts per 32 m cell, two horizons, texture class, encoding 12 | `g2m/layer/soil_tile.h` |
 | [pack.md](pack.md) | a 16×16 pack of containers with a directory of body hashes | `g2m/layer/pack.h` |
 | [release_manifest.md](release_manifest.md) | release id (rid) and the `g2m.release/1` manifest JSON | `g2m/layer/release.h` |
 | [regions.md](regions.md) | `g2m.regions/1` region definitions, ring assembly rules, `g2m.resolved_region/1` | `g2m/layer/region.h`, `g2m/core/geom/*` |

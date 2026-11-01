@@ -3,6 +3,9 @@
 // shows the dip the served carve inherits from the bare-earth DEM; flat and same-layer controls; the census of both
 // OSM fixtures on the flat and tilted synthetic DEMs is printed (their DEMs have no cuttings, so the dips there bound
 // what the profile fit itself adds). The fixture tiles are the served ones (completion tier on).
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS // getenv/fopen below; -Werror makes the MSVC deprecation a build break
+#endif
 #include "carve_fixture.h"
 #include "road_fixture.h"
 

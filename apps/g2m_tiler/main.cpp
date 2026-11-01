@@ -9,6 +9,9 @@
 //   import-osm --pbf PATH --resolved PATH --store DIR --scope SCOPE [--jobs N]
 //   import-landcover --resolved PATH --store DIR --scope SCOPE
 //                     (--tif PATH [--tif PATH ...] | --data DIR) [--jobs N]
+//   import-soil --resolved PATH --store DIR --scope SCOPE --data DIR [--data DIR ...] [--jobs N] [--pin]
+//               (g2m.src.soil from SoilGrids-shaped GeoTIFF sets, see include/g2m/import/soil.h; the soil
+//               layer is NOT part of the one-call `import`)
 //   import PATH#NAME --pbf PATH --store DIR --scope SCOPE
 //          (--pkt PATH [--pkt PATH ...] | --dem-data DIR)
 //          (--tif PATH [--tif PATH ...] | --wc-data DIR)
@@ -62,6 +65,7 @@
 #include "g2m/import/bake.h"
 #include "g2m/import/dem.h"
 #include "g2m/import/landcover.h"
+#include "g2m/import/soil.h"
 #include "g2m/import/osm.h"
 #include "g2m/import/region_resolve.h"
 #include "g2m/layer/layer_id.h"
@@ -234,6 +238,7 @@ int usage() {
                  "  import-osm --pbf PATH [--pbf PATH ...] --resolved PATH --store DIR --scope SCOPE [--jobs N] [--pin]\n"
                  "  import-landcover --resolved PATH --store DIR --scope SCOPE\n"
                  "                   (--tif PATH [--tif ...] | --data DIR) [--jobs N] [--pin]\n"
+                 "  import-soil --resolved PATH --store DIR --scope SCOPE --data DIR [--data DIR ...] [--jobs N] [--pin]\n"
                  "  import PATH#NAME --pbf PATH [--pbf PATH ...] --store DIR --scope SCOPE\n"
                  "         (--pkt PATH [--pkt ...] | --dem-data DIR) and/or (--bw PATH [--bw ...] | --bw-data DIR)\n"
                  "         (--tif PATH [--tif ...] | --wc-data DIR)\n"
@@ -523,6 +528,60 @@ int cmd_import_osm(const Args& args) {
         std::cerr << "g2m_tiler import-osm: store body_bytes=" << store_stats->body_bytes
                   << " bodies=" << store_stats->bodies << "\n";
     }
+    return 0;
+}
+
+int cmd_import_soil(const Args& args) {
+    const auto resolved_path = args.get("resolved");
+    const auto store_dir = args.get("store");
+    const auto scope = args.get("scope");
+    if (!resolved_path || !store_dir || !scope) {
+        std::cerr << "g2m_tiler import-soil: --resolved, --store and --scope are required\n";
+        return 1;
+    }
+    std::vector<std::filesystem::path> sets;
+    for (const auto& [k, v] : args.flags) {
+        if (k == "data") sets.emplace_back(v);
+    }
+    if (sets.empty()) {
+        std::cerr << "g2m_tiler import-soil: need --data DIR (repeatable; a directory with the 42 <prop>_<depth>_mean.tif files)\n";
+        return 1;
+    }
+    const auto resolved_text = read_file(*resolved_path);
+    if (!resolved_text) {
+        std::cerr << "g2m_tiler import-soil: cannot read " << *resolved_path << "\n";
+        return 1;
+    }
+    const auto resolved = g2m::parse_resolved_region(*resolved_text);
+    if (!resolved) {
+        std::cerr << "g2m_tiler import-soil: " << resolved.error().message << "\n";
+        return 1;
+    }
+    g2m::TileStoreConfig config;
+    config.dir = *store_dir;
+    auto store = g2m::TileStore::open(config);
+    if (!store) {
+        std::cerr << "g2m_tiler import-soil: " << store.error().message << "\n";
+        return 1;
+    }
+    g2m::import::StoreSink sink(**store, *scope, args.flag("pin"));
+    g2m::import::SoilImportOptions options;
+    if (const auto jobs = args.get("jobs")) {
+        try {
+            options.jobs = static_cast<unsigned>(std::stoul(*jobs));
+        } catch (const std::exception&) {
+            std::cerr << "g2m_tiler import-soil: --jobs must be an integer\n";
+            return 1;
+        }
+    }
+    const auto report = g2m::import::import_soil(*resolved, sets, sink, *scope, options);
+    if (!report) {
+        std::cerr << "g2m_tiler import-soil: " << report.error().message << "\n";
+        return 1;
+    }
+    std::cerr << "g2m_tiler import-soil: tiles_written=" << report->tiles_written
+              << " tiles_skipped_nocoverage=" << report->tiles_skipped_nocoverage << " cells_nodata=" << report->cells_nodata
+              << " wall=" << (report->wall_ms / 1000.0) << "s peak RSS " << (g2m_tiler::peak_rss_bytes() / (1024 * 1024)) << " MiB\n";
     return 0;
 }
 
@@ -1323,6 +1382,7 @@ int main(int argc, char** argv) {
     if (command == "import-dem") return cmd_import_dem(args);
     if (command == "import-osm") return cmd_import_osm(args);
     if (command == "import-landcover") return cmd_import_landcover(args);
+    if (command == "import-soil") return cmd_import_soil(args);
     if (command == "import") return cmd_import(args);
     if (command == "stats") return cmd_stats(args);
     if (command == "index-hash") return cmd_index_hash(args);

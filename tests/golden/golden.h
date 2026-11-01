@@ -87,6 +87,14 @@ std::vector<Entry> compute_g3c();
 // anchoring, ground profile and codec bytes; testdata/golden/g3rail_golden.txt.
 std::vector<Entry> compute_g3rail();
 
+// G3f (golden_g3f.cpp, farm fields): g2m.fields.geom over the same two OSM fixtures, every level-2 tile with a field or a
+// decline (container bytes and record hash) plus per-fixture totals; testdata/golden/g3f_golden.txt.
+std::vector<Entry> compute_g3f();
+
+// G3s (golden_g3s.cpp, soil): the texture table over every permille triple, g2m.src.soil and g2m.soil.grid containers of four tiles of
+// the synthetic soil world (tests/support/soil_world.h) and per-field aggregates; testdata/golden/g3s_golden.txt.
+std::vector<Entry> compute_g3s();
+
 // "name count hash\n" per entry, the golden file's line format.
 std::string format(const std::vector<Entry>& entries);
 

@@ -1,0 +1,70 @@
+{
+  "format": "g2m.field_rules/1",
+  "landuse": {
+    "farmland": 0,
+    "meadow": 1,
+    "orchard": 2,
+    "vineyard": 3,
+    "farmyard": 4
+  },
+  "skip": [
+    {"key": "bridge", "values": ["*"]},
+    {"key": "tunnel", "values": ["*"]},
+    {"key": "layer", "values": ["-1", "-2", "-3", "-4", "-5"]}
+  ],
+  "splitters": [
+    {"name": "road_major", "key": "highway", "values": ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"], "half_width_mm": 7000},
+    {"name": "road_minor", "key": "highway", "values": ["secondary", "secondary_link", "tertiary", "tertiary_link", "unclassified", "residential", "living_street", "road"], "half_width_mm": 4000},
+    {"name": "service", "key": "highway", "values": ["service"], "half_width_mm": 2500},
+    {"name": "track", "key": "highway", "values": ["track"], "half_width_mm": 2000},
+    {"name": "path", "key": "highway", "values": ["path", "footway", "cycleway", "bridleway", "pedestrian"], "half_width_mm": 1000},
+    {"name": "railway", "key": "railway", "values": ["rail", "light_rail", "narrow_gauge", "tram", "preserved"], "half_width_mm": 3500},
+    {"name": "river", "key": "waterway", "values": ["river", "canal"], "half_width_mm": 5000},
+    {"name": "stream", "key": "waterway", "values": ["stream"], "half_width_mm": 1500},
+    {"name": "ditch", "key": "waterway", "values": ["ditch", "drain"], "half_width_mm": 1200},
+    {"name": "hedge", "key": "barrier", "values": ["hedge"], "half_width_mm": 1500},
+    {"name": "wall", "key": "barrier", "values": ["wall", "retaining_wall"], "half_width_mm": 500},
+    {"name": "tree_row", "key": "natural", "values": ["tree_row"], "half_width_mm": 2000}
+  ],
+  "obstacles": [
+    {"name": "natural_area", "key": "natural", "values": ["water", "wood", "scrub", "wetland", "bare_rock", "scree", "sand"]},
+    {"name": "water_area", "key": "waterway", "values": ["riverbank", "dock"]},
+    {"name": "landuse_area", "key": "landuse", "values": ["forest", "residential", "industrial", "commercial", "retail", "cemetery", "quarry", "railway", "reservoir", "basin", "construction", "garages", "allotments"]},
+    {"name": "building", "key": "building", "values": ["*"]},
+    {"name": "leisure_area", "key": "leisure", "values": ["park", "garden", "pitch", "playground", "golf_course", "sports_centre", "stadium", "swimming_pool", "water_park"]},
+    {"name": "amenity_area", "key": "amenity", "values": ["parking", "school", "kindergarten", "hospital", "grave_yard"]}
+  ],
+  "raster": {
+    "cell_mm": 1000,
+    "max_cells": 16000000
+  },
+  "block": {
+    "max_extent_m": 3000,
+    "max_cover_tiles": 16
+  },
+  "obstacle_share_cap_percent": 60,
+  "single_piece_keep_percent": 90,
+  "sliver": {
+    "min_area_m2": 300,
+    "min_width_mm": 4000
+  },
+  "simplify": {
+    "tolerance_mm": 1000
+  },
+  "plausible": {
+    "min_area_m2": 200,
+    "max_area_m2": 1000000,
+    "min_width_mm": 3000
+  },
+  "match": {
+    "max_anchor_distance_m": 150
+  },
+  "sources": {
+    "landuse": "OSM wiki landuse=farmland, meadow, orchard, vineyard, farmyard (tag values and crop=*).",
+    "splitters": "[AS] half widths: field track 3-4 m wide, footpath 1-2 m, ditch 1-2.5 m, hedge 2-4 m, tree row 3-5 m, road widths from the typical carriageway of the class (data/road_rules/de.json has the street-fidelity numbers; these are coarser on purpose).",
+    "raster": "[AS] 1 m cells: below the positional accuracy of OSM field outlines (several metres); every cell centre test is exact integer arithmetic.",
+    "simplify": "[AS] one raster cell: a raster staircase along a 45 degree cut deviates 0.71 cells from its chord, so a tolerance below that would keep every step.",
+    "sliver": "[AS] a plot narrower than 4 m (2 * area / perimeter) or smaller than 300 m2 cannot be farmed with a tractor and implement; allotment gardens are 200-400 m2.",
+    "plausible": "[AS] report thresholds only (flags, never a reason to drop): below 200 m2 is a garden plot, above 100 ha is not a field."
+  }
+}

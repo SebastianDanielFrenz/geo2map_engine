@@ -5,8 +5,11 @@
 #include "fuzz_targets.h"
 
 #include "g2m/http/http_wire.h"
+#include "g2m/layer/field_tile.h"
 #include "g2m/layer/pack.h"
 #include "g2m/layer/rail_geom_tile.h"
+#include "g2m/layer/soil_tile.h"
+#include "g2m/layer/src_soil.h"
 #include "g2m/layer/road_graph_tile.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/layer/region.h"
@@ -325,6 +328,40 @@ void run(Target target, std::span<const std::uint8_t> data) {
                     for (std::size_t k = 0; k < n; ++k) check(std::isfinite(lanes[k].centre_t) && lanes[k].width_m >= 0.5, "xs eval: lane");
                 }
             }
+        }
+        return;
+    }
+    case Target::SrcSoil: {
+        const auto body = body_of(data); if (!body) return;
+        const auto tile = g2m::decode_src_soil(*body); if (!tile) return;
+        check(tile->values.size() == static_cast<std::size_t>(tile->width) * static_cast<std::size_t>(tile->height) * g2m::kSoilPlanes, "src.soil: value count matches the window");
+        const auto enc = g2m::encode_src_soil(*tile); check(enc.ok(), "src.soil: re-encode");
+        const auto back = g2m::decode_src_soil(*enc); check(back.ok() && *back == *tile, "src.soil: round trip");
+        return;
+    }
+    case Target::SoilGrid: {
+        const auto body = body_of(data); if (!body) return;
+        const auto tile = g2m::decode_soil_grid(*body); if (!tile) return;
+        check(g2m::validate_soil_grid(*tile).ok(), "soil.grid: decoded tile validates");
+        const auto enc = g2m::encode_soil_grid(*tile); check(enc.ok(), "soil.grid: re-encode");
+        const auto back = g2m::decode_soil_grid(*enc); check(back.ok() && *back == *tile, "soil.grid: round trip");
+        const std::int64_t size_mm = tile->key.size_m() * 1000, cell_mm = size_mm / tile->cells_per_side;
+        for (std::int32_t r = 0; r < tile->cells_per_side; ++r)
+            for (std::int32_t c = 0; c < tile->cells_per_side; ++c) {
+                const auto hit = g2m::soil_at(*tile, tile->key.min_easting() * 1000 + c * cell_mm + cell_mm / 2, tile->key.min_northing() * 1000 + r * cell_mm + cell_mm / 2);
+                check(hit.has_value() && *hit == tile->cells[static_cast<std::size_t>(r) * static_cast<std::size_t>(tile->cells_per_side) + static_cast<std::size_t>(c)], "soil.grid: soil_at finds every cell");
+            }
+        return;
+    }
+    case Target::FieldsGeom: {
+        const auto body = body_of(data); if (!body) return;
+        const auto tile = g2m::decode_fields_geom(*body); if (!tile) return;
+        check(g2m::validate_field_tile(*tile).ok(), "fields.geom: decoded tile validates");
+        const auto enc = g2m::encode_fields_geom(*tile); check(enc.ok(), "fields.geom: re-encode");
+        const auto back = g2m::decode_fields_geom(*enc); check(back.ok() && *back == *tile, "fields.geom: round trip");
+        for (const auto& f : tile->fields) {
+            const auto hit = g2m::field_at(*tile, f.anchor);
+            check(hit.has_value() && *hit < tile->fields.size(), "fields.geom: the anchor is inside a field");
         }
         return;
     }
