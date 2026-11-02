@@ -72,6 +72,7 @@ struct SurfaceIdTable {
                 lut.v[lc * 16 + sk] = resolve(land_class, kind);
             }
         }
+        lut.replicate_tier0(); // no per-tier distinction here: every road tier resolves like tier 0
         return lut;
     }
 

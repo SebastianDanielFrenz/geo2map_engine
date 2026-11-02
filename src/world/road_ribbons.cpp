@@ -8,6 +8,7 @@
 #include "g2m/core/det_math.h"
 #include "g2m/layer/road_cross_section.h"
 #include "g2m/layer/road_furniture.h"
+#include "g2m/layer/road_tier.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -108,7 +109,17 @@ std::vector<P2> clip(const std::vector<P2>& poly,int axis,double v,int keep) {
 }
 namespace {
 // Lane layout of one paved stretch as the ribbon draws it (the fragment shader reads lanes, forward and the flags).
-struct LaneLayout { std::string highway,direction; bool one=false,fast=false; double width=0; int lanes=1,forward=1,flags=0; };
+struct LaneLayout { std::string highway,direction; bool one=false,fast=false; double width=0; int lanes=1,forward=1,flags=0; std::uint8_t tier=g2m::kNoRoadTier; };
+// Stamps road_tier on every vertex appended during its lifetime that no inner scope has stamped yet (a scope per ribbon stretch,
+// junction or marking; kNoRoadTier = stamps nothing). Safe across continue/early return and the resize() rollbacks.
+struct TierScope {
+ RoadRibbonTile& mesh;std::size_t first;std::uint8_t tier;
+ TierScope(RoadRibbonTile& m,std::uint8_t t):mesh(m),first(m.vertices.size()),tier(t){}
+ TierScope(const TierScope&)=delete;TierScope& operator=(const TierScope&)=delete;
+ ~TierScope(){if(tier==g2m::kNoRoadTier)return;for(std::size_t i=first;i<mesh.vertices.size();++i)if(mesh.vertices[i].road_tier==static_cast<float>(g2m::kNoRoadTier))mesh.vertices[i].road_tier=static_cast<float>(tier);}
+};
+// The more important (lower) of two tiers; kNoRoadTier (255) loses against any real tier.
+std::uint8_t more_important(std::uint8_t a,std::uint8_t b){return std::min(a,b);}
 enum MarkFlag : int { kMarking=1, kEdgeLines=2, kSolidSeparator=4, kFast=8, kPaint=16, kOverlay=32, kLeftEdgeBroken=64, kRightEdgeBroken=128,
                      kLeftEdgeHidden=512, kRightEdgeHidden=1024, kStones=2048, kConcrete=4096, kUnpaved=8192, kSett=16384 };
 // Paving surface of a way (OSM surface=*) as the ribbon shader draws it: stones (paving stones, sett, cobblestone),
@@ -132,9 +143,10 @@ bool opens_edge_line(const g2m::RoadGraphWay& side,const std::string& through_hi
  if(!fast||tag(side,"highway")!="service")return true;
  return tag(side,"service").empty()&&angle<35*3.14159265358979323846/180;
 }
-std::optional<LaneLayout> lane_layout(const g2m::RoadGeomEntry& entry,const g2m::RoadGraphWay& w) {
+std::optional<LaneLayout> lane_layout(const g2m::RoadGeomEntry& entry,const g2m::RoadGraphWay& w,const g2m::RoadTierMap* tiers) {
  if(!entry.profile)return {};const auto& p=*entry.profile;if(p.attributes.land_class!=g2m::LandClass::PavedRoad)return {};
  LaneLayout l;l.highway=tag(w,"highway");const auto& highway=l.highway;
+ if(tiers)l.tier=g2m::road_tier_of(*tiers,w,p.attributes.land_class);
  if(highway=="footway"||highway=="path"||highway=="cycleway"||highway=="steps"||highway=="pedestrian")return {};
  l.direction=tag(w,"oneway");const auto& direction=l.direction;
  l.one=direction=="yes"||direction=="1"||direction=="true"||direction=="-1"||(direction.empty()&&(highway=="motorway"||tag(w,"junction")=="roundabout"));
@@ -233,7 +245,7 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
  const RoadRibbonGround ground=lattice?RoadRibbonGround([&drape](double e,double n){return drape.height_abs(e,n);}):caller_ground;
  const double ox=static_cast<double>(key.min_easting()),oy=static_cast<double>(key.min_northing());
  constexpr double kPi=3.14159265358979323846;
- struct Arm { P2 cut,in;double half=0;int surface=0,rank=0; };
+ struct Arm { P2 cut,in;double half=0;int surface=0,rank=0;std::uint8_t tier=g2m::kNoRoadTier; };
  for(const auto& j:geometry.junctions) {
   if(j.decline!=g2m::JunctionDecline::None||(j.flags&static_cast<std::uint16_t>(g2m::JunctionFlags::OnStructure)))continue;
   // The road bed ring: carriageway plus shoulders, the band the ribbons draw as asphalt (the paved ring adds sidewalks).
@@ -247,7 +259,7 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
    const auto& entry=geometry.entries[ap.entry_index];const auto* w=find_way(geometry,entry.way_id);if(!w||!entry.profile)continue;
    // An unpaved road (track, gravel lane) has no ribbon - the terrain draws it - but its mouth in the ring takes its
    // surface, not asphalt. Foot and cycle paths stay out.
-   auto layout=lane_layout(entry,*w);int surface=layout?surface_flags(tag(*w,"surface")):0;
+   auto layout=lane_layout(entry,*w,options.road_tiers);int surface=layout?surface_flags(tag(*w,"surface")):0;
    if(!layout) {
     const auto highway=tag(*w,"highway");
     if(entry.profile->attributes.land_class!=g2m::LandClass::UnpavedRoad||highway=="footway"||highway=="path"||highway=="cycleway"||
@@ -259,7 +271,7 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
    const auto span=span_at(entry,*layout,cut);const double centre=(span.bed_left+span.bed_right)/2;
    const double heading=ap.at_end?pose->heading:pose->heading+kPi;
    arms.push_back({{pose->x-det::sin(pose->heading)*centre-ox,pose->y+det::cos(pose->heading)*centre-oy},{det::cos(heading),det::sin(heading)},
-                   (span.bed_left-span.bed_right)/2,surface,road_priority_rank(*w)});
+                   (span.bed_left-span.bed_right)/2,surface,road_priority_rank(*w),layout->tier});
   }
   const bool mixed=std::any_of(arms.begin(),arms.end(),[&](const Arm& a){return a.surface!=arms.front().surface;});
   // The major road's centre line through the ring (a polyline with its half width per point) and its arms; with one
@@ -337,6 +349,8 @@ void add_junction_surfaces(RoadRibbonTile& mesh,const g2m::RoadGeomTile& geometr
    }
    return best;
   };
+  std::uint8_t patch_tier=g2m::kNoRoadTier;for(const auto& arm:arms)patch_tier=more_important(patch_tier,arm.tier);
+  const TierScope tier_scope(mesh,patch_tier);
   const auto first=mesh.vertices.size();const auto first_index=mesh.indices.size();bool valid=true;
   std::map<std::tuple<std::int64_t,std::int64_t,int>,std::int32_t> shared; // vertex dedup on a 0.1 mm key per arm
   // A piece belongs to an arm (-1: the whole patch of a single paving): its paving, and u, v along that arm's heading in
@@ -442,7 +456,12 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
  const auto owned=[&](double x,double y){return std::floor(x/1024)==key.x&&std::floor(y/1024)==key.y;};
  // Painted rectangle on a stretch (station s0..s1, lateral t0..t1, reference frame), split every metre across so it
  // follows the ground; `raise` above the ribbon surface.
+ const auto entry_tier=[&](const g2m::RoadGeomEntry& entry)->std::uint8_t{
+  if(!options.road_tiers||!entry.profile)return g2m::kNoRoadTier;
+  const auto* tier_way=find_way(geometry,entry.way_id);
+  return tier_way?g2m::road_tier_of(*options.road_tiers,*tier_way,entry.profile->attributes.land_class):g2m::kNoRoadTier;};
  const auto paint_rect=[&](const g2m::RoadGeomEntry& entry,double s0,double s1,double t0,double t1,double raise) {
+  const TierScope tier_scope(mesh,entry_tier(entry));
   const auto& p=*entry.profile;const int across=std::max(1,static_cast<int>(std::ceil(std::abs(t1-t0))));
   if(lattice&&!separated_at(entry,s0)&&!separated_at(entry,s1)) {
    std::vector<detail::DrapeVertex> grid;grid.reserve(2*static_cast<std::size_t>(across+1));
@@ -483,7 +502,7 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
   for(const auto& ap:j.approaches) {
    if(ap.status!=g2m::JunctionApproachStatus::Used||ap.entry_index>=geometry.entries.size())continue;
    const auto& entry=geometry.entries[ap.entry_index];const auto* w=find_way(geometry,entry.way_id);if(!w||!entry.profile)continue;
-   auto layout=lane_layout(entry,*w);if(!layout)continue;
+   auto layout=lane_layout(entry,*w,options.road_tiers);if(!layout)continue;
    signalled=signalled||signal_entries.contains(ap.entry_index);
    Approach a;a.entry=ap.entry_index;a.at_end=ap.at_end;a.layout=*layout;a.rank=road_priority_rank(*w);a.roundabout=tag(*w,"junction")=="roundabout";a.way=w;
    const double length=entry.profile->reference.length_m;a.cut=std::clamp(ap.at_end?length-ap.trim_m:ap.trim_m,0.0,length);
@@ -640,7 +659,8 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
  for(const auto& entry:geometry.entries) {
   if(!entry.profile)continue;const auto& p=*entry.profile;
   const auto* way_ptr=find_way(geometry,entry.way_id);if(!way_ptr)continue;const auto& w=*way_ptr;
-  const auto layout=lane_layout(entry,w);if(!layout)continue;
+  const auto layout=lane_layout(entry,w,options.road_tiers);if(!layout)continue;
+  const TierScope tier_scope(mesh,layout->tier);
   const auto& direction=layout->direction;const bool one=layout->one;
   const int lanes=layout->lanes,forward=layout->forward,flags=layout->flags;
   const double length=p.reference.length_m;if(length<=.01)continue;
@@ -827,15 +847,17 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
   if(j.decline!=g2m::JunctionDecline::None||(j.flags&static_cast<std::uint16_t>(g2m::JunctionFlags::OnStructure)))continue;
   const auto& ring=j.rings[static_cast<std::size_t>(g2m::JunctionRingLayer::RoadBed)].vertices;if(ring.size()<3)continue;
   struct Mouth { double x,y,tx,ty,lo,hi; };
-  std::vector<Mouth> mouths;
+  std::vector<Mouth> mouths;std::uint8_t verge_tier=g2m::kNoRoadTier;
   for(const auto& ap:j.approaches) {
    if(ap.status!=g2m::JunctionApproachStatus::Used||ap.entry_index>=geometry.entries.size())continue;
    const auto& entry=geometry.entries[ap.entry_index];const auto* w=find_way(geometry,entry.way_id);if(!w||!entry.profile)continue;
-   const auto layout=lane_layout(entry,*w);if(!layout)continue;
+   const auto layout=lane_layout(entry,*w,options.road_tiers);if(!layout)continue;
    const double length=entry.profile->reference.length_m,cut=std::clamp(ap.at_end?length-ap.trim_m:ap.trim_m,0.0,length);
    const auto pose=reference_pose(*entry.profile,cut);if(!pose)continue;const auto span=span_at(entry,*layout,cut);
    mouths.push_back({pose->x,pose->y,det::cos(pose->heading),det::sin(pose->heading),span.bed_right,span.bed_left});
+   verge_tier=more_important(verge_tier,layout->tier);
   }
+  const TierScope tier_scope(mesh,verge_tier);
   // A ring vertex on an approach's trim line, across its road bed (within a few centimetres of rounding).
   const auto on_mouth=[&](const Mouth& m,double x,double y){
    const double along=(x-m.x)*m.tx+(y-m.y)*m.ty,lateral=-(x-m.x)*m.ty+(y-m.y)*m.tx;
@@ -1006,6 +1028,7 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
  };
  for(const auto& o:overlays) {
   const auto& a=o.a;const auto& b=o.b;
+  const TierScope tier_scope(mesh,more_important(a.layout.tier,b.layout.tier));
   const double ax=det::cos(a.inward),ay=det::sin(a.inward),bx=-det::cos(b.inward),by=-det::sin(b.inward);
   const double chord=det::hypot(b.lead.x-a.lead.x,b.lead.y-a.lead.y);if(chord<.5||chord>200)continue;
   if(!owned((a.pose.x+b.pose.x)/2,(a.pose.y+b.pose.y)/2))continue;
