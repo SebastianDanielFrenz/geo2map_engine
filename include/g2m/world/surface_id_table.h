@@ -38,6 +38,12 @@ static_assert(static_cast<std::size_t>(LandClass::SnowIce) + 1 == kLandClassCoun
 struct SurfaceIdTable {
     std::array<std::uint16_t, kSurfaceKindCount> by_surface_kind{};
     std::array<std::uint16_t, kLandClassCount> by_land_class{};
+    // Road clearing tiers (road_tier.h): when `tiers` is set, a PavedRoad cell that carries a tier (resolve's `tier_plus1`
+    // = TerrainClassTile::road_tier value, t + 1) takes by_tier[t] whatever its SurfaceKind - the same rule as
+    // RoadValueLut::by_tier in road mode. Default off: resolve(land, kind) and every cell without a tier read exactly as
+    // before. A tier past the last slot is clamped to it.
+    bool tiers = false;
+    std::array<std::uint16_t, RoadValueLut::kTiers> by_tier{};
 
     std::uint16_t for_surface_kind(SurfaceKind kind) const {
         const auto i = static_cast<std::size_t>(kind);
@@ -52,7 +58,14 @@ struct SurfaceIdTable {
         return land_class == LandClass::PavedRoad || land_class == LandClass::UnpavedRoad;
     }
 
-    // The id for one classified cell (rule in the file comment).
+    // The id for one classified cell (rule in the file comment). `tier_plus1` (0 = none, else t + 1): see `tiers`.
+    std::uint16_t resolve(LandClass land_class, SurfaceKind kind, std::uint8_t tier_plus1) const {
+        if (tiers && tier_plus1 != 0 && land_class == LandClass::PavedRoad) {
+            const std::size_t t = static_cast<std::size_t>(tier_plus1) - 1;
+            return by_tier[t < by_tier.size() ? t : by_tier.size() - 1];
+        }
+        return resolve(land_class, kind);
+    }
     std::uint16_t resolve(LandClass land_class, SurfaceKind kind) const {
         if (is_road(land_class) && kind != SurfaceKind::Unknown) {
             return for_surface_kind(kind);
@@ -73,6 +86,11 @@ struct SurfaceIdTable {
             }
         }
         lut.replicate_tier0(); // no per-tier distinction here: every road tier resolves like tier 0
+        if (tiers) {
+            for (std::size_t t = 0; t < by_tier.size(); ++t)
+                for (std::size_t sk = 0; sk < 16; ++sk)
+                    lut.v[t * RoadValueLut::kTierStride + static_cast<std::size_t>(LandClass::PavedRoad) * 16 + sk] = by_tier[t];
+        }
         return lut;
     }
 
