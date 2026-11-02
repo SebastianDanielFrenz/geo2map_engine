@@ -767,8 +767,8 @@ Candidates for a cell X (from its block bucket):
    - take the lowest z among them;
    - junction cores beat approach cores. The ring contains the approach's area for
      σ < trim, and the core range excludes it, so the two meet only on trim lines.
-2. Else if any **approach core** covers X, take the **lowest z** (PLAN 6.3 step 6:
-   "lowest road wins").
+2. Else if any **approach core** covers X, prefer a core whose road's **paved surface** (carriageway, shoulders, sidewalks) holds X over
+   one that reaches X only with its verge (G2M-032), then take the **lowest z** (PLAN 6.3 step 6: "lowest road wins").
    - Two cores overlap only where two ground roads share pavement without a junction:
      a parallel service road touching a main road, or a declined junction. Taking the
      minimum keeps the result independent of order.

@@ -104,19 +104,19 @@ TEST_CASE("M1 a merge ramp lands on the centre line of the added lane, over the 
     (void)a;
 }
 
-TEST_CASE("M2 the through pair of a merge joins like a degree-two node: the added lane ramps in from zero", "[layer][road_merge_lane][roads]") {
+TEST_CASE("M2 the through pair of a merge joins like a degree-two node; the added lane is full width at the node", "[layer][road_merge_lane][roads]") {
     const auto s = merge_scene();
     const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
     const auto& rules = builtin_road_rules_de();
     const auto a = resolve_in(*builder, s.a, rules), b = resolve_in(*builder, s.b, rules);
     CHECK(a.xs.end_join.kind == JoinKind::LaneChange); CHECK(a.xs.end_join.neighbour_way_id == s.b);
     CHECK(b.xs.start_join.kind == JoinKind::LaneChange); CHECK(b.xs.start_join.neighbour_way_id == s.a);
+    // G2M-032: the link lands on the added lane, so the lane is already whole at the node (no taper from zero, which left the
+    // link's square end standing beside the carriageway).
     const auto l = last_counted(b.xs);
-    CHECK(b.xs.bands[l].start.from_width_mm == 0);
-    CHECK(b.xs.bands[l].start.length_mm == rules.find_class("trunk")->taper.lane_add_m * 1000);
-    // The shared lanes meet exactly at the node.
+    CHECK(b.xs.bands[l].start.length_mm == 0);
     const auto bd = boundaries(b.xs, 0.0);
-    CHECK(bd[l] == bd[l + 1]);
+    CHECK(std::round((bd[l] - bd[l + 1]) * 1000.0) == b.xs.bands[l].width_mm);
     // B ends in a lane drop at its far node (degree 2, nothing joins it): no taper there, but the section is whole.
     CHECK(b.xs.end_join.kind == JoinKind::None);
 }
@@ -150,6 +150,11 @@ TEST_CASE("M4 an exit (diverge) is the same join read forwards: the ramp leaves 
     CHECK(r.xs.offset.end_mm == 0);
     CHECK(r.xs.offset.start_mm < 0);   // the lane on the right: the ramp starts to the right of the way line and drifts out
     CHECK(r.xs.offset.start_length_mm > 0);
+    // G2M-032: the lane that ends is whole up to the node, where the link takes it over (the far end of B keeps its own join).
+    const auto l = last_counted(b.xs);
+    CHECK(b.xs.bands[l].end.length_mm == 0);
+    const auto bd = boundaries(b.xs, b.length);
+    CHECK(std::round((bd[l] - bd[l + 1]) * 1000.0) == b.xs.bands[l].width_mm);
 }
 
 TEST_CASE("M5 what is no merge lane gets no landing and no join", "[layer][road_merge_lane][roads]") {
@@ -188,4 +193,40 @@ TEST_CASE("M6 the rules switch: merge_lane.enabled false leaves every end as bef
     const auto r = resolve_in(*builder, s.r, rules), a = resolve_in(*builder, s.a, rules), b = resolve_in(*builder, s.b, rules);
     CHECK(r.xs.offset.mode == OffsetMode::None); CHECK(r.xs.end_join.kind == JoinKind::None);
     CHECK(a.xs.end_join.kind == JoinKind::None); CHECK(b.xs.start_join.kind == JoinKind::None);
+}
+
+// The owner's exit on the B 8 eastbound west of Hoechst (2026-11-02, UTM 32N 465849.8 / 5552329.5), the real ways: B 8 way 313879335 (3 lanes,
+// the right one slight_right) arrives at node 48689210 (motorway_junction), way 173934133 (2 lanes) continues, the trunk_link 1455975794 leaves.
+// Coordinates are the OSM nodes in UTM 32N, millimetres relative to E 465800 / N 5552300 (rounded to 1 mm).
+TEST_CASE("M7 the B 8 exit at Hoechst: the exit lane is whole at the diverge node and the link leaves from its centre line", "[layer][road_merge_lane][roads]") {
+    const std::vector<std::pair<std::int64_t, std::pair<std::int64_t, std::int64_t>>> pts = {
+        {2098369182, {-12374, 53832}}, {48689210, {55276, 34029}}, {2556744247, {91847, 22520}}, {3263357421, {121140, 13182}},
+        {13155763701, {68067, 25452}}, {13155708098, {71673, 23628}}, {13155708099, {75274, 22181}}, {13155708100, {85595, 18490}},
+        {2556744245, {92506, 15967}}, {13155708097, {103121, 11462}}, {3263357419, {111575, 6460}}};
+    RoadGraph g;
+    for (const auto& [id, p] : pts) g.nodes.push_back({id, {p.first, p.second}});
+    std::sort(g.nodes.begin(), g.nodes.end(), [](const auto& a, const auto& b) { return a.osm_id < b.osm_id; });
+    g.ways = {way(173934133, {48689210, 2556744247, 3263357421}, {{"highway", "trunk"}, {"lanes", "2"}, {"oneway", "yes"}}),
+              way(313879335, {2098369182, 48689210}, {{"highway", "trunk"}, {"lanes", "3"}, {"oneway", "yes"}, {"placement", "right_of:1"}, {"turn:lanes", "none|none|slight_right"}}),
+              way(1455975794, {48689210, 13155763701, 13155708098, 13155708099, 13155708100, 2556744245, 13155708097, 3263357419},
+                  {{"highway", "trunk_link"}, {"lanes", "1"}, {"oneway", "yes"}})};
+    for (const auto& w : g.ways) for (std::size_t i = 1; i < w.node_ids.size(); ++i)
+        g.edges.push_back({w.osm_id, static_cast<std::uint32_t>(i - 1), w.node_ids[i - 1], w.node_ids[i]});
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    const auto& rules = builtin_road_rules_de();
+    const auto b8 = resolve_in(*builder, 313879335, rules), cont = resolve_in(*builder, 173934133, rules), link = resolve_in(*builder, 1455975794, rules);
+    // The three arms are one diverge: the B 8 pair joins as a lane drop, the link takes the exit lane.
+    CHECK(b8.xs.end_join.kind == JoinKind::LaneChange); CHECK(cont.xs.start_join.kind == JoinKind::LaneChange);
+    REQUIRE(link.xs.start_join.kind == JoinKind::Landing);
+    CHECK(link.xs.start_join.neighbour_way_id == 313879335);
+    CHECK(link.xs.offset.start_mm < 0);   // to the right of its way line, on the exit lane
+    // The exit lane (the third counted band) is full width right up to the node: no tent that ends in a point there.
+    const auto l = last_counted(b8.xs);
+    REQUIRE(l == 4);
+    CHECK(b8.xs.bands[l].end.length_mm == 0);
+    const auto bd = boundaries(b8.xs, b8.length);
+    CHECK(std::round((bd[l] - bd[l + 1]) * 1000.0) == b8.xs.bands[l].width_mm);
+    // The link starts on the exit lane's centre line (the real case measured 5637 mm right of its way line; the lane's own centre, the shoulder
+    // and the join's width correction of B 8 decide it, M1/M4 pin the exact rule on the synthetic scenes).
+    CHECK(link.xs.offset.start_mm <= -5300); CHECK(link.xs.offset.start_mm >= -6000);
 }

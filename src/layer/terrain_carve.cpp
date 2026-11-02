@@ -798,7 +798,7 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
     }
     if (have) { out.z = best_z; out.owner = CarveOwner::JunctionCore; out.element = best_el; out.weight = 1; }
     // 2. Approach cores (lowest z) and approach blends.
-    bool have_core = false; double core_z = 0; std::size_t core_el = 0;
+    bool have_core = false, core_paved = false; double core_z = 0; std::size_t core_el = 0;
     bool have_blend = false; double blend_z = 0, blend_w = 0; std::size_t blend_el = 0; CarveOwner blend_owner = CarveOwner::ApproachBlend;
     const auto offer_blend = [&](double z, double w, std::size_t el, CarveOwner owner) {
         if (!have_blend || (!first && (w > blend_w || (w == blend_w && z < blend_z)))) { have_blend = true; blend_z = z; blend_w = w; blend_el = el; blend_owner = owner; }
@@ -816,7 +816,13 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
                 const CarveFootprint f = carve_footprint(*m.core.entries[line.entry].cross_section, p.s);
                 if (p.t >= f.outer_right && p.t <= f.outer_left) {
                     const double z = road_surface_height_m(m.core, line.entry, p.s, p.t, m.surface);
-                    if (!have_core || (!first && z < core_z)) { have_core = true; core_z = z; core_el = line.entry; }
+                    // G2M-032: where cores overlap, the road whose paved surface (carriageway, shoulders, sidewalks) holds the point
+                    // wins over a road that only reaches it with its verge, whatever their heights; the lowest core decides among
+                    // equals. A verge is the flat strip carving levels beside a road, not a surface: letting it win cut the half of
+                    // a higher carriageway that lies against a lower road's verge down to the lower road (B 8 / Main-Taunus-Zentrum).
+                    const bool paved = p.t >= f.paved_right && p.t <= f.paved_left;
+                    const bool wins = !have_core || (!first && ((m.options.paved_over_verge && paved != core_paved) ? paved : z < core_z));
+                    if (wins) { have_core = true; core_z = z; core_el = line.entry; core_paved = paved; }
                     continue;
                 }
             }
@@ -1098,7 +1104,7 @@ LayerDesc terrain_carved_desc() {
 std::string terrain_carved_config_text() {
     const auto& sha = builtin_carve_default().content_sha256;
     return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 tunnel-cut=D65/" + std::to_string(builtin_road_rules_de().tunnel.cut_max_length_m) + "+hump carve=" +
-        to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even";
+        to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + " paved-over-verge=G2M-032; L1-L6 mean-of-4 half-even";
 }
 
 TerrainCarvedDeriver::TerrainCarvedDeriver() : desc_(terrain_carved_desc()) {}

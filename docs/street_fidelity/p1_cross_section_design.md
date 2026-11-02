@@ -607,8 +607,12 @@ and the rules, symmetric in the arms, so each of the three stretches resolved in
 
 **Effects.**
 
-1. T and S get a synthesized join partner (`JoinKind::LaneChange`): the added bands ramp in from zero width (merge: at S's start) or out
-   to zero (exit: at S's end) over the class taper `lane_add_m` / `lane_drop` (4.2), clipped to the stretch length (4.5).
+1. T and S get a synthesized join partner (`JoinKind::LaneChange`). The added bands of S are FULL width at the node (G2M-032): R lands on
+   (merge) or leaves from (exit) that lane, so a taper to zero there left R's square end standing beside the carriageway (owner report
+   2026-11-02, B 8 eastbound exit to the Main-Taunus-Zentrum, way 313879335, node 48689210). The matched lanes join as usual; the added
+   lane ramps only at S's far end, where S's own join (a degree-two lane change, 4.2) applies the class taper `lane_add_m` / `lane_drop`,
+   clipped to the stretch length (4.5). Test `test_road_merge_lane.cpp` M7 (the real ways). Before G2M-032 the bands ramped from zero
+   at the node (merge, S's start) or to zero (exit, S's end).
 2. R lands on the centre line of the added lane group: `landing = round(target / cos(phi))` with `target` = the group's centre seen from
    S's way line plus S's join correction and `phi` the angle between R's and S's travel directions. It is an `OffsetMode::Ramps` end
    (merge) or start (exit) offset of length `a = clamp(landing_m_per_m * |landing|, landing_min_m, landing_max_m)`; R's join record is

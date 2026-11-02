@@ -546,6 +546,71 @@ TEST_CASE("carve T15: the deck clamp keeps terrain 0.55 m below a bridge, leaves
     CHECK(stats.bridge_entries == 1);
 }
 
+// ---- G2M-032: a carriageway beats the verge of a lower road beside it ----
+
+namespace {
+// Two parallel one-way links 7 m apart along x (way 40 at y 400 m, 1 lane; way 41 at y 407 m, 2 lanes) on a DEM that is 100 m south of
+// y 403 and 103.4 m north of y 405: the real B 8 exit (ramp low, MTZ link on the embankment beside it), where the footprints touch.
+RoadGraph two_level_world() {
+    RoadGraph w;
+    const auto node = [&](std::int64_t id, std::int64_t x, std::int64_t y) { w.nodes.push_back({id, {x * 1000, y * 1000}}); };
+    node(1, 100, 400); node(2, 800, 400); node(3, 100, 407); node(4, 800, 407);
+    w.ways = {{40, 3, {1, 2}, {{"highway", "trunk_link"}, {"lanes", "1"}, {"oneway", "yes"}}},
+              {41, 3, {3, 4}, {{"highway", "trunk_link"}, {"lanes", "2"}, {"oneway", "yes"}}}};
+    for (const auto& way : w.ways) for (std::size_t i = 1; i < way.node_ids.size(); ++i)
+        w.edges.push_back({way.osm_id, static_cast<std::uint32_t>(i - 1), way.node_ids[i - 1], way.node_ids[i]});
+    return w;
+}
+double bench_dem(double, double n) {
+    const double u = std::clamp((n - 403.0) / 2.0, 0.0, 1.0);
+    return 100.0 + 3.4 * u;
+}
+} // namespace
+
+TEST_CASE("carve G2M-032: the paved surface of a higher road wins over the verge of the lower road beside it", "[layer][carve][merge]") {
+    const RoadGraph w = two_level_world();
+    g2m_test::CarveFixture fx(w, bench_dem);
+    const TileKey key = l0(1, 1);
+    CarveOptions off; off.paved_over_verge = false;
+    const auto m = fx.model(key), m_off = fx.model(key, off);
+    const RoadGeomTile& core = m.model->core_tile();
+    std::size_t low = 0, high = 0;
+    for (std::size_t e = 0; e < core.entries.size(); ++e) {
+        if (core.entries[e].way_id == 40) low = e;
+        if (core.entries[e].way_id == 41) high = e;
+    }
+    REQUIRE(core.entries[low].cross_section); REQUIRE(core.entries[high].cross_section);
+    const auto params = builtin_carve_default();
+    // Cells on the high road's paved surface that also lie in the low road's footprint (its verge, or its paved edge).
+    std::size_t overlap = 0, high_wins = 0, high_wins_off = 0, height_ok = 0;
+    double worst = 0;
+    for (int j = 0; j < 256; ++j) for (int i = 0; i < 256; ++i) {
+        const double x = key.min_easting() + i + 0.5, y = key.min_northing() + j + 0.5;
+        double sh = 0, th = 0, sl = 0, tl = 0;
+        if (!m.model->station_of(high, x, y, sh, th) || !m.model->station_of(low, x, y, sl, tl)) continue;
+        const CarveFootprint fh = carve_footprint(*core.entries[high].cross_section, sh), fl = carve_footprint(*core.entries[low].cross_section, sl);
+        if (th < fh.paved_right || th > fh.paved_left || tl < fl.outer_right || tl > fl.outer_left) continue;
+        if (tl >= fl.paved_right && tl <= fl.paved_left) continue;   // both paved: the lowest core decides, as before
+        ++overlap;
+        const CarveSample so = m.model->evaluate(x, y);
+        if (so.owner == CarveOwner::ApproachCore && so.element == high) {
+            ++high_wins;
+            const double top = road_surface_height_m(core, high, sh, th, params.surface_params());
+            const double err = std::abs(so.z - top);
+            worst = std::max(worst, err);
+            if (err < 1.0 / 256.0) ++height_ok;
+        }
+        const CarveSample sf = m_off.model->evaluate(x, y);
+        if (sf.owner == CarveOwner::ApproachCore && sf.element == high) ++high_wins_off;
+    }
+    std::printf("[G2M-032] overlap cells %zu, higher road owns %zu (height exact %zu, worst %.4f m), with the old rule %zu\n", overlap, high_wins, height_ok, worst, high_wins_off);
+    CHECK(overlap > 100);
+    CHECK(high_wins == overlap);
+    CHECK(height_ok == overlap);
+    // Negative control: the old rule gives the strip to the lower road's verge.
+    CHECK(high_wins_off < overlap / 2);
+}
+
 // ---- T19 workers and allocation ----
 
 TEST_CASE("carve T19: 1 and 10 workers give identical tiles; evaluate allocates nothing", "[layer][carve]") {
@@ -741,7 +806,7 @@ TEST_CASE("carve: layer description, inputs and config text", "[layer][carve]") 
     CHECK_FALSE(has_level(d.levels, 7));
     const auto& sha = builtin_carve_default().content_sha256;
     CHECK(terrain_carved_config_text() == "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 tunnel-cut=D65/80+hump carve=" +
-        to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + "; L1-L6 mean-of-4 half-even");
+        to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + " paved-over-verge=G2M-032; L1-L6 mean-of-4 half-even");
     // carve_road_geom_keys: one level-2 tile in the middle, four at a level-2 corner.
     CHECK(carve_road_geom_keys(l0(1821, 21685)).size() == 1);
     CHECK(carve_road_geom_keys(l0(1820, 21684)).size() == 4);

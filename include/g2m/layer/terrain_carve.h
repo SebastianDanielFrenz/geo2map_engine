@@ -85,6 +85,7 @@ struct CarveOptions {
     bool tunnel_cut = true;                 // D65 sabotage: false leaves a short straight tunnel floor under the bank (never carved)
     bool tunnel_cut_crossing_check = true;  // D65 sabotage: false also cuts a tunnel a ground road runs over (a slot in that road)
     bool tunnel_cut_hump_check = true;      // 7a-2 sabotage: false opens every short straight tunnel floor as a cut (the design floor of a short tunnel is straight by construction)
+    bool paved_over_verge = true;           // G2M-032 sabotage: false lets the lower of two overlapping cores win even when one is only a verge
     std::uint64_t candidate_order_seed = 0; // T14: visit the candidates of a bucket in a seeded permutation (0 = stored order)
 };
 

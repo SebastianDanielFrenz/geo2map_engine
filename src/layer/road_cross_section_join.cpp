@@ -484,6 +484,7 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
     std::array<EndResult, 2> ends; // 0 = start, 1 = end
     std::array<std::int32_t, 2> landing{0, 0}, landing_length{0, 0};   // the end of a merge ramp (G2M-028)
     std::array<std::int64_t, 2> landing_single{0, 0};                    // ... and the single arm it lands beside
+    std::array<bool, 2> single_at_merge{false, false};                    // this end is the single arm's end at a merge-lane node
     for (int e = 0; e < 2; ++e) {
         const bool at_end = e == 1;
         auto join = builder.join(way_id, stretch, at_end);
@@ -493,7 +494,10 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
             const auto node = way->node_ids[at_end ? stretch.end_ref : stretch.start_ref];
             if (const auto merge = classify_merge_node(builder, node, rules)) {
                 if (merge->through_id == way_id) join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->single_id, 0, merge->single_leaves}};
-                else if (merge->single_id == way_id) join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->through_id, 0, merge->through_leaves}};
+                else if (merge->single_id == way_id) {
+                    join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->through_id, 0, merge->through_leaves}};
+                    single_at_merge[static_cast<std::size_t>(e)] = true;
+                }
                 else if (merge->ramp_id == way_id) {
                     landing[static_cast<std::size_t>(e)] = merge->landing_mm;
                     landing_length[static_cast<std::size_t>(e)] = merge->landing_length_mm;
@@ -531,6 +535,11 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
         for (std::size_t i = 0; i < n; ++i) {
             const std::size_t ci = a_mirrored ? n - 1 - i : i;
             if (mine.len[ci] > 0) r.ramps[i] = {mine.len[ci], mine.jw[ci]};
+            // The added lane of the single arm is the lane the link lands on (merge) or leaves from (exit): at the node it is
+            // already full width, the link's own end or start continues it. A taper to zero there left the link's square end
+            // standing beside the carriageway (G2M-032, B 8 west of Hoechst, exit to the Main-Taunus-Zentrum). The far end of
+            // the single arm keeps its own join.
+            if (single_at_merge[static_cast<std::size_t>(e)] && xs.bands[i].counted && mine.jw[ci] == 0) r.ramps[i] = WidthRamp{};
         }
     }
 
