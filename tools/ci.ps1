@@ -5,9 +5,10 @@
 
 .DESCRIPTION
   tools\ci.ps1                     every leg (Windows + WSL), grep, golden compare;
-                                   ctest skips the tests tagged [long]
-  tools\ci.ps1 -Full               the same, every test incl. [long] (a test taking
-                                   >= 5 s in release gets the tag); before a phase counts done
+                                   ctest skips the tests tagged [long] or [niche]
+  tools\ci.ps1 -Full               the same, every test incl. [long] and [niche] (a test taking
+                                   >= 5 s in release gets [long]; a narrow edge case or one-off
+                                   regression/calibration check gets [niche]); before a phase counts done
   tools\ci.ps1 -SkipWsl            Windows legs only
   tools\ci.ps1 -SkipWindows        WSL legs only
   tools\ci.ps1 -Only release,linux-release   named legs only (preset names)
@@ -18,7 +19,7 @@
   ~/build/geo2map_engine/<preset> for the main checkout, never under /mnt/s):
   linux-release, linux-asan-ubsan, linux-tsan.
 
-  Per leg: cmake configure, build, ctest (without the [long]-tagged tests; -Full runs every test), then
+  Per leg: cmake configure, build, ctest (without the [long]/[niche]-tagged tests; -Full runs every test), then
   g2m_golden_dump for each golden set (g0, g1). The golden compare fails
   unless every leg's dump of a set equals testdata/golden/<set>_golden.txt
   byte for byte (comments stripped). On the WSL legs listed in $FuzzLegs,
@@ -58,8 +59,8 @@ $wslRoot = '/mnt/' + $repoRoot.Substring(0, 1).ToLower() + ($repoRoot.Substring(
 # Per-checkout WSL build dir, shared with no other worktree (CMakePresets.json
 # binaryDir uses ${sourceDirName}): ~/build/<checkout dir name>/<preset>.
 $wslBuildRoot = '$HOME/build/' + (Split-Path -Leaf $repoRoot)
-# Regular runs skip the [long] tests (the Catch2 tags are CTest labels, ADD_TAGS_AS_LABELS); -Full runs everything.
-$ctestFilter = if ($Full) { @() } else { @('-LE', 'long') }
+# Regular runs skip the [long] and [niche] tests (the Catch2 tags are CTest labels, ADD_TAGS_AS_LABELS); -Full runs everything.
+$ctestFilter = if ($Full) { @() } else { @('-LE', 'long|niche') }
 $logDir = Join-Path $repoRoot 'out\ci_logs'
 $goldenDir = Join-Path $repoRoot 'out\ci_golden'
 New-Item -ItemType Directory -Force $logDir, $goldenDir | Out-Null

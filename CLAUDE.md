@@ -885,8 +885,8 @@ Fuzzers (WSL, `linux-release` or `linux-asan-ubsan` build dir):
 ## CI
 
 ```powershell
-tools\ci.ps1                               # every leg + grep + golden compare; ctest -LE long
-tools\ci.ps1 -Full                         # ... with every test incl. [long] (a test >= 5 s in release is tagged [long])
+tools\ci.ps1                               # every leg + grep + golden compare; ctest -LE "long|niche"
+tools\ci.ps1 -Full                         # ... with every test incl. [long] and [niche] (a test >= 5 s in release is tagged [long])
 tools\ci.ps1 -SkipWsl                      # Windows legs only
 tools\ci.ps1 -SkipWindows                  # WSL legs only
 tools\ci.ps1 -Only release,linux-release   # named legs only
@@ -907,10 +907,15 @@ tools\ci.ps1 -Only release,linux-release   # named legs only
   untouched. A missing offline dependency directory (see the preset's own
   entry above) is an actionable configure-time failure, not a silent
   network fetch.
-- **Per leg:** configure, build, `ctest` (`-LE long`; `-Full` = every test), then
+- **Per leg:** configure, build, `ctest` (`-LE "long|niche"`; `-Full` = every test), then
   `g2m_golden_dump <set>` into `out/ci_golden/<leg>.<set>.txt` for each set
   (g0, g1). On `linux-release` and `linux-asan-ubsan` the ctest run includes
   the libFuzzer runs (label `fuzz`), and a `fuzz` result line counts them.
+- **Test tags:** `[long]` = a test taking >= 5 s in release. `[niche]` = a narrow edge
+  case or a one-off regression/calibration check that need not run per change (the
+  junction-gradient sabotage control, the committed-OSM road_features fixture sweep,
+  the G3j golden gtest, the pre-cluster `build_node_junctions` census). Both are
+  skipped by a regular run (`-LE "long|niche"`) and run by `-Full`.
 - **Checks:**
   - libm grep over `include/` and `src/`, with a pattern self-test;
   - golden compare: every leg's dump of each set must equal
