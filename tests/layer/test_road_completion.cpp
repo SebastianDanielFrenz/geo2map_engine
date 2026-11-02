@@ -638,82 +638,6 @@ std::string outcome_key(const RoadGeomEntry& e, const RoadProfileOrigin& o) {
 }
 }
 
-TEST_CASE("completion: fixtures, completed stretches by kind before and after, tile invariance and bridge-node heights", "[layer][roads][completion][fixtures][invariance][long]") {
-    struct Mode { const char* name; Fn dem; };
-    const Mode modes[] = {{"flat DEM", Fn{}}, {"tilted bumpy DEM", Fn(tilted_fixture_dem)}};
-    for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
-        const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + pbf);
-        const auto world = build_road_graph(data, g2m_test::kZone32N); REQUIRE(world);
-        std::set<TileKey> keys;
-        for (const auto& n : world->nodes) {
-            const auto k = tile_key_at(g2m_test::kZone32N, 2, static_cast<double>(n.position.x) / 1000.0, static_cast<double>(n.position.y) / 1000.0);
-            if (k) keys.insert(*k);
-        }
-        for (const auto& mode : modes) {
-            std::map<std::pair<std::int64_t, std::uint32_t>, std::string> before, after, first_blob;
-            std::size_t mismatches = 0, compared = 0;
-            RoadCompletionStats stats;
-            // Heights at the nodes where a completed or bridge profile ends.
-            std::map<std::int64_t, std::vector<std::pair<double, ProfileProvenance>>> node_heights; std::set<std::int64_t> bridge_nodes;
-            for (const auto& key : keys) {
-                g2m_test::GeomOptions o; o.height_m = mode.dem; o.completion.enabled = true; o.stats = &stats;
-                auto g = g2m_test::geometry_in_tile_with(*world, key, o); if (!g) FAIL(g.error().message);
-                for (std::size_t i = 0; i < g->entries.size(); ++i) {
-                    const auto& e = g->entries[i]; const auto& origin = g->origins[i];
-                    const auto id = std::make_pair(e.way_id, e.stretch.start_ref);
-                    const std::string kind = kind_of(*g, e);
-                    const auto blob = outcome_key(e, origin);
-                    const auto [it, inserted] = first_blob.emplace(id, blob);
-                    if (!inserted) { ++compared; if (it->second != blob) ++mismatches; }
-                    before[id] = kind + ((e.profile && origin.provenance == ProfileProvenance::Strict) ? " ok" : " declined");
-                    after[id] = kind + (e.profile ? std::string(" ") + name_of(origin.provenance) : std::string(" declined"));
-                    if (!e.profile) continue;
-                    const auto* way = &*std::lower_bound(g->source.graph.ways.begin(), g->source.graph.ways.end(), e.way_id, [](const auto& w, auto v) { return w.osm_id < v; });
-                    for (const bool end : {false, true}) {
-                        const auto node = way->node_ids[end ? e.stretch.end_ref : e.stretch.start_ref];
-                        const auto z = e.profile->at(end ? e.profile->reference.length_m : 0);
-                        node_heights[node].push_back({z->height_m, origin.provenance});
-                        if (kind == "bridge") bridge_nodes.insert(node);
-                    }
-                }
-            }
-            std::map<std::string, int> b, a;
-            for (const auto& [id, s] : before) ++b[s];
-            for (const auto& [id, s] : after) ++a[s];
-            std::printf("[completion] %s (%s): %zu stretches\n  before:", pbf, mode.name, before.size());
-            for (const auto& [s, c] : b) std::printf(" %s=%d;", s.c_str(), c);
-            std::printf("\n  after: ");
-            for (const auto& [s, c] : a) std::printf(" %s=%d;", s.c_str(), c);
-            std::printf("\n  tier counters over all tiles (an entry counts once per tile that holds it): retry %zu/%zu accepted; bridge %zu candidates, %zu completed, %zu without support, %zu fit failed; ground %zu candidates, %zu completed (%zu bridge-anchored, %zu with eased end grades, D43), %zu failed; tunnels %zu candidates, %zu floors (%zu chords), %zu failed; strict anchors taken %zu (D30); accepted bridge planes %zu, walks over a later bridge edge %zu (D47)\n",
-                stats.retry_accepted, stats.retry_candidates, stats.bridge_candidates, stats.bridge_completed, stats.bridge_no_support, stats.bridge_fit_failed,
-                stats.ground_candidates, stats.ground_completed, stats.ground_bridge_anchored, stats.ground_grades_eased, stats.ground_failed,
-                stats.tunnel_candidates, stats.tunnel_completed, stats.tunnel_chord, stats.tunnel_failed, stats.strict_anchors, stats.bridge_anchor_reused, stats.walk_other_side);
-            std::printf("  7a-2 design floor: %zu components (%zu stretches, %zu stations, %zu portals of which %zu free), %zu unsolved, %zu not converged; adjacent pairs %zu, %zu beyond the reach (anchors moved, max %.3f m), %zu beyond the grade outright, %zu still beyond after the move, %zu anchor misses; entries %zu: %zu own grades, %zu straight fallback, %zu failed; fit deviation max %.3f m (%zu over 0.25 m)\n",
-                stats.floor_components, stats.floor_stretches, stats.floor_stations, stats.floor_portals, stats.floor_free_portals, stats.floor_unsolved, stats.floor_not_converged,
-                stats.floor_pairs, stats.floor_pairs_shifted, stats.floor_max_shift_m, stats.floor_pairs_beyond_grade, stats.floor_pairs_still_beyond_grade, stats.floor_anchor_misses,
-                stats.floor_entries, stats.floor_entry_own_grades, stats.floor_entry_straight, stats.floor_entry_failed, stats.floor_fit_max_deviation_m, stats.floor_fit_over_250mm);
-            std::printf("  tile invariance: %zu repeated entries compared across tiles, %zu differ\n", compared, mismatches);
-            CHECK(mismatches == 0);
-            CHECK(compared > 0);
-            // T6, completion variant: the profile ends at a bridge node agree wherever a completed profile ends there.
-            double worst_completed = 0, worst_mixed = 0; std::size_t nodes_completed = 0, nodes_mixed = 0;
-            for (const auto node : bridge_nodes) {
-                const auto& hs = node_heights[node];
-                bool any_completed = false, any_strict = false;
-                for (const auto& [h, p] : hs) { (void)h; if (p == ProfileProvenance::Strict) any_strict = true; else any_completed = true; }
-                if (!any_completed) continue;
-                const auto [lo, hi] = std::minmax_element(hs.begin(), hs.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
-                if (any_strict) { ++nodes_mixed; worst_mixed = std::max(worst_mixed, hi->first - lo->first); }
-                else { ++nodes_completed; worst_completed = std::max(worst_completed, hi->first - lo->first); }
-            }
-            std::printf("  T6 completion variant: %zu bridge nodes with only completed ends, worst spread %.3e m; %zu nodes where a strict profile meets a completed one, worst spread %.4f m (D26, D30)\n",
-                nodes_completed, worst_completed, nodes_mixed, worst_mixed);
-            CHECK(worst_completed <= 1.0 / 256.0);
-            CHECK(worst_mixed <= 1.0 / 256.0);   // D30: a completed end takes the strict anchor where strict profiles end
-        }
-    }
-}
-
 TEST_CASE("strict pass: the far-end read of a bridge anchor is tile-invariant with the bridge dependencies (D32, fixed by D35)", "[layer][roads][completion][invariance]") {
     // Way 10 runs from tile 455 to node 4 at x = 700 (tile 456, outside tile 455's 128 m halo), where a bridge (way 20)
     // starts; a ground road (way 12) continues from its far end. The strict anchor of node 4 (surface_anchor) projects onto
@@ -751,7 +675,7 @@ TEST_CASE("strict pass: the far-end read of a bridge anchor is tile-invariant wi
     }
 }
 
-TEST_CASE("completion: fixtures against a world reference (whole world as context, a DEM without holes); strict far-end reads tile-invariant (D32, D35)", "[layer][roads][completion][fixtures][invariance][long]") {
+TEST_CASE("completion: fixtures against a world reference (whole world as context, a DEM without holes); strict far-end reads tile-invariant (D32, D35); tier tile invariance and bridge-node heights", "[layer][roads][completion][fixtures][invariance][long]") {
     // Every entry of every tile is compared with the same tile built from the WHOLE world graph as its context and a DEM
     // covering the whole world: the reads a tile cannot have are then all available. This covers every entry (not only the
     // ones two tiles both hold) and reads up to the bounds. P1's latent far-end dependence (surface_anchor reads
@@ -790,6 +714,12 @@ TEST_CASE("completion: fixtures against a world reference (whole world as contex
             const auto full = full_dem(*world, mode.dem);
             std::size_t entries = 0, strict_differ = 0, strict_differ_bridge_end = 0, tier_differ = 0, completed = 0, control_differ = 0;
             std::vector<std::string> examples;
+            // Tile invariance of the tier outcome (an entry held by several tiles is equal in all of them) and T6, completion variant:
+            // the heights at the nodes where a completed or bridge profile ends (both formerly a separate case that rebuilt these tiles).
+            std::map<std::pair<std::int64_t, std::uint32_t>, std::string> first_blob;
+            std::size_t repeated = 0, repeated_differ = 0;
+            std::map<std::string, int> by_provenance;
+            std::map<std::int64_t, std::vector<std::pair<double, ProfileProvenance>>> node_heights; std::set<std::int64_t> bridge_nodes;
             for (const auto& key : keys) {
                 g2m_test::GeomOptions strict_o; strict_o.height_m = mode.dem;
                 g2m_test::GeomOptions tier_o = strict_o; tier_o.completion.enabled = true;
@@ -805,6 +735,22 @@ TEST_CASE("completion: fixtures against a world reference (whole world as contex
                 auto narrow_entries = strict->entries; std::vector<RoadProfileOrigin> narrow_origins;
                 const auto narrow = RoadReferenceBuilder::make(graph->graph); REQUIRE(narrow);
                 REQUIRE(complete_road_profiles(narrow_entries, narrow_origins, *narrow, *full->dem, key.zone, limits, on));
+                for (std::size_t i = 0; i < tier->entries.size(); ++i) {
+                    const auto& te = tier->entries[i]; const auto& to = tier->origins[i];
+                    if (te.profile) ++by_provenance[name_of(to.provenance)];
+                    const auto [fit, inserted] = first_blob.emplace(std::make_pair(te.way_id, te.stretch.start_ref), outcome_key(te, to));
+                    if (!inserted) { ++repeated; if (fit->second != outcome_key(te, to)) ++repeated_differ; }
+                    if (te.profile) {
+                        const auto* way = &*std::lower_bound(tier->source.graph.ways.begin(), tier->source.graph.ways.end(), te.way_id, [](const auto& w, auto v) { return w.osm_id < v; });
+                        const bool bridge = kind_of(*tier, te) == "bridge";
+                        for (const bool end : {false, true}) {
+                            const auto node = way->node_ids[end ? te.stretch.end_ref : te.stretch.start_ref];
+                            const auto z = te.profile->at(end ? te.profile->reference.length_m : 0);
+                            node_heights[node].push_back({z->height_m, to.provenance});
+                            if (bridge) bridge_nodes.insert(node);
+                        }
+                    }
+                }
                 for (std::size_t i = 0; i < tier->entries.size(); ++i) {
                     ++entries;
                     if (tier->origins[i].provenance != ProfileProvenance::Strict) ++completed;
@@ -833,6 +779,27 @@ TEST_CASE("completion: fixtures against a world reference (whole world as contex
             CHECK(strict_differ == 0);   // D35: no far-end read left outside the dependency set
             CHECK(tier_differ == 0);
             CHECK(control_differ > 0);
+            std::printf("[completion] %s (%s): profiled entries by provenance:", pbf, mode.name);
+            for (const auto& [name, count] : by_provenance) std::printf(" %s=%d;", name.c_str(), count);
+            std::printf("\n");
+            std::printf("  tile invariance: %zu repeated entries compared across tiles, %zu differ\n", repeated, repeated_differ);
+            CHECK(repeated_differ == 0);
+            CHECK(repeated > 0);
+            // T6, completion variant: the profile ends at a bridge node agree wherever a completed profile ends there.
+            double worst_completed = 0, worst_mixed = 0; std::size_t nodes_completed = 0, nodes_mixed = 0;
+            for (const auto node : bridge_nodes) {
+                const auto& hs = node_heights[node];
+                bool any_completed = false, any_strict = false;
+                for (const auto& [h, p] : hs) { (void)h; if (p == ProfileProvenance::Strict) any_strict = true; else any_completed = true; }
+                if (!any_completed) continue;
+                const auto [lo, hi] = std::minmax_element(hs.begin(), hs.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+                if (any_strict) { ++nodes_mixed; worst_mixed = std::max(worst_mixed, hi->first - lo->first); }
+                else { ++nodes_completed; worst_completed = std::max(worst_completed, hi->first - lo->first); }
+            }
+            std::printf("  T6 completion variant: %zu bridge nodes with only completed ends, worst spread %.3e m; %zu nodes where a strict profile meets a completed one, worst spread %.4f m (D26, D30)\n",
+                nodes_completed, worst_completed, nodes_mixed, worst_mixed);
+            CHECK(worst_completed <= 1.0 / 256.0);
+            CHECK(worst_mixed <= 1.0 / 256.0);   // D30: a completed end takes the strict anchor where strict profiles end
         }
     }
 }
