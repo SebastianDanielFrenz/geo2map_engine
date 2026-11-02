@@ -566,7 +566,9 @@ void print_census(const char* name, const Census& c) {
 }
 }
 
-TEST_CASE("Fixtures: every junction ring is valid and nested, the same node builds identically in every tile", "[layer][junction][roads][long]") {
+// [niche]: census_of runs build_node_junctions, the pre-cluster API; the served path builds with build_road_junctions (road_geom_tile.cpp), whose
+// ring validity, nesting and per-tile record identity are asserted over the same fixtures by the cluster census below.
+TEST_CASE("Fixtures: every junction ring is valid and nested, the same node builds identically in every tile", "[layer][junction][roads][long][niche]") {
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         INFO(pbf);
         const auto c = census_of(pbf);
