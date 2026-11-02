@@ -174,7 +174,7 @@ TEST_CASE("Features on a way split into stretches belong to the stretch holding 
     CHECK(validate_road_geom_tile(*tile));
 }
 
-TEST_CASE("Committed OSM fixtures: every feature found lies inside its stretch and the height function is bounded", "[layer][road_features][roads]") {
+TEST_CASE("Committed OSM fixtures: every feature found lies inside its stretch and the height function is bounded", "[layer][road_features][roads][niche]") {
     std::size_t total = 0, carved = 0, derived = 0, tagged_nodes = 0, tiles_built = 0;
     for (const char* name : {"hoechst_a66.osm.pbf", "frankfurt_hoechst.osm.pbf"}) {
         const auto data = g2m_test::read_osm_fixture(std::string(G2M_SOURCE_DIR) + "/testdata/fixtures/osm/" + name);

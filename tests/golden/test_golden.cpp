@@ -89,7 +89,7 @@ TEST_CASE("G3xs golden hashes match testdata/golden/g3xs_golden.txt", "[golden][
 }
 
 // Street fidelity P2 slice 8: the junction, furniture and provenance sections of encoding 7 (golden_g3j.cpp).
-TEST_CASE("G3j golden hashes match testdata/golden/g3j_golden.txt", "[golden][road_junction]") {
+TEST_CASE("G3j golden hashes match testdata/golden/g3j_golden.txt", "[golden][road_junction][niche]") {
     check_against("g3j_golden.txt", g2m_golden::compute_g3j());
 }
 

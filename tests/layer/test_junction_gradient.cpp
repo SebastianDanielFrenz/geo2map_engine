@@ -270,7 +270,7 @@ TEST_CASE("junction gradient D42: the drivable junction surface stays within the
     }
 }
 
-TEST_CASE("junction gradient D42 sabotage: the D22-D24 surface (no relief fade) breaks the limit", "[layer][carve][junction]") {
+TEST_CASE("junction gradient D42 sabotage: the D22-D24 surface (no relief fade) breaks the limit", "[layer][carve][junction][niche]") {
     // CarveOptions::junction_relief_fade = false keeps every approach's full crown and verge relief inside the junction
     // (v_i = z_i): the D22-D24 surface. Recorded: 14 junctions of the flat DEM over their limit at the 0.5 m lattice.
     const Census o = census(rows(false, false), false);
