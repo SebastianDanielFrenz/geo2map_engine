@@ -3,7 +3,7 @@
 // T2 trunk, T3 primary, T4 secondary, T5 tertiary, T6 every other paved road).
 //
 // Recorded sabotages (2026-11-02; each makes the named tests fail, then reverted):
-//   S1 road_tier.h tier_for: ignore require_motorroad_yes                                    -> RT1, RT4 fail
+//   S1 road_tier.h tier_for: ignore require_motorroad_yes                                    -> RT1, RT4 fail (and RTR1, RTR2 in the world tests)
 //   S2 osm_roads.cpp extract_road_segments: swap tiers 1 and 2 on assignment                 -> RT1 fails
 //   S3 osm_roads.cpp paint_road_segments: look the LUT up with tier 0 (ignore seg.tier)      -> RT3 fails
 //   S4 osm_roads.cpp by_tier: write tier 0 only (no per-tier fill)                           -> RT2, RT3 fail

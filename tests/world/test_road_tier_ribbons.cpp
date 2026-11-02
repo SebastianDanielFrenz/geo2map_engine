@@ -4,7 +4,7 @@
 // Recorded sabotages (2026-11-02; each makes the named tests fail, then reverted):
 //   S5 road_ribbons.cpp lane_layout: l.tier = 0 for every way                               -> RTR1, RTR2 fail
 //   S6 road_ribbons.cpp: TierScope of the main stretch loop removed                         -> RTR1, RTR2 fail
-//   S7 road_ribbons.cpp add_junction_surfaces: patch tier = the LAST arm's tier             -> RTR2 fails
+//   S7 road_ribbons.cpp add_junction_surfaces: patch tier = the LAST arm's tier             -> RTR2 fails (needs both arm orders)
 #include "road_fixture.h"
 
 #include "g2m/layer/road_tier.h"
@@ -47,11 +47,15 @@ RoadGraph parallel_roads() {
     return g;
 }
 // A primary road (tier 2) along x with a residential road (tier 5) joining it from the south at the node in the middle.
-RoadGraph t_junction() {
+// The primary road is two ways (ids 10 and 20) so the junction has three arms; `side_id` numbers the residential way, which
+// puts its arm first (5), in the middle (15) or last (25) in the junction's arm list.
+RoadGraph t_junction(std::int64_t side_id, double side_y = -150) {
     RoadGraph g;
-    add_node(g, 1, -150, 0); add_node(g, 2, 0, 0); add_node(g, 3, 150, 0); add_node(g, 4, 0, -150);
-    g.ways.push_back(way(10, {1, 2, 3}, {{"highway", "primary"}}));
-    g.ways.push_back(way(11, {4, 2}, {{"highway", "residential"}}));
+    add_node(g, 1, -150, 0); add_node(g, 2, 0, 0); add_node(g, 3, 150, 0); add_node(g, 4, 0, side_y);
+    g.ways.push_back(way(10, {1, 2}, {{"highway", "primary"}}));
+    g.ways.push_back(way(20, {2, 3}, {{"highway", "primary"}}));
+    g.ways.push_back(way(side_id, {4, 2}, {{"highway", "residential"}}));
+    std::sort(g.ways.begin(), g.ways.end(), [](const RoadGraphWay& x, const RoadGraphWay& y) { return x.osm_id < y.osm_id; });
     finish(g);
     return g;
 }
@@ -125,20 +129,24 @@ TEST_CASE("RTR1 every ribbon vertex carries the tier of its road", "[world][road
 }
 
 TEST_CASE("RTR2 a junction patch carries the most important tier of the roads meeting there", "[world][road_ribbons][road_tier]") {
-    const RoadGraph graph = t_junction();
+  for (const auto [side_id, side_y] : {std::pair<std::int64_t, double>{5, -150}, {25, -150}, {5, 150}, {25, 150}}) {
+    INFO("residential way id " << side_id << ", from y " << side_y);
+    const RoadGraph graph = t_junction(side_id, side_y);
     const RoadTierMap map = tier_map();
-    REQUIRE(road_tier_of(map, graph.ways[0], LandClass::PavedRoad) == 2);
-    REQUIRE(road_tier_of(map, graph.ways[1], LandClass::PavedRoad) == 5);
+    for (const auto& w : graph.ways) REQUIRE(road_tier_of(map, w, LandClass::PavedRoad) == (w.osm_id == side_id ? 5 : 2));
     const auto mesh = ribbons(graph, &map);
     REQUIRE_FALSE(mesh.vertices.empty());
-    std::size_t side_only = 0, near_node = 0;
+    std::size_t side_only = 0, near_node = 0, patch = 0;
+    for (const auto& v : mesh.vertices) if (v.width == 1000.0f && v.fade == 0.0f && v.lanes == 0.0f) { ++patch; CHECK(v.road_tier == 2.0f); }
+    CHECK(patch > 0);   // the junction patch exists, and it is the primary road's tier whichever arm comes last
     for (const auto& v : mesh.vertices) {
         CHECK(v.road_tier != 255.0f);                                     // nothing is left without a tier
         const double dx = v.x - mid_x(), dy = v.y - mid_y();
-        if (std::abs(dx) < 4.0 && dy < -40.0) { CHECK(v.road_tier == 5.0f); ++side_only; }     // the residential road alone
+        if (std::abs(dx) < 4.0 && std::abs(dy) > 40.0) { CHECK(v.road_tier == 5.0f); ++side_only; }     // the residential road alone
         if (std::hypot(dx, dy) < 3.0) { CHECK(v.road_tier == 2.0f); ++near_node; }              // the patch: the primary road's tier wins
         if (std::abs(dy) < 3.0 && std::abs(dx) > 40.0) CHECK(v.road_tier == 2.0f);              // the primary road alone
     }
     CHECK(side_only > 0);
     CHECK(near_node > 0);
+  }
 }
