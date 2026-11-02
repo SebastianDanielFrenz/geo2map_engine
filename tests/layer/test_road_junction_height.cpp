@@ -377,10 +377,13 @@ void print_numbers(const char* name, const char* dem, const FixtureNumbers& n) {
 }
 }
 
-TEST_CASE("T5/T6 fixtures: matches, C1, no overshoot and approach-to-node agreement on every built junction", "[layer][junction][height][roads][long]") {
+TEST_CASE("T5/T6 fixtures: matches, C1, no overshoot, approach-to-node agreement and calming ramps on every built junction", "[layer][junction][height][roads][long]") {
     for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
         const auto flat = fixture_numbers(pbf, {});
         print_numbers(pbf, "flat DEM", flat);
+        // T5 tables and calming on the real junction nodes (the former separate fixture case, which re-ran exactly this flat build).
+        std::printf("[junction calming] %s: raised tables %zu, other vertical kinds ignored %zu, ramp records %zu, suppressed features %zu\n", pbf, flat.raised, flat.ignored, flat.ramps, flat.suppressed);
+        CHECK(flat.ramps >= flat.raised);
         const auto tilt = fixture_numbers(pbf, tilted);
         print_numbers(pbf, "tilted bumpy DEM", tilt);
         for (const auto& n : {flat, tilt}) {
@@ -545,15 +548,6 @@ TEST_CASE("T5: a feature on an approach inside the ring is suppressed, one beyon
         for (const auto& a : j.approaches) if (a.entry_index == f.entry_index) trim_of_entry = a.trim_m;
         const double at_trim = feature_height_contribution_m(f, f.station_m < length / 2 ? trim_of_entry : length - trim_of_entry);
         if (close_in) { CHECK(at_trim > 0.01); } else { CHECK(at_trim == 0.0); }
-    }
-}
-
-TEST_CASE("T5 fixtures: tables and calming on the real junction nodes", "[layer][junction][height][roads][long]") {
-    // Counts: the fixtures' junction nodes with a table or hump, with another vertical kind, the ramps and the suppressed features.
-    for (const char* pbf : {"frankfurt_hoechst.osm.pbf", "hoechst_a66.osm.pbf"}) {
-        const auto n = fixture_numbers(pbf, {});
-        std::printf("[junction calming] %s: raised tables %zu, other vertical kinds ignored %zu, ramp records %zu, suppressed features %zu\n", pbf, n.raised, n.ignored, n.ramps, n.suppressed);
-        CHECK(n.ramps >= n.raised);
     }
 }
 
