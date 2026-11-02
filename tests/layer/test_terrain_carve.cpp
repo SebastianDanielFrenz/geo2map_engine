@@ -291,11 +291,13 @@ TEST_CASE("carve T12 sabotage: blending toward the raw DEM steps at the blend ed
 }
 
 TEST_CASE("carve T12: continuity on every busy fixture tile, flat and tilted DEM (G3-D)", "[layer][carve][long]") {
+    std::size_t steep = 0, stations = 0;
     for (const auto& ft : kBusy)
         for (int tilted = 0; tilted < 2; ++tilted) {
             auto& fx = fixture(ft.file, tilted != 0);
             const TileKey key = l0(ft.x, ft.y);
             const auto m = fx.model(key);
+            steep += m.stats.steep_blend_stations; stations += m.stats.blend_stations;
             const Jumps j = measure_jumps(*m.model, key);
             char what[128]; std::snprintf(what, sizeof what, "%s %d/%d %s", ft.file, ft.x, ft.y, tilted ? "tilted" : "flat");
             print_jumps(what, j);
@@ -305,6 +307,9 @@ TEST_CASE("carve T12: continuity on every busy fixture tile, flat and tilted DEM
             CHECK(j.blend_terrain <= 0.005);
             CHECK(j.trim < 0.01);
         }
+    // Design 6.3: the 1:1.5 blends that cannot reach the terrain within 15 m stay rare (counted, not hidden).
+    std::printf("[G3-D] blend stations steeper than 1:1.5: %zu of %zu\n", steep, stations);
+    CHECK(steep * 100 < stations);
 }
 
 // ---- T13 cross-slope ----
@@ -626,71 +631,6 @@ TEST_CASE("carve: tile invariance across level-0 and level-2 seams, with negativ
         }
     // Across the level-2 seams with roads near them, a tile reading only its own level-2 roads.geom tile disagrees.
     CHECK(own_worst > 0.0);
-}
-
-// ---- grade limits (G3-D) ----
-
-TEST_CASE("carve: junction gradients and blend slopes of the busy tiles (G3-D)", "[layer][carve][long]") {
-    double worst_excess = -1e9, worst_ratio = 0, max_grad = 0; std::size_t junctions = 0, steep = 0, stations = 0, over_bound = 0;
-    char worst_where[256] = {};
-    for (const auto& ft : kBusy)
-        for (int tilted = 0; tilted < 2; ++tilted) {
-            auto& fx = fixture(ft.file, tilted != 0);
-            const TileKey key = l0(ft.x, ft.y);
-            const auto m = fx.model(key);
-            steep += m.stats.steep_blend_stations; stations += m.stats.blend_stations;
-            for (std::size_t c = 0; c < m.model->junction_count(); ++c) {
-                const JunctionSurface& surface = m.model->junction_surface(c);
-                double bound = 0;
-                for (const auto& a : surface.approaches) {
-                    const RoadGeomEntry& e = m.model->core_tile().entries[a.entry_index];
-                    const double s = std::clamp(a.at_end ? a.length_m - a.trim_m : a.trim_m, 0.5, a.length_m - 0.5);
-                    const auto p0 = e.profile->at(s - 0.5), p1 = e.profile->at(s + 0.5);
-                    if (!p0 || !p1) continue;
-                    const double grade = std::fabs(p1->height_m - p0->height_m);
-                    bound = std::max(bound, grade + e.profile->attributes.crown_per_mille / 1000.0);
-                }
-                const auto& ring = m.model->junction(c).rings[2].vertices;
-                std::int64_t x0 = ring[0].x, x1 = x0, y0 = ring[0].y, y1 = y0;
-                for (const auto& v : ring) { x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y); }
-                if (x1 < key.min_easting() * 1000 || x0 > (key.min_easting() + 256) * 1000 || y1 < key.min_northing() * 1000 || y0 > (key.min_northing() + 256) * 1000) continue;
-                double grad = 0, gx_at = 0, gy_at = 0;
-                const double h = 0.05;
-                for (double y = y0 / 1000.0; y <= y1 / 1000.0; y += 0.25)
-                    for (double x = x0 / 1000.0; x <= x1 / 1000.0; x += 0.25) {
-                        const CarveSample s = m.model->evaluate(x, y);
-                        if (s.owner != CarveOwner::JunctionCore || s.element != c || s.deck_clamped) continue;
-                        const CarveSample sx0 = m.model->evaluate(x - h, y), sx1 = m.model->evaluate(x + h, y);
-                        const CarveSample sy0 = m.model->evaluate(x, y - h), sy1 = m.model->evaluate(x, y + h);
-                        if (!same_owner(sx0, s) || !same_owner(sx1, s) || !same_owner(sy0, s) || !same_owner(sy1, s)) continue;
-                        if (sx0.deck_clamped || sx1.deck_clamped || sy0.deck_clamped || sy1.deck_clamped) continue;
-                        const double gx = (sx1.z - sx0.z) / (2 * h), gy = (sy1.z - sy0.z) / (2 * h);
-                        if (std::sqrt(gx * gx + gy * gy) > grad) { grad = std::sqrt(gx * gx + gy * gy); gx_at = x; gy_at = y; }
-                    }
-                ++junctions;
-                if (grad > max_grad) {
-                    max_grad = grad;
-                    std::snprintf(worst_where, sizeof worst_where, "%s %d/%d %s junction node %lld at (%.2f, %.2f), %zu approaches, bound %.4f",
-                        ft.file, ft.x, ft.y, tilted ? "tilted" : "flat", static_cast<long long>(m.model->junction(c).nodes.front()), gx_at, gy_at,
-                        surface.approaches.size(), bound);
-                }
-                if (grad > bound + 0.02) ++over_bound;
-                worst_excess = std::max(worst_excess, grad - bound);
-                if (bound > 0) worst_ratio = std::max(worst_ratio, grad / bound);
-            }
-        }
-    std::printf("[G3-D] %zu junctions: max gradient %.3f (%s); max (gradient - (steepest approach grade + crossfall)) %.4f, max ratio %.2f, "
-        "%zu junctions over that bound + 0.02; blend stations steeper than 1:1.5: %zu of %zu\n", junctions, max_grad, worst_where, worst_excess, worst_ratio,
-        over_bound, steep, stations);
-    REQUIRE(junctions > 50);
-    // The junction surface's own gradient bound (what the trim data allow) is asserted in test_junction_gradient.cpp
-    // (D42); counted over every core point including the verge corners, where two approaches' trim data sit centimetres
-    // apart, this line stays a report (D41). What is asserted here is that carving adds no
-    // discontinuity of its own inside a junction (a step reads as a gradient of tens: the deck clamp under the flat
-    // DEM's ground-level bridges gave 12.7 before clamped samples were excluded) and that the 1:1.5 blends that cannot
-    // reach the terrain within 15 m stay rare (design 6.3: counted, not hidden).
-    CHECK(max_grad <= 1.5);
-    CHECK(steep * 100 < stations);
 }
 
 // ---- T17 pyramid and the deriver ----

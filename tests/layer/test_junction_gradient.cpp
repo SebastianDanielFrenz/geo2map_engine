@@ -267,6 +267,12 @@ TEST_CASE("junction gradient D42: the drivable junction surface stays within the
         // junction has no interior points); its 'near' gradient is 0.457 against the 0.350 limit on the bumpy 2 m / 23 m synthetic DEM.
         CHECK(n.over <= (tilted ? 1u : 0u));
         CHECK(n.worst_allowed_interior <= kTol);   // the brief's bound B + kTol where the data allow it
+        // Carving adds no discontinuity of its own anywhere in a junction core, verge corners included (they stay unbounded by D42's
+        // limit, D41): a step reads as a gradient of tens. This is the 1.5 bound of the former G3-D case, over the same busy tiles.
+        double any_layer = 0;
+        for (const Row& r : all) any_layer = std::max({any_layer, r.g.layer[0].g, r.g.layer[1].g, r.g.layer[2].g});
+        std::printf("[junction gradient] %s DEM: max gradient over every core point %.3f\n", tilted ? "tilted" : "flat", any_layer);
+        CHECK(any_layer <= 1.5);
     }
 }
 
