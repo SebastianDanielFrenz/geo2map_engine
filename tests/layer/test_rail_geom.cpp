@@ -243,7 +243,7 @@ TEST_CASE("rail.geom codec: round trip, validator, corrupted bodies", "[layer][r
     // Decoder: truncations and byte flips never crash and never produce an invalid tile.
     std::size_t flips = 0, accepted = 0;
     for (std::size_t s = 0; s < body->sections.size(); ++s) {
-        for (std::size_t i = 0; i < body->sections[s].data.size(); ++i) for (const std::uint8_t mask : {0x01, 0x80, 0xff}) {
+        for (std::size_t i = 0; i < body->sections[s].data.size(); ++i) for (const std::uint8_t mask : {std::uint8_t{0x01}, std::uint8_t{0x80}, std::uint8_t{0xff}}) {
             auto bad = *body; bad.sections[s].data[i] ^= mask; ++flips;
             const auto r = decode_rail_geom(bad, kTile);
             if (r) { ++accepted; CHECK(validate_rail_geom_tile(*r)); }
