@@ -44,7 +44,7 @@ Level 0, per cell with centre (E + 0.5, N + 0.5) in zone metres:
 2. **Cores.** Inside the outer ring of a carved junction (not declined, not `OnStructure`): the junction surface
    (`junction_height_m`, design D42: the weights mix the approach bases, each approach's crown and verge relief fades out
    from its trim over `junction_fade`); junction cores beat approach cores; among several, the lowest z. Else, on a ground approach between
-   its trims and within its outer edges (`carve_footprint`): `road_surface_height_m`; the lowest z.
+   its trims and within its outer edges (`carve_footprint`): `road_surface_height_m`; where cores overlap, a road whose paved surface holds the cell wins over one that reaches it only with its verge, then the lowest z (G2M-032); where only verges reach it and the cores differ by at least `wall.min_step_mm` (carve_default.json), the higher road wins within `wall.high_shoulder_mm` of its paved edge (provided the lower road keeps `wall.low_shoulder_mm`): a flat shoulder, then a one-cell drop.
 3. **Blends.** Else the blend of largest weight w = 1 − S(d/b), ties to the lowest z, value z_b + (T − z_b) · S(d/b), with
    S the smooth step, d the distance to an approach segment's band rectangle or to a junction ring edge (design D40), z_b the
    core height at the nearest boundary point and b = clamp(max(b_class, 3 · |T_edge − z_edge|), 3 m, 15 m).

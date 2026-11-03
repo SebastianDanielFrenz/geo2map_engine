@@ -70,7 +70,7 @@ Key fact today (2026-10-20): the game does NOT read `g2m.terrain.carved` or the 
 ### T5 Carve (two implementations)
 - stage: pull the smoothed terrain onto the road surface along each road, then blend back to the terrain.
 - served version: OWNER=geo2map. `g2m.terrain.carved` L0 per 1 m cell:
-  1. junction cores (D42 Shepard surface via `junction_height_m`, `g2m:src/layer/terrain_carve.cpp:743`) beat approach cores; among approach cores a road whose paved surface (not only its verge) holds the cell wins, then the lowest core (G2M-032: the verge of a lower road beside a higher carriageway no longer cuts the carriageway's edge down);
+  1. junction cores (D42 Shepard surface via `junction_height_m`, `g2m:src/layer/terrain_carve.cpp:743`) beat approach cores; among approach cores a road whose paved surface (not only its verge) holds the cell wins, then, where no paved surface holds it, the HIGHER road when two cores differ by at least `wall.min_step_mm` and the cell lies within `wall.high_shoulder_mm` of its paved edge (provided the lower road keeps `wall.low_shoulder_mm`), else the lowest core (G2M-032: the verge of a lower road beside a higher carriageway no longer cuts the carriageway's edge down; the higher road stays flat beside its edge and the terrain falls to the lower road in one cell, a retaining wall);
   2. otherwise the blend of the largest weight. Blend width is 3-15 m, widened to a 1:1.5 slope;
   3. the deck clearance clamp keeps the ground 0.55 m under a bridge, ramped over 4 m from each end (`:860-872`);
   4. D59: a carve that ends at an underpass deck keeps steep walls, fading over 1 m (`:20-21`, `:795-797`);
@@ -293,7 +293,7 @@ Each record: case, which code sets the heights, where it is drawn, where it coll
 
 ### X3 Road under bridge
 - heights: lower road from its own profile. The bare-earth hump of the removed deck is masked by D64 (g2m#20) instead of declining the way.
-- RoadSeparation keeps the upper approach from lifting the lower road's ground (game `road_surface.cpp:155-173`; served: the road whose paved surface holds the cell wins over a verge-only core, then the lowest core, G2M-032). Whether the two are equivalent is UNVERIFIED.
+- RoadSeparation keeps the upper approach from lifting the lower road's ground (game `road_surface.cpp:155-173`; served: the road whose paved surface holds the cell wins over a verge-only core, then the higher road's flat shoulder (`wall` block of carve_default.json), then the lowest core, G2M-032). Whether the two are equivalent is UNVERIFIED.
 - drawn: lower ribbon on the carved ground, deck above.
 - collides: heightfield below. The rail bridge spans of rg#52 collide only with at least 5 m of clearance.
 

@@ -351,6 +351,7 @@ struct CarveModel::Impl {
     double blend_min = 0, blend_max = 0, blend_factor = 0;
     std::int64_t blend_reach_mm = 0;   // blend_max in mm, rounded up
     double deck_clearance = 0, deck_ramp = 0, deck_margin = 0;
+    double wall_high = 0, wall_low = 0, wall_step = 0;   // G2M-032: the shoulders and the step that makes two overlapping roads a wall
     RoadGeomTile core, kept;
     std::vector<RoadJunction> junctions;        // every loaded record, merged entry indices
     std::vector<CarvedJunction> carved;
@@ -441,6 +442,9 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
     m.deck_clearance = static_cast<double>(params.deck.clearance_mm) / 1000.0;
     m.deck_ramp = static_cast<double>(params.deck.ramp_mm) / 1000.0;
     m.deck_margin = static_cast<double>(params.deck.margin_mm) / 1000.0;
+    m.wall_high = static_cast<double>(params.wall.high_shoulder_mm) / 1000.0;
+    m.wall_low = static_cast<double>(params.wall.low_shoulder_mm) / 1000.0;
+    m.wall_step = static_cast<double>(params.wall.min_step_mm) / 1000.0;
     if (!(m.blend_min > 0 && m.blend_max >= m.blend_min && m.deck_ramp > 0)) return make_error(ErrorCode::InvalidArgument, "carve: invalid parameters");
 
     std::vector<CarveGeomInput> inputs(inputs_in.begin(), inputs_in.end());
@@ -799,6 +803,10 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
     if (have) { out.z = best_z; out.owner = CarveOwner::JunctionCore; out.element = best_el; out.weight = 1; }
     // 2. Approach cores (lowest z) and approach blends.
     bool have_core = false, core_paved = false; double core_z = 0; std::size_t core_el = 0;
+    // G2M-032: every core that holds the cell, for the wall rule below (d = distance outside the paved span, 0 inside it).
+    struct CoreCand { double z, d; std::size_t el; bool paved; };
+    constexpr std::size_t kMaxCoreCands = 8;
+    CoreCand cands[kMaxCoreCands]; std::size_t ncand = 0; bool cand_overflow = false;
     bool have_blend = false; double blend_z = 0, blend_w = 0; std::size_t blend_el = 0; CarveOwner blend_owner = CarveOwner::ApproachBlend;
     const auto offer_blend = [&](double z, double w, std::size_t el, CarveOwner owner) {
         if (!have_blend || (!first && (w > blend_w || (w == blend_w && z < blend_z)))) { have_blend = true; blend_z = z; blend_w = w; blend_el = el; blend_owner = owner; }
@@ -823,6 +831,8 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
                     const bool paved = p.t >= f.paved_right && p.t <= f.paved_left;
                     const bool wins = !have_core || (!first && ((m.options.paved_over_verge && paved != core_paved) ? paved : z < core_z));
                     if (wins) { have_core = true; core_z = z; core_el = line.entry; core_paved = paved; }
+                    if (ncand < kMaxCoreCands) cands[ncand++] = {z, paved ? 0.0 : std::max(p.t - f.paved_left, f.paved_right - p.t), line.entry, paved};
+                    else cand_overflow = true;
                     continue;
                 }
             }
@@ -883,6 +893,26 @@ CarveSample CarveModel::evaluate(double x, double y) const noexcept {
                 if (have_blend && !first && w < blend_w) continue;
                 const double z_b = road_surface_height_m(m.core, line.entry, s_foot, tl, m.surface);
                 offer_blend(T_blend + (z_b - T_blend) * w, w, line.entry, CarveOwner::ApproachBlend);
+            }
+        }
+        // G2M-032 wall rule: two roads whose cores overlap at heights at least wall_step apart are a retaining wall in reality
+        // (OSM puts them closer than their real heights allow). Where no paved surface holds the cell, the HIGHER road keeps a
+        // flat shoulder of wall_high beyond its paved edge, so its draped carriageway edge stays level, provided the lower road
+        // keeps wall_low beside its own edge; elsewhere the lowest verge wins as before and the terrain falls to the lower road
+        // within a cell. Candidates are compared by value (distance, height, entry), never by visiting order.
+        if (have_core && !core_paved && m.options.wall_shoulders && !first && !cand_overflow && ncand >= 2) {
+            double z_lo = cands[0].z;
+            for (std::size_t k = 1; k < ncand; ++k) z_lo = std::min(z_lo, cands[k].z);
+            double d_lo = std::numeric_limits<double>::infinity();   // the closest low road's distance outside its paved edge
+            for (std::size_t k = 0; k < ncand; ++k) if (cands[k].z - z_lo < m.wall_step) d_lo = std::min(d_lo, cands[k].d);
+            if (d_lo >= m.wall_low) {
+                bool pick = false; CoreCand best{};
+                for (std::size_t k = 0; k < ncand; ++k) {
+                    const CoreCand& c = cands[k];
+                    if (c.z - z_lo < m.wall_step || c.d > m.wall_high) continue;
+                    if (!pick || c.d < best.d || (c.d == best.d && (c.z < best.z || (c.z == best.z && c.el < best.el)))) { pick = true; best = c; }
+                }
+                if (pick) { core_z = best.z; core_el = best.el; }
             }
         }
         if (have_core) { out.z = core_z; out.owner = CarveOwner::ApproachCore; out.element = core_el; out.weight = 1; }
@@ -1104,7 +1134,7 @@ LayerDesc terrain_carved_desc() {
 std::string terrain_carved_config_text() {
     const auto& sha = builtin_carve_default().content_sha256;
     return "g2m.terrain.carved/1 smooth+carve L0 roads.geom enc=9 radius=192 junction=D42 underpass-deck=1 underpass-walls=steep/1 tunnel-cut=D65/" + std::to_string(builtin_road_rules_de().tunnel.cut_max_length_m) + "+hump carve=" +
-        to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + " paved-over-verge=G2M-032; L1-L6 mean-of-4 half-even";
+        to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) + " paved-over-verge=G2M-032 wall-shoulders=G2M-032; L1-L6 mean-of-4 half-even";
 }
 
 TerrainCarvedDeriver::TerrainCarvedDeriver() : desc_(terrain_carved_desc()) {}

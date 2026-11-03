@@ -66,7 +66,7 @@ Result<CarveParams> load_carve_params(std::span<const std::byte> bytes) {
     Reader rd;
     const auto fail = [&]() { return make_error(ErrorCode::InvalidArgument, "carve params: " + rd.err); };
     if (!rd.keys(j, "root", {"format", "smoothing", "crown_round_mm", "verge_drop_mm", "blend_mm", "blend_slope_factor", "blend_min_mm",
-            "blend_max_mm", "deck", "junction_fade", "sources"})) return fail();
+            "blend_max_mm", "deck", "junction_fade", "wall", "sources"})) return fail();
     std::string format;
     if (!rd.text(j, "root", "format", format)) return fail();
     if (format != "g2m.carve/1") return make_error(ErrorCode::Unsupported, "carve params: format '" + format + "'");
@@ -85,6 +85,11 @@ Result<CarveParams> load_carve_params(std::span<const std::byte> bytes) {
         !rd.integer(*deck, "deck", "clearance_mm", 1, 5000, out.deck.clearance_mm) ||
         !rd.integer(*deck, "deck", "ramp_mm", 1, 50000, out.deck.ramp_mm) ||
         !rd.integer(*deck, "deck", "margin_mm", 0, 10000, out.deck.margin_mm)) return fail();
+    const auto* wall = rd.field(j, "root", "wall");
+    if (!wall || !rd.keys(*wall, "wall", {"high_shoulder_mm", "low_shoulder_mm", "min_step_mm"}) ||
+        !rd.integer(*wall, "wall", "high_shoulder_mm", 0, 5000, out.wall.high_shoulder_mm) ||
+        !rd.integer(*wall, "wall", "low_shoulder_mm", 0, 5000, out.wall.low_shoulder_mm) ||
+        !rd.integer(*wall, "wall", "min_step_mm", 1, 20000, out.wall.min_step_mm)) return fail();
     const auto* fade = rd.field(j, "root", "junction_fade");
     if (!fade || !rd.keys(*fade, "junction_fade", {"slope_per_mille", "min_mm", "max_mm", "verge_mm"}) ||
         !rd.integer(*fade, "junction_fade", "slope_per_mille", 1, 1000, out.junction_fade_slope_per_mille) ||

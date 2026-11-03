@@ -34,6 +34,13 @@ struct CarveDeck {
     std::int32_t margin_mm = 0;     // the footprint is the paved band plus this margin
     friend bool operator==(const CarveDeck&, const CarveDeck&) = default;
 };
+// G2M-032: shoulders where two roads' carved footprints overlap at different heights (carve_default.json "wall").
+struct CarveWall {
+    std::int32_t high_shoulder_mm = 0;  // the higher road stays flat at its own height this far beyond its paved edge
+    std::int32_t low_shoulder_mm = 0;   // the lower road keeps at least this much flat strip beside its paved edge
+    std::int32_t min_step_mm = 0;       // height difference from which two overlapping roads count as a wall
+    friend bool operator==(const CarveWall&, const CarveWall&) = default;
+};
 struct CarveParams {
     CarveSmoothing smoothing;
     std::int32_t crown_round_mm = 0;   // r0 of the rounded crown ridge (design 4.1)
@@ -43,6 +50,7 @@ struct CarveParams {
     std::int32_t blend_slope_factor = 0; // b >= factor * |terrain - road| at the edge (1:1.5 slope limit, design 6.3)
     std::int32_t blend_min_mm = 0, blend_max_mm = 0;
     CarveDeck deck;
+    CarveWall wall;
     // Decision D42: the junction relief fade (junction_fade: slope_per_mille, min_mm, max_mm, verge_mm).
     std::int32_t junction_fade_slope_per_mille = 0;
     std::int32_t junction_fade_min_mm = 0, junction_fade_max_mm = 0, junction_fade_verge_mm = 0;

@@ -36,7 +36,7 @@ TEST_CASE("The embedded carve file equals data/carve/carve_default.json and its 
     const std::string file((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     CHECK(file == embedded_text());
     const auto digest = Sha256::of(builtin_carve_default_bytes());
-    CHECK(to_hex(digest) == "db0a26a349d9ab5ec9cf62ffbaf23b0d69416e1126f7b7adf2843440afdc4020");
+    CHECK(to_hex(digest) == "3ec8898c648822450047174b216cdf2b401720894356d4c14d72bf4ee24c9a4c");
     CHECK(builtin_carve_default().content_sha256 == digest);
     // It is a separate file from the road rules: the roads.geom config hash never sees it (design D8, D12).
     CHECK(digest != builtin_road_rules_de().content_sha256);
@@ -113,4 +113,12 @@ TEST_CASE("The carve loader is strict", "[layer][carve]") {
     CHECK_FALSE(load_text(mutated("\"verge_mm\": 1500", "\"verge_mm\": 3001")));                                     // verge above min
     CHECK_FALSE(load_text(mutated("\"verge_mm\": 1500", "\"verge_mm\": 0")));
     CHECK(load_text(mutated("\"verge_mm\": 1500", "\"verge_mm\": 3000")));                                           // verge == min is fine
+    // wall (G2M-032)
+    CHECK(builtin_carve_default().wall.high_shoulder_mm == 1000); CHECK(builtin_carve_default().wall.low_shoulder_mm == 0);
+    CHECK(builtin_carve_default().wall.min_step_mm == 500);
+    CHECK_FALSE(load_text(mutated("\"wall\": {", "\"wallx\": {")));
+    CHECK_FALSE(load_text(mutated("\"high_shoulder_mm\": 1000", "\"high_shoulder_mm\": -1")));
+    CHECK_FALSE(load_text(mutated("\"min_step_mm\": 500", "\"min_step_mm\": 0")));
+    CHECK_FALSE(load_text(mutated("\"min_step_mm\": 500", "\"min_step_mm\": 500, \"bogus\": 1")));
+    CHECK(load_text(mutated("\"high_shoulder_mm\": 1000", "\"high_shoulder_mm\": 0")));
 }
