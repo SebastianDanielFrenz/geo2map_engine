@@ -881,7 +881,7 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
    const P2 q[4]={{ring[i].x/1000.0,ring[i].y/1000.0},outer[i],{ring[k].x/1000.0,ring[k].y/1000.0},outer[k]};
    if(!owned((q[0].x+q[2].x)/2,(q[0].y+q[2].y)/2))continue;
    if(lattice) {
-    detail::DrapeVertex d[4];for(int k=0;k<4;++k)d[k]={q[k].x-ox,q[k].y-oy,{0,0,1000.0,0,0,0,0,1.0}};
+    detail::DrapeVertex d[4];for(int c=0;c<4;++c)d[c]={q[c].x-ox,q[c].y-oy,{0,0,1000.0,0,0,0,0,1.0}};
     drape.add(mesh,d[0],d[2],d[1],lift);drape.add(mesh,d[1],d[2],d[3],lift);
     continue;
    }

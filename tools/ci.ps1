@@ -314,7 +314,10 @@ function Invoke-WslLeg([string]$Preset) {
 
     $ctestLog = Join-Path $logDir "$Preset.ctest.log"
     Set-Content -LiteralPath $ctestLog -Value "" -Encoding utf8
-    $t = Measure-Command { $script:rc = Invoke-Wsl "ctest --preset $Preset --output-on-failure --parallel 12 $($ctestFilter -join ' ')" $ctestLog }
+    # Each ctest argument single-quoted for bash: an unquoted 'long|niche' made
+    # bash pipe ctest into a command named niche, so no WSL ctest ever ran.
+    $wslCtestFilter = ($ctestFilter | ForEach-Object { "'$_'" }) -join ' '
+    $t = Measure-Command { $script:rc = Invoke-Wsl "ctest --preset $Preset --output-on-failure --parallel 12 $wslCtestFilter" $ctestLog }
     Add-Result $Preset 'ctest' ($script:rc -eq 0) (Get-CtestSummary $ctestLog) $t.TotalSeconds
     if ($script:rc -ne 0) { Show-LogTail $ctestLog 60 }
 

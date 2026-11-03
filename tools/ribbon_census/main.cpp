@@ -205,8 +205,8 @@ int main(int argc, char** argv) {
                 const auto geometry = geo.value();
                 if (!geometry) continue;
                 // warm the height tiles the ribbons read (outside the timed build)
-                for (double e = key.min_easting() - 4; e < key.min_easting() + 1030; e += 128)
-                    for (double n = key.min_northing() - 4; n < key.min_northing() + 1030; n += 128) (void)bilinear(e, n);
+                for (double e = static_cast<double>(key.min_easting()) - 4; e < static_cast<double>(key.min_easting()) + 1030; e += 128)
+                    for (double n = static_cast<double>(key.min_northing()) - 4; n < static_cast<double>(key.min_northing()) + 1030; n += 128) (void)bilinear(e, n);
                 const auto t0 = Clock::now();
                 const RoadRibbonTile mesh = build_road_ribbons(*geometry, key, bilinear, lift, {}, options);
                 const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
                 d_in += mesh.drape_in; d_out += mesh.drape_out; d_uncut += mesh.drape_uncut; d_dropped += mesh.drape_dropped; d_nodes += mesh.drape_node_reads;
                 triangles += mesh.indices.size() / 3;
                 if (csv) csv << mode << ',' << to_string(key) << ',' << mesh.vertices.size() << ',' << mesh.indices.size() / 3 << ',' << ms << '\n';
-                const double ox = key.min_easting(), oy = key.min_northing();
+                const double ox = static_cast<double>(key.min_easting()), oy = static_cast<double>(key.min_northing());
                 {
                     const RoadRibbonGround none = [](double, double) -> std::optional<double> { return std::nullopt; };
                     RoadRibbonOptions point_only;

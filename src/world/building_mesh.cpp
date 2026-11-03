@@ -87,8 +87,8 @@ struct Builder {
       V tangent = std::abs(n[2] / len) > .999 ? V{1, 0, 0} : V{n[1], -n[0], 0};
       const double tl =
           std::sqrt(tangent[0] * tangent[0] + tangent[1] * tangent[1]);
-      for (auto &c : tangent)
-        c /= tl;
+      for (auto &t : tangent)
+        t /= tl;
       const V unit{n[0] / len, n[1] / len, n[2] / len};
       const auto bitangent = cross(unit, tangent);
       const auto q = sub(p, uv_origin);
