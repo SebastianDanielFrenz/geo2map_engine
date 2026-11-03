@@ -38,6 +38,7 @@ add_executable(g2m_layer_tests
   test_road_junction_height.cpp
   test_road_completion.cpp
   test_road_furniture.cpp
+  test_signal_plan.cpp
   test_road_features.cpp
   test_road_profile.cpp
   test_road_reference.cpp

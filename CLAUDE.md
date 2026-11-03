@@ -851,6 +851,20 @@ by_tier[t] whatever its surface kind; `fill_physics_classes` reads the plane. No
 The render ClassWindow (chunk_road_classes / chunk_terrain_classes) stays LandClass-only (colour, no grip). Tests
 `[road_tiers]` (test_road_tier*.cpp, test_class_mode.cpp).
 
+## Traffic signals (2026-11-03, docs/traffic_signals.md)
+
+`g2m/layer/signal_plan.h` / `src/layer/signal_plan.cpp`: engine-neutral signal subsystem shared by NPC traffic and farm helpers (no
+consumer dependency). `build_signal_plans(tile, timing, stats)` derives one `SignalPlan` per signalised node from `RoadGeomTile::furniture`
+(Signal + StopLine records of one approach; no roads.geom change, no release id change): `SignalApproach` (stop line ends/centre, travel
+direction, lanes, heads, phase, stable `id()`), phases = one per road axis (|cross| <= 0.5; opposed approaches share), a virtual cross
+phase for a single-axis plan, red-amber/green/amber/clearance durations and the lane-dependent green from `data/signals/signal_timing.json`
+(`g2m.signal_timing/1`, embedded, strict loader `load_signal_timing`, NOT in any layer config hash), cycle offset = FNV-1a of the node id.
+`SignalPlan::state(phase, t_s)` is a pure function of the clock (integer ms); `SignalIndex` (64 m grid, `add` skips a node already present,
+`next_ahead`, `for_each_near`, `plan_of_node`); `signal_advice` (green go, amber stop if it can stop at 3 m/s^2 after 0.5 s, red stop) and
+`signal_stop_speed_cap` take `SignalDriverRules` (a consumer passes its own for a heavy vehicle). Tests `test_signal_plan.cpp` S1-S7
+`[signals]` (S2 scans a cycle for conflicting greens, S2b negative control, S7 both OSM fixtures: 56/56 and 62/62 signal nodes get a plan,
+0 conflicts, plans identical across tiles). Not modelled: lamp meshes, pedestrian signals, protected lefts, green waves, signal complexes.
+
 ## Building and testing
 
 ```powershell

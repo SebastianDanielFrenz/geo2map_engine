@@ -44,6 +44,7 @@ set(G2M_LAYERS_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/road_surface.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_junction.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_furniture.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/signal_plan.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_underpass.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/road_features.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/terrain_carve.cpp
@@ -83,6 +84,7 @@ function(g2m_embed_json json_file inc_name array_name)
 endfunction()
 g2m_embed_json(${PROJECT_SOURCE_DIR}/data/road_rules/de.json road_rules_de.inc kRoadRulesDe)
 g2m_embed_json(${PROJECT_SOURCE_DIR}/data/carve/carve_default.json carve_default.inc kCarveDefault)
+g2m_embed_json(${PROJECT_SOURCE_DIR}/data/signals/signal_timing.json signal_timing.inc kSignalTiming)
 g2m_embed_json(${PROJECT_SOURCE_DIR}/data/rail_rules/de.json rail_rules_de.inc kRailRulesDe)
 g2m_embed_json(${PROJECT_SOURCE_DIR}/data/classifiers/esa_worldcover_v200.json esa_worldcover_v200.inc kEsaWorldcoverV200)
 # Field polygons (farming game): data/field_rules/de.json, hashed into the g2m.fields.geom layer config.

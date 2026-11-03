@@ -1,0 +1,19 @@
+{
+  "format": "g2m.signal_timing/1",
+  "amber_ms": 3000,
+  "red_amber_ms": 1000,
+  "clearance_ms": 2000,
+  "green_base_ms": 12000,
+  "green_per_lane_ms": 6000,
+  "green_min_ms": 8000,
+  "green_max_ms": 40000,
+  "single_axis_red_ms": 15000,
+  "max_cycle_ms": 120000,
+  "axis_cross_max_permille": 500,
+  "driver": { "comfortable_decel_mmps2": 3000, "max_decel_mmps2": 6000, "reaction_ms": 500, "lateral_tolerance_mm": 2000, "heading_cos_min_permille": 700 },
+  "sources": {
+    "timing": "Fixed-time plans, one phase per road axis (opposed approaches share a phase, as in a two-phase German junction without protected turns). Amber 3 s: RiLSA 2010 Gelbzeit for 50 km/h [D]; red-amber 1 s: RiLSA Rotgelbzeit [D]; clearance (all red after amber) 2 s [assumed, RiLSA derives it from the clearing distance and speed per junction]. Green = base + per_lane * lanes of the widest approach of the phase, clamped to [min, max] [assumed]; the whole cycle is scaled down when it exceeds max_cycle_ms 120 s (a typical upper cycle time) but no green below green_min_ms [assumed]. single_axis_red_ms: a signal whose approaches all lie on one axis (a mid-block crossing signal) stops traffic for this long once per cycle [assumed]. The cycle offset of a plan is FNV-1a of its OSM node id modulo the cycle, so neighbouring signals are not in step (no green wave is modelled) [assumed].",
+    "axis": "Two approaches share a phase when |cross(d1, d2)| <= axis_cross_max_permille / 1000 (sin 30 deg) and the same axis is opposed or parallel [assumed]. Left turns across oncoming traffic are permitted turns (the driver yields); no protected-left phase is modelled.",
+    "driver": "The stop-or-go rule of signal_advice, for any vehicle that obeys the plans (NPC cars, farm helpers): comfortable deceleration 3 m/s^2 and maximum 6 m/s^2 [assumed, the usual traffic-engineering comfort and emergency values], reaction 0.5 s [assumed]. A consumer with a heavy vehicle passes its own SignalDriverRules. lateral_tolerance_mm: how far outside the stop line's ends an agent still counts as on that approach; heading_cos_min_permille: the agent's heading must agree with the approach's travel direction to this cosine (0.7 = 45 deg) [assumed]."
+  }
+}
