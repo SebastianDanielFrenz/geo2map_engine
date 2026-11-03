@@ -107,7 +107,7 @@ TEST_CASE("RT1 road tiers: highway and motorroad pick the tier, first rule wins,
 }
 
 TEST_CASE("RT2 RoadValueLut by_tier: one value for all tiers equals the old table; a tier value shows only at its tier", "[layer][osm][road_tier]") {
-    const auto old_lut = RoadValueLut::by_land_class(3, {{LandClass::PavedRoad, 100}, {LandClass::UnpavedRoad, 50}});
+    const auto old_lut = RoadValueLut::by_land_class(3, {{LandClass::PavedRoad, std::uint16_t{100}}, {LandClass::UnpavedRoad, std::uint16_t{50}}});
     const std::array<std::uint16_t, 1> one{100};
     const auto flat = RoadValueLut::by_tier(3, 50, one);
     const std::array<std::uint16_t, 8> all_same{100, 100, 100, 100, 100, 100, 100, 100};
@@ -168,7 +168,7 @@ TEST_CASE("RT3 painting reads the segment's tier", "[layer][osm][road_tier]") {
         CHECK(out[static_cast<std::size_t>(2 * 6 + i)] == 0);     // row 2: untouched
     }
     // The flat LUT paints both rows alike (the pre-tier behaviour).
-    const auto flat = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, 100}});
+    const auto flat = RoadValueLut::by_land_class(0, {{LandClass::PavedRoad, std::uint16_t{100}}});
     std::vector<std::uint16_t> out2(36, 0);
     paint_road_segments(segs, lat, RasterParams{}, flat, out2, 6);
     CHECK(out2[0] == 100);
