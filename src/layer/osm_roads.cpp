@@ -8,6 +8,7 @@
 #include "g2m/core/geom/project.h" // project_e7_to_mm
 #include "g2m/core/tile_key.h"     // floor_div
 #include "g2m/layer/osm_clip.h"    // kDefaultOsmHaloM
+#include "g2m/layer/road_tier.h"
 
 #include <algorithm>
 #include <array>
@@ -154,6 +155,7 @@ struct WayTags {
     std::optional<std::string_view> lanes;
     bool area = false;
     bool tunnel = false;
+    bool motorroad = false; // motorroad=yes
 };
 
 WayTags read_way_tags(const osm::OsmData& set, const osm::Way& way) {
@@ -172,6 +174,7 @@ WayTags read_way_tags(const osm::OsmData& set, const osm::Way& way) {
         else if (key == "lanes") t.lanes = value;
         else if (key == "area") t.area = (value == "yes");
         else if (key == "tunnel") t.tunnel = (value == "yes");
+        else if (key == "motorroad") t.motorroad = (value == "yes");
     }
     return t;
 }
@@ -220,7 +223,8 @@ std::optional<WayStyle> resolve_way_style(const WayTags& tags, const RoadStyle& 
 
 } // namespace
 
-std::vector<RoadSegment> extract_road_segments(const osm::OsmData& set, geo::UtmZone zone, const RoadStyle& style) {
+std::vector<RoadSegment> extract_road_segments(const osm::OsmData& set, geo::UtmZone zone, const RoadStyle& style,
+                                               const RoadTierMap* tiers) {
     std::vector<RoadSegment> out;
     const geo::Utm utm(geo::kGRS80);
 
@@ -231,6 +235,11 @@ std::vector<RoadSegment> extract_road_segments(const osm::OsmData& set, geo::Utm
         if (!ws) continue;
 
         const std::int64_t half_width_mm = std::llround(ws->width_m * 500.0); // metres -> mm, halved
+        std::uint8_t tier = 0;
+        if (tiers) {
+            const std::uint8_t t = tiers->tier_of(*tags.highway, tags.motorroad, ws->land_class);
+            tier = t == kNoRoadTier ? std::uint8_t{0} : t;
+        }
         const std::span<const std::int64_t> refs = set.refs_of(way);
         for (std::size_t i = 0; i + 1 < refs.size(); ++i) {
             const osm::Node* na = set.find_node(refs[i]);
@@ -249,6 +258,7 @@ std::vector<RoadSegment> extract_road_segments(const osm::OsmData& set, geo::Utm
             seg.rank = ws->rank;
             seg.way_id = way.id;
             seg.bridge = tags.bridge;
+            seg.tier = tier;
             seg.forward_limit = parse_road_speed_limit(tags.forward.value_or(tags.maxspeed.value_or("")));
             seg.backward_limit = parse_road_speed_limit(tags.backward.value_or(tags.maxspeed.value_or("")));
             seg.forward_limit.conditional = seg.backward_limit.conditional = tags.conditional;
@@ -429,7 +439,7 @@ void paint_road_segments(std::span<const RoadSegment> segs, const Lattice& latti
                           const RoadValueLut& lut, std::span<std::uint16_t> out, std::size_t row_stride) {
     paint_loop(segs, lattice, params, kPaintMinHalfWidthMm, kOwnerHaloClampMm,
                [&](std::size_t j, std::size_t i, const RoadSegment& seg) {
-                   out[j * row_stride + i] = lut.at(seg.land_class, seg.surface);
+                   out[j * row_stride + i] = lut.at(seg.land_class, seg.surface, seg.tier);
                });
 }
 
@@ -440,6 +450,25 @@ RoadValueLut RoadValueLut::by_land_class(std::uint16_t off_road,
     for (const auto& [land_class, value] : class_values) {
         const std::size_t base = static_cast<std::size_t>(land_class) * 16;
         for (std::size_t s = 0; s < 16; ++s) lut.v[base + s] = value;
+    }
+    lut.replicate_tier0();
+    return lut;
+}
+
+static_assert(RoadValueLut::kTiers == kRoadTierSlots, "RoadValueLut tier slots vs road_tier.h");
+
+RoadValueLut RoadValueLut::by_tier(std::uint16_t off_road, std::uint16_t unpaved_value,
+                                    std::span<const std::uint16_t> paved_tier_values) {
+    RoadValueLut lut;
+    lut.v.fill(off_road);
+    for (std::size_t t = 0; t < kTiers; ++t) {
+        for (std::size_t s = 0; s < 16; ++s) {
+            lut.v[t * kTierStride + static_cast<std::size_t>(LandClass::UnpavedRoad) * 16 + s] = unpaved_value;
+            if (!paved_tier_values.empty()) {
+                const std::uint16_t paved = paved_tier_values[t < paved_tier_values.size() ? t : paved_tier_values.size() - 1];
+                lut.v[t * kTierStride + static_cast<std::size_t>(LandClass::PavedRoad) * 16 + s] = paved;
+            }
+        }
     }
     return lut;
 }

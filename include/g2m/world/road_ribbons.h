@@ -7,6 +7,7 @@
 #pragma once
 
 #include "g2m/core/tile_key.h"
+#include "g2m/layer/road_tier.h"
 #include "g2m/layer/road_geom_tile.h"
 #include "g2m/world/road_structures.h"
 
@@ -23,11 +24,17 @@ namespace g2m::world {
 // 512 / 1024 left / right edge line not drawn, 2048 paving stones (no painted lines), 4096 concrete, 8192 unpaved (a
 // junction patch piece at a track's mouth, drawn like the terrain's dirt), 16384 with 2048 = sett / cobblestone (natural
 // stone). Bit 256 is left free for the consumer (the game's adapter sets it for a verge vertex).
+// road_tier (not a flag): the road clearing tier of the road the vertex belongs to (g2m/layer/road_tier.h, zero-based, tier 0 = T1,
+// the same value RoadSegment::tier carries), as a float; g2m::kNoRoadTier (255) = none: no RoadRibbonOptions::road_tiers map was
+// given, or the piece belongs to no tier (a junction patch of unpaved mouths only). A ribbon stretch, its markings, arrows, stop
+// lines and crossings carry their road's tier; a junction patch, its verge ring, the markings over it and its gore carry the most
+// important (lowest) tier of the roads meeting there. The flag bits above are unchanged. The renderer's vertex packing is the
+// caller's.
 // x, y: metres from the tile's south-west corner; z: absolute height. u: lateral offset from the centre of the counted
 // lanes, v: station, width: the counted lanes' width; verge 1 = the gravel strip beside the road bed (no asphalt, no
 // paint).
 struct RoadRibbonVertex {
-    float x, y, z, u, v, width, fade, lanes, forward, flags, verge = 0;
+    float x, y, z, u, v, width, fade, lanes, forward, flags, verge = 0, road_tier = 255;
 };
 // The RoadRibbonTile product: one mesh per level-2 tile (indices: triangles into `vertices`).
 struct RoadRibbonTile {
@@ -72,6 +79,9 @@ struct RoadRibbonOptions {
     double drape_tolerance_m = 0.008;
     // The same for the markings, which sit a few mm above the road bed and must not fall under it.
     double drape_mark_tolerance_m = 0.003;
+    // The caller's road tier rules (g2m/layer/road_tier.h); nullptr = no tier information, every road_tier stays 255. Not owned;
+    // must outlive the call.
+    const g2m::RoadTierMap* road_tiers = nullptr;
 };
 
 // The ribbons of `geometry` inside `key` (each 1 m row and each marking is kept by the tile holding its centre), lifted

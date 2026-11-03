@@ -19,7 +19,8 @@
 //   - L0 key Missing (not resident)               -> `fallback`, a miss;
 //   - L0 key Resident without a class tile        -> `fallback`, a miss (a
 //     contract violation in class mode, never silently the Unknown class);
-//   - L0 key Resident with a class tile           -> table.resolve(land_class, surface).
+//   - L0 key Resident with a class tile           -> table.resolve(land_class, surface, road_tier); the tier plane
+//     (TerrainClassTile::road_tier, empty = none) only matters with SurfaceIdTable::tiers set.
 //
 // No allocation and no lock: up to four ResidentHeightSet::find calls (the at
 // most 2 x 2 L0 tiles a physics tile touches), then one table lookup per cell.
@@ -102,7 +103,8 @@ inline ClassFillStats fill_physics_classes(const PhysicsTileGrid& grid, PhysTile
                 continue;
             }
             const std::size_t at = TerrainClassTile::index(static_cast<int>(e - (tx0 + a) * size), j);
-            row[x] = table.resolve(static_cast<LandClass>(cls->land_class[at]), static_cast<SurfaceKind>(cls->surface[at]));
+            const std::uint8_t tier = cls->road_tier.empty() ? std::uint8_t{0} : cls->road_tier[at];
+            row[x] = table.resolve(static_cast<LandClass>(cls->land_class[at]), static_cast<SurfaceKind>(cls->surface[at]), tier);
         }
     }
     return stats;

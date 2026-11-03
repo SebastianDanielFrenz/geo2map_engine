@@ -55,6 +55,13 @@ inline constexpr std::uint16_t kRank = 5;
 struct TerrainClassTile {
     TileKey key;
     std::vector<std::uint8_t> land_class, surface, role, rank;   // kTerrainClassNodes each
+    // Road clearing tier plane (road_tier.h), a CLIENT-SIDE overlay: EMPTY (the default; reset() clears it) = no tier
+    // information, else kTerrainClassNodes entries, 0 = no tier, t + 1 = tier t (zero-based) of the road a PavedRoad node
+    // belongs to. It is not part of the g2m.terrain.class container (encode ignores it, decode leaves it empty - the
+    // served layer and its hashes are unchanged); a caller that stamps road nodes itself (the game's route surface
+    // overlay) fills it. Parallel plane rather than a land_class nibble: every reader of land_class (render window,
+    // fill_physics_classes, the container validation land_class <= 13) stays correct without masking.
+    std::vector<std::uint8_t> road_tier;
     static constexpr std::size_t index(int i, int j) noexcept {
         return static_cast<std::size_t>(j) * static_cast<std::size_t>(kTerrainClassSamples) + static_cast<std::size_t>(i);
     }

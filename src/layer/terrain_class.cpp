@@ -33,6 +33,7 @@ Result<void> check_header(const InputTile& in) {
 void TerrainClassTile::reset(const TileKey& k) {
     key = k;
     for (auto* p : {&land_class, &surface, &role, &rank}) p->assign(kTerrainClassNodes, 0);
+    road_tier.clear();
 }
 
 RasterGeoref terrain_class_georef(const TileKey& key) {

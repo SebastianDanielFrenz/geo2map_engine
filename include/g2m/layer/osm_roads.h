@@ -35,6 +35,8 @@
 
 namespace g2m {
 
+struct RoadTierMap; // g2m/layer/road_tier.h
+
 // One entry of RoadStyle::highways: the default style for a `highway` tag
 // value.
 struct HighwayStyleEntry {
@@ -104,6 +106,9 @@ struct RoadSegment {
     std::int64_t way_id = 0;
     RoadSpeedLimit forward_limit{}, backward_limit{};
     bool bridge = false;
+    // Road clearing tier of the way (road_tier.h), zero-based, 0 = no RoadTierMap given and for an unpaved road (then
+    // ignored by RoadValueLut). paint_road_segments looks the LUT up with it.
+    std::uint8_t tier = 0;
 
     friend bool operator==(const RoadSegment&, const RoadSegment&) = default;
 };
@@ -149,7 +154,12 @@ RoadSpeedMatch match_road_speed_limit(std::span<const RoadSegment> roads,
 // (tests/layer/test_osm_roads.cpp's shuffled-input-order case rebuilds
 // `set` with ways/nodes added in a different order and checks the two
 // extract_road_segments outputs are identical).
-std::vector<RoadSegment> extract_road_segments(const osm::OsmData& set, geo::UtmZone zone, const RoadStyle& style);
+//
+// `tiers` (optional, nullptr = tier 0 everywhere, the old behaviour): the caller's road tier rules (road_tier.h);
+// RoadSegment::tier = the first matching rule for a PAVED way (`highway` and `motorroad=yes` read from the way's tags),
+// else 0. The tier never changes the sort order or any other field.
+std::vector<RoadSegment> extract_road_segments(const osm::OsmData& set, geo::UtmZone zone, const RoadStyle& style,
+                                               const RoadTierMap* tiers = nullptr);
 
 // An axis-aligned grid of sample points in integer millimetres:
 // sample(i, j) = {origin_e_mm + i * spacing_mm, origin_n_mm + j * spacing_mm},
@@ -228,13 +238,14 @@ struct RasterParams {
 void rasterize_road_segments(std::span<const RoadSegment> segs, const Lattice& lattice, const RasterParams& params,
                               std::span<std::uint8_t> land_class, std::span<std::uint8_t> surface);
 
-// A row-major (LandClass, SurfaceKind) -> resolved-surface-id lookup table,
-// index = land_class * 16 + surface_kind (both enums are fixed at <= 16
+// A row-major (tier, LandClass, SurfaceKind) -> resolved-surface-id lookup table,
+// index = tier * 256 + land_class * 16 + surface_kind (both enums are fixed at <= 16
 // values by the g2m.terrain.class encoding, classifier.h's own "never
-// renumber, only append" rule) - a physics-side caller's SurfaceTable
+// renumber, only append" rule; tier 0..7, road_tier.h) - a physics-side caller's SurfaceTable
 // resolution (paved -> "asphalt" id, unpaved -> "dirt" id, ...) folded into
 // one flat array so `paint_road_segments` below never branches on the enum
-// values themselves.
+// values themselves. The tier-0 slice is exactly the old 16 x 16 table (index(land_class, surface) and
+// at(land_class, surface) address it, as before); the other tiers matter only for paved roads.
 struct RoadValueLut {
     // Bumps here mean classifier.h grew past 16 LandClass or SurfaceKind
     // values - index() then needs a wider field (17 would already collide
@@ -242,26 +253,53 @@ struct RoadValueLut {
     static_assert(static_cast<int>(LandClass::SnowIce) < 16, "LandClass grew past 16 values");
     static_assert(static_cast<int>(SurfaceKind::Water) < 16, "SurfaceKind grew past 16 values");
 
-    std::array<std::uint16_t, 256> v{};
+    static constexpr std::size_t kTiers = 8; // == kRoadTierSlots (road_tier.h)
+    static constexpr std::size_t kTierStride = 256;
 
+    std::array<std::uint16_t, kTierStride * kTiers> v{};
+    static_assert(kTierStride == 16 * 16, "one tier slice is 16 land classes x 16 surface kinds");
+
+    // The tier-0 slot (the pre-tier table).
     static constexpr std::size_t index(LandClass land_class, SurfaceKind surface) {
         return static_cast<std::size_t>(land_class) * 16 + static_cast<std::size_t>(surface);
     }
+    // A tier past the last slot is clamped to it.
+    static constexpr std::size_t index(LandClass land_class, SurfaceKind surface, std::uint8_t tier) {
+        const std::size_t t = tier < kTiers ? tier : kTiers - 1;
+        return t * kTierStride + index(land_class, surface);
+    }
     std::uint16_t at(LandClass land_class, SurfaceKind surface) const { return v[index(land_class, surface)]; }
+    std::uint16_t at(LandClass land_class, SurfaceKind surface, std::uint8_t tier) const {
+        return v[index(land_class, surface, tier)];
+    }
 
     // Every entry defaults to `off_road`; each (land_class, value) pair then
-    // overwrites every SurfaceKind slot of that land_class - a LUT keyed by
+    // overwrites every SurfaceKind slot of that land_class (in every tier) - a LUT keyed by
     // LandClass alone (roads_plan.md's "unpaved by LandClass only" default:
     // this feature does not yet distinguish surfaces within a land class).
     static RoadValueLut by_land_class(std::uint16_t off_road,
                                        std::initializer_list<std::pair<LandClass, std::uint16_t>> class_values);
+
+    // Road clearing tiers: every entry `off_road`, every UnpavedRoad slot `unpaved_value` in every tier, and the
+    // PavedRoad slots of tier t = paved_tier_values[t] (every SurfaceKind). paved_tier_values may be shorter than
+    // kTiers: the missing tiers repeat its last value (empty: they stay `off_road`); extra values are ignored.
+    // With the same value for all tiers the result equals by_land_class(off_road, {{PavedRoad, p}, {UnpavedRoad, u}})
+    // entry for entry.
+    static RoadValueLut by_tier(std::uint16_t off_road, std::uint16_t unpaved_value,
+                                std::span<const std::uint16_t> paved_tier_values);
+
+    // Copies the tier-0 slice into every other tier (a builder that fills only tier 0, e.g. SurfaceIdTable).
+    void replicate_tier0() {
+        for (std::size_t t = 1; t < kTiers; ++t)
+            for (std::size_t i = 0; i < kTierStride; ++i) v[t * kTierStride + i] = v[i];
+    }
 };
 
 // Same painting rule as rasterize_road_segments above (shares its inner
 // loop exactly - the exact integer inside test, round end caps and "later
 // segments overwrite earlier ones" rank order are identical; see that
 // function's own comment for the geometry), but resolves each covered
-// sample to one `lut.at(seg.land_class, seg.surface)` id instead of a
+// sample to one `lut.at(seg.land_class, seg.surface, seg.tier)` id instead of a
 // (land_class, surface) byte pair: out[j * row_stride + i] = that id.
 // `row_stride` need not equal `lattice.nx` - a caller painting into one
 // sub-rectangle of a larger owning buffer (e.g. paint_road_blocks below, or

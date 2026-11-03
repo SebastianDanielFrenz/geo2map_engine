@@ -18,6 +18,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -143,6 +144,66 @@ TEST_CASE("fill_physics_classes: every cell reads its centre node through the fu
         }
     }
     CHECK(shifted > ts * ts / 2);
+}
+
+// Road clearing tiers in class mode: the tile's road_tier plane (t + 1, 0 = none) picks by_tier[t] for a PavedRoad node
+// whatever its SurfaceKind; no plane, no `tiers` flag or a non-paved node reads exactly as before.
+TEST_CASE("fill_physics_classes: the road tier plane picks the tier id of a paved road node", "[phys][fill][classes][road_tiers]") {
+    const PhysicsTileGrid grid(kFrame);
+    std::vector<TileKey> keys;
+    grid.l0_keys_for_square(kIndex, 0, keys);
+    REQUIRE(keys.size() == 4);
+    const auto tier_at = [](std::int64_t e, std::int64_t n) { return static_cast<std::uint8_t>(((e * 5 + n) % 7)); }; // 0..6
+    ResidentHeightSet tiered, plain;
+    for (const TileKey& k : keys) {
+        auto t = std::make_shared<TerrainClassTile>(*make_classes(k));
+        t->road_tier.assign(g2m::kTerrainClassNodes, 0);
+        for (int j = 0; j < g2m::kTerrainClassSamples; ++j)
+            for (int i = 0; i < g2m::kTerrainClassSamples; ++i)
+                t->road_tier[TerrainClassTile::index(i, j)] =
+                    tier_at(static_cast<std::int64_t>(k.x) * 256 + i, static_cast<std::int64_t>(k.y) * 256 + j);
+        tiered.install(k, make_heights(k), nullptr, t);
+        plain.install(k, make_heights(k), nullptr, make_classes(k));
+    }
+    SurfaceIdTable table = test_table();
+    const SurfaceIdTable base = table;
+    table.tiers = true;
+    for (std::size_t t = 0; t < table.by_tier.size(); ++t) table.by_tier[t] = static_cast<std::uint16_t>(300 + t);
+
+    const int ts = grid.samples() - 1;
+    const std::size_t cells = static_cast<std::size_t>(ts) * ts;
+    std::vector<std::uint16_t> with_tiers(cells), no_plane(cells), flag_off(cells), reference(cells);
+    fill_physics_classes(grid, kIndex, tiered, table, 9, with_tiers);
+    fill_physics_classes(grid, kIndex, plain, table, 9, no_plane);       // tiers on, no plane
+    fill_physics_classes(grid, kIndex, tiered, base, 9, flag_off);       // plane, tiers off
+    fill_physics_classes(grid, kIndex, plain, base, 9, reference);
+    CHECK(no_plane == reference);
+    CHECK(flag_off == reference);
+
+    const std::int64_t col0 = 474000 + 255 * 3, row0 = 5560000 - 255 * 2;
+    int tiered_cells = 0, wrong = 0;
+    for (int y = 0; y < ts; ++y) {
+        for (int x = 0; x < ts; ++x) {
+            const std::int64_t e = col0 + x + 1, n = row0 + y + 1;
+            const auto lc = static_cast<LandClass>(lc_at(e, n));
+            const auto sk = static_cast<SurfaceKind>(sk_at(e, n));
+            const std::uint8_t tp = tier_at(e, n);
+            std::uint16_t want = base.resolve(lc, sk);
+            if (lc == LandClass::PavedRoad && tp != 0) {
+                want = static_cast<std::uint16_t>(300 + std::min<int>(tp - 1, 7));
+                ++tiered_cells;
+            }
+            if (with_tiers[static_cast<std::size_t>(y) * ts + x] != want) ++wrong;
+        }
+    }
+    CHECK(wrong == 0);
+    CHECK(tiered_cells > 0);
+
+    // to_road_value_lut carries the tiers into the paved slots of every tier.
+    const g2m::RoadValueLut lut = table.to_road_value_lut();
+    CHECK(lut.at(LandClass::PavedRoad, SurfaceKind::Asphalt, 3) == 303);
+    CHECK(lut.at(LandClass::PavedRoad, SurfaceKind::Concrete, 5) == 305);
+    CHECK(lut.at(LandClass::UnpavedRoad, SurfaceKind::Asphalt, 3) == base.resolve(LandClass::UnpavedRoad, SurfaceKind::Asphalt));
 }
 
 TEST_CASE("fill_physics_classes: absent, missing and class-less tiles take the fallback", "[phys][fill][classes]") {

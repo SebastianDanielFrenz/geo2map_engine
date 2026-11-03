@@ -840,6 +840,17 @@ end of `CMakeLists.txt`):
   distributions. Draw one value per statement, because argument evaluation
   order differs between ABIs.
 
+## Road clearing tiers
+
+`g2m/layer/road_tier.h` (RoadTierMap: caller-owned ordered highway/motorroad rules, tier 0..5 = T1..T6, kNoRoadTier 255) feeds
+`RoadSegment::tier` (extract_road_segments), `RoadValueLut::by_tier` (road mode: tier x land class x surface kind, 8 tier
+slots) and `RoadRibbonVertex::road_tier`. Class mode (g2m.terrain.class physics): `TerrainClassTile::road_tier` is a parallel,
+client-side plane (empty = none, else 0 = no tier, t + 1 = tier t; NOT in the served container, encode ignores it, decode leaves it
+empty), `classes::SurfaceIdTable::tiers/by_tier` and `resolve(land, kind, tier_plus1)`: a PavedRoad node with a tier takes
+by_tier[t] whatever its surface kind; `fill_physics_classes` reads the plane. No plane or `tiers` false = bit-identical.
+The render ClassWindow (chunk_road_classes / chunk_terrain_classes) stays LandClass-only (colour, no grip). Tests
+`[road_tiers]` (test_road_tier*.cpp, test_class_mode.cpp).
+
 ## Building and testing
 
 ```powershell
