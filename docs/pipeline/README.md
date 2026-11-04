@@ -182,7 +182,8 @@ Details: [client_side.md](client_side.md).
 | Output | `g2m.fields.geom` v1, encoding 10 ([fields_geom.md](../formats/fields_geom.md)), level 2: per tile every field touching it (id, OSM source, piece, land use, `crop=*`, area, row direction, flags, outline with holes, anchor) plus declined blocks. |
 | Method | OSM `landuse=farmland/meadow/orchard/vineyard/farmyard` ways and multipolygon relations are cut along tracks, paths, roads, railways, ditches, streams, hedges, walls and tree rows and around water, wood, buildings and other land use, on a 1 m integer raster; small slivers are dropped; uncut blocks keep the exact OSM outline. All thresholds in `de.json`. |
 | Ids | source (2 bits), OSM id (46 bits), piece (16 bits); stable across re-bakes as far as OSM allows; `match_field` finds a saved field again. What breaks an id: [fields.md](fields.md). |
-| Config hash | `g2m.fields.geom/1 enc=10 impl=2 rules=<SHA-256 of de.json> raster=cell-centre-scanline-evenodd ... stages=4`. |
+| Config hash | `g2m.fields.geom/1 enc=10 impl=2 rules=<SHA-256 of de.json> raster=cell-centre-scanline-evenodd ... stages=4 candidates=ring1`. |
+| Inputs | `g2m.src.osm` of the target and its eight neighbours (the candidate ring: a whole-tile field and a deep piece of a subdivided block are listed in the tiles they touch), then the cover tiles of each candidate block by discovery. |
 | Tests | `tests/layer/test_fields_geom.cpp`, `tests/world/test_terrain_service.cpp` (fields case); golden `g3f_golden.txt`; fuzz target `fieldsGeom`. |
 | Consumers | None yet. `racing_game` or the fork enables the layer (`LayerOptIn::fields`, bake layer name, or `g2m_server --fields`), reads `fields()`/`field_at`, stores the polygon copy and `FieldRef` in its saves. |
 | Parcel data | Seam designed (source kind 2, reserved), not used. Hessen reference parcels are CC BY 4.0 per a third-party listing: [fields.md](fields.md). |

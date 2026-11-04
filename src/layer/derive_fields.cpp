@@ -5,6 +5,14 @@
 // covering the block's bounding box grown by the largest splitter half width plus two raster cells (a way touching
 // that box lies in one of those tiles, complete), and a relation block is completed first by fetching the tiles of
 // its open chain ends. A block is therefore cut the same way in every tile it touches.
+//
+// Candidates come from the target's tile and its eight neighbours (the candidate ring). A level-2 OSM tile holds the
+// ways touching it plus a 128 m halo, so a block whose outline stays away from the target tile is seen only from a
+// tile its outline reaches. Without the ring, a field covering a whole tile, and a piece of a subdivided block lying
+// only in tiles deep inside the block, were listed in no tile at all. One ring is enough: if no tile within 1 of the
+// target were reached by the outline, the 3 x 3 tiles would lie inside the block, which would then be wider than
+// 3072 m, above rules.block_max_extent_m (3000 m, declined TooLarge). A block found only from a neighbour is built
+// when its bounding box overlaps the target tile; its declines are recorded by the tiles its outline reaches.
 #include "g2m/core/geom/project.h"
 #include "g2m/core/geom/ring_assembly.h"
 #include "g2m/core/hash.h"
@@ -12,6 +20,7 @@
 #include "g2m/layer/field_tile.h"
 #include "g2m/layer/src_osm.h"
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <set>
@@ -150,6 +159,7 @@ struct BlockPlan {
     std::vector<TileKey> cover;          // the view: tiles covering the block (Ready)
     std::vector<TileKey> needed;         // tiles to add to the pool (Pending)
     geom::BoxMm bbox{};
+    bool ring_only = false;              // found from a neighbour tile, not the target's own
 };
 
 struct Pool {
@@ -286,11 +296,37 @@ Result<Pool> build_pool(const Context& cx, std::span<const InputTile> inputs) {
     return pool;
 }
 
+geom::BoxMm tile_box_mm(const TileKey& k) {
+    const std::int64_t size = k.size_m() * 1000;
+    return {k.min_easting() * 1000, k.min_northing() * 1000, k.min_easting() * 1000 + size, k.min_northing() * 1000 + size};
+}
+
+bool in_candidate_ring(const TileKey& target, const TileKey& k) {
+    return k.zone == target.zone && k.level == target.level && std::abs(static_cast<std::int64_t>(k.x) - target.x) <= 1 &&
+           std::abs(static_cast<std::int64_t>(k.y) - target.y) <= 1;
+}
+
+// The target's own blocks first (in its candidate order), then the blocks only a ring neighbour holds, by tile key.
 std::vector<BlockPlan> plan_all(const Context& cx, const Pool& pool) {
     std::vector<BlockPlan> plans;
     const SrcTile* home = pool.find(cx.target);
     if (!home) return plans;
-    for (auto& b : candidate_blocks(cx.rules, *home)) plans.push_back(plan_block(cx.rules, cx.target, pool, std::move(b)));
+    std::set<std::pair<std::uint8_t, std::int64_t>> seen;
+    for (auto& b : candidate_blocks(cx.rules, *home)) {
+        seen.insert({static_cast<std::uint8_t>(b.source), b.osm_id});
+        plans.push_back(plan_block(cx.rules, cx.target, pool, std::move(b)));
+    }
+    const geom::BoxMm box = tile_box_mm(cx.target);
+    for (const auto& t : pool.tiles) {   // ascending key
+        if (t.key == cx.target || !in_candidate_ring(cx.target, t.key)) continue;
+        for (auto& b : candidate_blocks(cx.rules, t)) {
+            if (!seen.insert({static_cast<std::uint8_t>(b.source), b.osm_id}).second) continue;
+            BlockPlan plan = plan_block(cx.rules, cx.target, pool, std::move(b));
+            if (plan.status == BlockStatus::Declined || !boxes_overlap(plan.bbox, box)) continue; // the pieces lie in the bbox
+            plan.ring_only = true;
+            plans.push_back(std::move(plan));
+        }
+    }
     return plans;
 }
 
@@ -439,12 +475,19 @@ ContentHash FieldsGeomDeriver::config_hash() const {
     const auto& sha = builtin_field_rules_de().content_sha256;
     return Sha256::of("g2m.fields.geom/1 enc=10 impl=2 rules=" + to_hex(std::span<const std::uint8_t>(sha.data(), sha.size())) +
         " raster=cell-centre-scanline-evenodd capsule=exact conn=4 trace=left-turn dp=exact piece-order=sw-cell anchor=9-lines"
-        " block-owner=min-vertex view=cover(bbox+halfwidth+2cells) relation-walk=open-chain-ends stages=4");
+        " block-owner=min-vertex view=cover(bbox+halfwidth+2cells) relation-walk=open-chain-ends stages=4 candidates=ring1");
 }
 
 std::vector<InputTileRef> FieldsGeomDeriver::inputs_for(const TileKey& target) const {
     if (!target.valid() || target.level != 2) return {};
-    return {{std::string(kSrcOsmLayer), target}};
+    std::vector<InputTileRef> refs;   // the candidate ring, ascending key
+    for (std::int32_t dy = -1; dy <= 1; ++dy)
+        for (std::int32_t dx = -1; dx <= 1; ++dx) {
+            const TileKey k{target.zone, 2, target.x + dx, target.y + dy};
+            if (k.valid()) refs.push_back({std::string(kSrcOsmLayer), k});
+        }
+    std::sort(refs.begin(), refs.end());
+    return refs;
 }
 
 Result<std::vector<InputTileRef>> FieldsGeomDeriver::additional_inputs_for(const DeriveRequest& request) const {
@@ -472,11 +515,12 @@ Result<DeriveResult> FieldsGeomDeriver::derive(const DeriveRequest& request) con
     std::map<std::pair<std::uint8_t, std::int64_t>, FieldDeclineReason> declines;
     for (auto& plan : plan_all(cx, *pool)) {
         const auto key = std::make_pair(static_cast<std::uint8_t>(plan.block.source), plan.block.osm_id);
-        if (plan.status == BlockStatus::Declined) { declines.emplace(key, plan.decline); continue; }
-        if (plan.status == BlockStatus::Pending) { declines.emplace(key, FieldDeclineReason::RelationIncomplete); continue; }
+        // A ring-only block's declines belong to the tiles its outline reaches.
+        if (plan.status == BlockStatus::Declined) { if (!plan.ring_only) declines.emplace(key, plan.decline); continue; }
+        if (plan.status == BlockStatus::Pending) { if (!plan.ring_only) declines.emplace(key, FieldDeclineReason::RelationIncomplete); continue; }
         BlockResult res = process_block(rules, plan, *pool);
-        if (res.declined) { declines.emplace(key, *res.declined); continue; }
-        const bool owned_block = res.owner_vertex.x >= box.w && res.owner_vertex.x < box.e && res.owner_vertex.y >= box.s && res.owner_vertex.y < box.n;
+        if (res.declined) { if (!plan.ring_only) declines.emplace(key, *res.declined); continue; }
+        const bool owned_block = !plan.ring_only && res.owner_vertex.x >= box.w && res.owner_vertex.x < box.e && res.owner_vertex.y >= box.s && res.owner_vertex.y < box.n;
         if (owned_block) {
             ++tile.counts.blocks;
             if (res.subdivided) ++tile.counts.subdivided;

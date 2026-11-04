@@ -70,13 +70,21 @@ order: lowest raster row first, then the lowest column of the piece's first cell
 
 A field must be the same record in every tile it touches, whichever tile derives it. The deriver takes the block's
 bounding box grown by the widest splitter plus two cells, covers it with level-2 tiles and builds the block only from
-those tiles (never from "whatever the target's inputs happen to hold"). `inputs_for` names the target's own `g2m.src.osm`
-tile; `additional_inputs_for` (four discovery stages) names the cover tiles of every block of the target and, for a
-relation, the tile of each open chain end, so a relation outline that crosses tiles is walked tile by tile. Limits: a
-relation needing more than about four discovery rounds, or an obstacle relation not complete inside the block's cover,
-is incomplete (`RelationIncomplete` decline or the obstacle is skipped); a block that reaches past the imported region
-is `RelationIncomplete` too. A field that covers a whole tile with no outline segment near it is not seen from that
-tile (the tile only holds fields whose outline or south-west corner lies in it).
+those tiles (never from "whatever the target's inputs happen to hold"). `inputs_for` names the `g2m.src.osm` tiles of
+the **candidate ring**, the target and its eight neighbours; `additional_inputs_for` (four discovery stages) names the
+cover tiles of every candidate block and, for a relation, the tile of each open chain end, so a relation outline that
+crosses tiles is walked tile by tile. Limits: a relation needing more than about four discovery rounds, or an obstacle
+relation not complete inside the block's cover, is incomplete (`RelationIncomplete` decline or the obstacle is
+skipped); a block that reaches past the imported region is `RelationIncomplete` too.
+
+The candidate ring. An OSM tile holds the ways touching it plus a 128 m halo, so a block whose outline stays away from
+the target tile is seen only from the tiles its outline reaches. The target's candidates are therefore the blocks of all
+nine ring tiles: its own, then those only a neighbour holds, which are built when their bounding box overlaps the
+target tile and whose declines stay with the tiles their outline reaches. This lists a field that covers a whole tile,
+and a piece of a subdivided block that lies only in tiles deep inside the block, in the tiles it touches. One ring is
+enough: if no tile within 1 of the target were reached by the outline, the 3 x 3 tiles would lie inside the block,
+which would then be wider than 3072 m, above `block_max_extent_m` (3000 m, declined `TooLarge`). Cost: every derive
+reads nine OSM tiles instead of one, and builds the neighbours' blocks that reach into it.
 
 ## Ids and what breaks them
 

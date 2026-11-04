@@ -761,10 +761,12 @@ TEST_CASE("A relation whose outline lies in another tile is completed by discove
     Scene s;
     const TileKey west = s.home(); auto east = west; ++east.x;
     using M = osm::OsmBuilder::MemberIn;
-    // Way B (the far part of the ring) lies entirely beyond the west tile's 128 m halo (x > 1152).
-    const auto a = s.way(10, {{1000, 100}, {1000, 300}, {1160, 300}}, {});
-    const auto b = s.way(11, {{1160, 300}, {1400, 300}, {1400, 100}, {1160, 100}}, {});
-    const auto c = s.way(12, {{1160, 100}, {1000, 100}}, {});
+    // Way B (the far part of the ring) lies beyond the west tile's candidate ring (x > 2048 + 128): only discovery
+    // reaches it.
+    auto far = west; far.x += 2;
+    const auto a = s.way(10, {{1000, 100}, {1000, 300}, {2200, 300}}, {});
+    const auto b = s.way(11, {{2200, 300}, {2400, 300}, {2400, 100}, {2200, 100}}, {});
+    const auto c = s.way(12, {{2200, 100}, {1000, 100}}, {});
     s.relation(500, {M{osm::MemberType::Way, a, "outer"}, M{osm::MemberType::Way, b, "outer"}, M{osm::MemberType::Way, c, "outer"}},
         {{"landuse", "farmland"}, {"type", "multipolygon"}});
     const auto world = s.build();
@@ -775,19 +777,92 @@ TEST_CASE("A relation whose outline lies in another tile is completed by discove
     CHECK(bare.declines[0].source == FieldSource::OsmRelation); CHECK(bare.declines[0].reason == FieldDeclineReason::RelationIncomplete);
     // additional_inputs_for names the tile with the missing member.
     {
-        FieldsGeomDeriver d; std::vector<InputTile> in{make_input(d.inputs_for(west)[0], world)};
+        FieldsGeomDeriver d; std::vector<InputTile> in;
+        for (const auto& ref : d.inputs_for(west)) in.push_back(make_input(ref, world));
         const auto more = d.additional_inputs_for({west, 0, in}); REQUIRE(more);
         REQUIRE_FALSE(more->empty());
-        CHECK(std::any_of(more->begin(), more->end(), [&](const auto& r) { return r.key == east; }));
+        CHECK(std::any_of(more->begin(), more->end(), [&](const auto& r) { return r.key == far; }));
     }
     const auto full = run_fields(world, west); const auto w = decode_run(full);
     CHECK(full.stages_used >= 1);
     REQUIRE(w.fields.size() == 1); CHECK(w.declines.empty());
-    CHECK(near_ratio(w.fields[0], 400.0 * 200) == Catch::Approx(1.0).epsilon(0.002));
+    CHECK(near_ratio(w.fields[0], 1400.0 * 200) == Catch::Approx(1.0).epsilon(0.002));
     const auto e = fields_of(world, east);
     REQUIRE(e.fields.size() == 1);
     auto x = w.fields[0], y = e.fields[0]; x.flags &= ~field_flag::Owned; y.flags &= ~field_flag::Owned;
     CHECK(x == y);
+}
+
+TEST_CASE("A field covering a whole tile is listed in that tile (the candidate ring)", "[layer][fields][fields_derive]") {
+    Scene s;
+    const TileKey home = s.home();
+    // 2000 m square around the home tile: its outline stays 476-500 m outside the tile, beyond the 128 m halo.
+    s.field(1000, -500, -500, 1500, 1500, "meadow");
+    const auto world = s.build();
+    const auto h = fields_of(world, home);
+    REQUIRE(h.fields.size() == 1);
+    CHECK(h.declines.empty());
+    CHECK(h.counts.blocks == 0);                    // the block is counted by the tile holding its smallest vertex
+    CHECK(field_at(h, at(home, 512, 512)));
+    // The same record as in a tile the outline reaches, owned exactly once over the 3 x 3 tiles.
+    auto sw = home; --sw.x; --sw.y;
+    const auto t = fields_of(world, sw);
+    REQUIRE(t.fields.size() == 1);
+    auto x = h.fields[0], y = t.fields[0]; x.flags &= ~field_flag::Owned; y.flags &= ~field_flag::Owned;
+    CHECK(x == y);
+    int owners = 0, blocks = 0;
+    for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+        auto k = home; k.x += dx; k.y += dy;
+        const auto tile = fields_of(world, k);
+        REQUIRE(tile.fields.size() == 1);
+        owners += (tile.fields[0].flags & field_flag::Owned) != 0;
+        blocks += static_cast<int>(tile.counts.blocks);
+    }
+    CHECK(owners == 1);
+    CHECK(blocks == 1);
+}
+
+TEST_CASE("A piece deep inside a subdivided block is listed in the tile it lies in", "[layer][fields][fields_derive]") {
+    Scene s;
+    const TileKey home = s.home();
+    // Four tracks cut the block into 3 x 3 pieces; the middle piece (300..700 m) lies only in the home tile, which
+    // the block's outline never comes within 128 m of.
+    s.field(1000, -500, -500, 1500, 1500);
+    s.way(2001, {{300, -500}, {300, 1500}}, {{"highway", "track"}});
+    s.way(2002, {{700, -500}, {700, 1500}}, {{"highway", "track"}});
+    s.way(2003, {{-500, 300}, {1500, 300}}, {{"highway", "track"}});
+    s.way(2004, {{-500, 700}, {1500, 700}}, {{"highway", "track"}});
+    const auto world = s.build();
+    const auto h = fields_of(world, home);
+    const FieldRecord* middle = nullptr;
+    for (const auto& f : h.fields)
+        if (field_polygon_contains(f.polygon, at(home, 500, 500))) middle = &f;
+    REQUIRE(middle);
+    CHECK((middle->flags & field_flag::Subdivided) != 0);
+    CHECK((middle->flags & field_flag::Owned) != 0);
+    CHECK(near_ratio(*middle, 396.0 * 396.0) == Catch::Approx(1.0).epsilon(0.03));
+    // No other tile lists it.
+    for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+        if (dx == 0 && dy == 0) continue;
+        auto k = home; k.x += dx; k.y += dy;
+        for (const auto& f : fields_of(world, k).fields) CHECK(f.id != middle->id);
+    }
+}
+
+TEST_CASE("A neighbour's block that stays away from the target is neither built nor declined there", "[layer][fields][fields_derive]") {
+    Scene s;
+    const TileKey home = s.home();
+    s.field(1000, 1300, 100, 1500, 300);                 // in the east neighbour, 276 m from the home tile
+    s.field(1001, 1300, 400, 1300 + 3100, 600);          // too large, also only in the east neighbours
+    const auto world = s.build();
+    const auto h = fields_of(world, home);
+    CHECK(h.fields.empty());
+    CHECK(h.declines.empty());
+    auto east = home; ++east.x;
+    const auto e = fields_of(world, east);
+    CHECK(count_osm(e, 1000) == 1);
+    REQUIRE(e.declines.size() == 1);
+    CHECK(e.declines[0].reason == FieldDeclineReason::TooLarge);
 }
 
 TEST_CASE("A block reaching into a tile the store does not have is an incomplete relation", "[layer][fields][fields_derive]") {

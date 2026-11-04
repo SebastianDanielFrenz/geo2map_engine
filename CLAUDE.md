@@ -1222,7 +1222,8 @@ config hash). Blocks = closed landuse farmland/meadow/orchard/vineyard/farmyard 
 integer raster along splitters (tracks, paths, roads, railways, waterways, hedges, walls, tree rows) and around obstacle areas;
 sliver, keep-whole, obstacle-cap and budget rules from the file. `FieldTile` (fields touching the tile, `Owned` flag = anchor in
 tile, declines), `FieldRecord` (id = source/OSM id/piece, landuse, crop, area, row direction, flags, polygon, anchor),
-`field_at`, `match_field`/`FieldRef`; `FieldsGeomDeriver` (4 discovery stages, tile-invariant via block-keyed cover views).
+`field_at`, `match_field`/`FieldRef`; `FieldsGeomDeriver` (4 discovery stages, tile-invariant via block-keyed cover views; candidates from the 3 x 3 ring of
+OSM tiles, so a whole-tile field and a deep piece of a subdivided block list in the tiles they touch).
 Opt-in: `BuiltinTerrainDerivers::ordered(..., include_fields)` / `builtin_local_release_params(..., include_fields)`, bake layer
 `g2m.fields.geom` (`--levels 2`), `g2m_server --fields`, `LayerOptIn::fields`, `TerrainService::fields/peek_fields/field_at/
 field_at_grid` (job kind 11). Tests `tests/layer/test_fields_geom.cpp` ([fields], [fields_kernel], [fields_derive], [fields_match],
