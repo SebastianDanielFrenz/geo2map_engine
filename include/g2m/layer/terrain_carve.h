@@ -79,6 +79,7 @@ struct CarveOptions {
     bool blend_from_raw = false;            // T12 sabotage: blends (and their widths) read the raw DEM, the terrain the smoothed one
     bool first_come_ownership = false;      // T14 sabotage: the first candidate of each kind wins instead of the min / max rules
     bool deck_clamp = true;                 // T15 sabotage: no clearance clamp under bridges
+    bool carve_unpaved = true;              // bridge-end sabotage: false leaves every non-paved ground way uncarved (what the game's RoadSurfacePatch does), the bare DEM meets the deck
     bool junction_relief_fade = true;       // D42 sabotage: false keeps every approach's full relief (the D22-D24 surface)
     bool underpass_decks = true;            // D58 sabotage: false carves a ground stretch over its underpass decks (the slot)
     bool underpass_steep_walls = true;      // D59 sabotage: false lets a ground end's blend cap reach into its deck (abutment slope)

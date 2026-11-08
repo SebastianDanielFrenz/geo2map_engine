@@ -479,11 +479,11 @@ g2m_fields_probe png DERIVED_DIR RELEASE_HEX SOURCE_DIR SCOPE out.png [--tile X,
 g2m_soil_probe stats SOIL_DIR SOIL_RELEASE FIELDS_DIR FIELDS_RELEASE [fields_soil.csv]
 g2m_soil_probe png SOIL_DIR SOIL_RELEASE FIELDS_DIR FIELDS_RELEASE out.png [--tile X,Y] [--tiles N] [--mpp M] [--horizon 0|1] [--lonlat LON,LAT]
 g2m_osm_near STORE SCOPE ZONE E N RADIUS [--nodes]          # OSM ways (tags) and, with --nodes, nodes within RADIUS m of a UTM point
-g2m_spot_dump STORE SCOPE SCRATCH_DIR ZONE E N RADIUS [--way ID] [--step M] [--census HALF_M [--csv F] [--baseline]]
+g2m_spot_dump STORE SCOPE SCRATCH_DIR ZONE E N RADIUS [--way ID] [--step M] [--cross S] [--grid HALF REF_Z] [--census HALF_M [--csv F] [--portals F] [--bridge-ends F] [--baseline]]
 g2m_rail_census STORE_DIR SCOPE ZONE EMIN EMAX NMIN NMAX [CSV] [--spot E N] [--baked DERIVED_DIR RID]
 ```
 
-All are under `G2M_BUILD_APPS`. See `tools/osm_tag_probe`, `tools/road_probe/README.md`, `tools/rail_census/main.cpp` (railway census: ways, bridges, tunnels, rail-bridge-over-road crossings; numbers in [rail.md](rail.md)), `tools/osm_near` and `tools/spot_dump` (the served roads.geom entries at a spot, profile / DEM / carved height along a way, the declined-entry census of a box, and with `--census HALF --portals FILE.csv` the 7a-1 portal census: tunnel floor end vs ground profile end per portal node; `--baseline` switches D64/D65 off for a before/after). The probes never write to the tile cache (spot_dump derives into its own SCRATCH_DIR).
+All are under `G2M_BUILD_APPS`. See `tools/osm_tag_probe`, `tools/road_probe/README.md`, `tools/rail_census/main.cpp` (railway census: ways, bridges, tunnels, rail-bridge-over-road crossings; numbers in [rail.md](rail.md)), `tools/osm_near` and `tools/spot_dump` (the served roads.geom entries at a spot, profile / DEM / carved height along a way, the declined-entry census of a box, and with `--census HALF --portals FILE.csv` the 7a-1 portal census: tunnel floor end vs ground profile end per portal node; `--baseline` switches D64/D65 off for a before/after; `--bridge-ends F` is the bridge-end census: per node a non-tunnel bridge stretch ends at, the deck end against the profiled ground stretches, declined stretches, and the deck end against the bare DEM and against `terrain.carved` 1.5 m along each approach, paved / unpaved; `--grid HALF REF_Z` prints the carved terrain minus REF_Z in cm on a 1 m grid). The probes never write to the tile cache (spot_dump derives into its own SCRATCH_DIR).
 
 ### 7.5 Use it from the game
 
