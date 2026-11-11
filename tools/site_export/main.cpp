@@ -1,6 +1,12 @@
 // g2m_site_export - the map features a farming game places buyers and supply stores on (docs/pipeline/site_export.md).
 //
 //   g2m_site_export --store DIR --scope SCOPE --rules data/site_export/de.json --out sites.json [--region-min E,N --region-max E,N]
+//                   [--pbf A.osm.pbf,B.osm.pbf,... --margin-km 60]
+//
+// --pbf/--margin-km: the farm's fallback sites need the REAL plants up to the largest spacing (60 km) outside the region (else it places a fake one
+// next to a real plant just over the border). The scope's store holds only the region, so the margin is read straight from the given PBF files:
+// every tagged node or way (the same rules) whose position lies within margin of the region and that the store did not already give. No industrial
+// candidates from the margin (a procedural site is only placed inside the region). Ids and positions as for the store's features.
 //
 // Reads every g2m.src.osm tile of the scope (read only) and writes "farm.site_input/1": one record per OSM node or way carrying a listed tag or a
 // listed word in its name (id, ALL tags, name, position in integer UTM millimetres of the bake's zone; a way takes the mean of its nodes), plus
@@ -8,6 +14,7 @@
 // its id with bit 60 set (a node and a way never collide; the top bit stays free for procedural sites). Tile halos repeat features: they are
 // kept once. The region is the bounding box of the scope's tiles (metres in the flags) unless given. Output is sorted by id and deterministic.
 #include "g2m/core/geo/utm.h"
+#include "g2m/decode/osm/pbf_reader.h"
 #include "g2m/core/geom/project.h"
 #include "g2m/layer/src_osm.h"
 #include "g2m/layer/tile_container.h"
@@ -22,6 +29,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -66,7 +74,7 @@ int main(int argc, char** argv) {
     std::map<std::string, std::string> args;
     for (int i = 1; i + 1 < argc; i += 2) args[argv[i]] = argv[i + 1];
     if (!args.count("--store") || !args.count("--scope") || !args.count("--rules") || !args.count("--out")) {
-        std::cerr << "usage: g2m_site_export --store DIR --scope SCOPE --rules FILE --out FILE [--region-min E,N --region-max E,N]\n";
+        std::cerr << "usage: g2m_site_export --store DIR --scope SCOPE --rules FILE --out FILE [--region-min E,N --region-max E,N] [--pbf A,B --margin-km N]\n";
         return 1;
     }
     std::ifstream rin(args["--rules"]);
@@ -207,6 +215,127 @@ int main(int argc, char** argv) {
     if (args.count("--region-min") && !get_pair(args["--region-min"], rmin_e, rmin_n)) { std::cerr << "bad --region-min\n"; return 1; }
     if (args.count("--region-max") && !get_pair(args["--region-max"], rmax_e, rmax_n)) { std::cerr << "bad --region-max\n"; return 1; }
 
+    std::size_t margin_features = 0;
+    if (args.count("--pbf")) {
+        const std::int64_t margin_mm = (args.count("--margin-km") ? std::stoll(args["--margin-km"]) : 60) * 1000000;
+        const std::int64_t lo_e = rmin_e - margin_mm, lo_n = rmin_n - margin_mm, hi_e = rmax_e + margin_mm, hi_n = rmax_n + margin_mm;
+        std::vector<std::string> pbfs;
+        {
+            const std::string rest = args["--pbf"];
+            for (std::size_t from = 0; from <= rest.size();) {
+                const std::size_t c = rest.find(',', from);
+                const std::string one = rest.substr(from, c == std::string::npos ? std::string::npos : c - from);
+                if (!one.empty()) pbfs.push_back(one);
+                if (c == std::string::npos) break;
+                from = c + 1;
+            }
+        }
+        const auto tags_of_pbf = [](const std::vector<decode::osm::Tag>& ts, std::string& name) {
+            std::map<std::string, std::string> m;
+            for (const auto& tg : ts) {
+                m[tg.key] = tg.value;
+                if (tg.key == "name") name = tg.value;
+            }
+            return m;
+        };
+        const auto relevant_map = [&](const std::map<std::string, std::string>& m, const std::string& name) {
+            for (const auto& [k, v] : tags) {
+                const auto it = m.find(k);
+                if (it != m.end() && it->second == v) return true;
+            }
+            const std::string ln = lower(name);
+            for (const std::string& w : words)
+                if (!w.empty() && ln.find(w) != std::string::npos) return true;
+            return false;
+        };
+        struct MarginWay {
+            std::uint64_t id;
+            std::map<std::string, std::string> tags;
+            std::string name;
+            std::vector<std::int64_t> refs;
+        };
+        struct WayPass : decode::osm::PbfHandler {
+            const decltype(tags_of_pbf)& tg;
+            const decltype(relevant_map)& rel;
+            std::vector<MarginWay>& out;
+            std::set<std::int64_t>& need;
+            WayPass(const decltype(tags_of_pbf)& a, const decltype(relevant_map)& b, std::vector<MarginWay>& c, std::set<std::int64_t>& d) : tg(a), rel(b), out(c), need(d) {}
+            void on_way(const decode::osm::OsmWay& w) override {
+                if (w.tags.empty()) return;
+                std::string name;
+                auto m = tg(w.tags, name);
+                if (!rel(m, name)) return;
+                for (std::int64_t r : w.node_refs) need.insert(r);
+                out.push_back(MarginWay{static_cast<std::uint64_t>(w.id) | kWayBit, std::move(m), name, w.node_refs});
+            }
+        };
+        struct NodePass : decode::osm::PbfHandler {
+            const geo::Utm& utm;
+            geo::UtmZone zone;
+            const std::set<std::int64_t>& need;
+            std::map<std::int64_t, geom::PointMm>& pos;
+            const decltype(tags_of_pbf)& tg;
+            const decltype(relevant_map)& rel;
+            std::map<std::uint64_t, Feature>& feats;
+            std::int64_t lo_e, lo_n, hi_e, hi_n;
+            NodePass(const geo::Utm& u, geo::UtmZone z, const std::set<std::int64_t>& n, std::map<std::int64_t, geom::PointMm>& p, const decltype(tags_of_pbf)& a,
+                     const decltype(relevant_map)& b, std::map<std::uint64_t, Feature>& f, std::int64_t e0, std::int64_t n0, std::int64_t e1, std::int64_t n1)
+                : utm(u), zone(z), need(n), pos(p), tg(a), rel(b), feats(f), lo_e(e0), lo_n(n0), hi_e(e1), hi_n(n1) {}
+            void on_node(const decode::osm::OsmNode& nd) override {
+                const bool wanted = need.count(nd.id) != 0;
+                const bool tagged = !nd.tags.empty();
+                if (!wanted && !tagged) return;
+                const auto p = geom::project_e7_to_mm(utm, zone, nd.lat_1e7, nd.lon_1e7);
+                if (!p) return;
+                if (wanted) pos[nd.id] = *p;
+                if (!tagged || p->x < lo_e || p->x >= hi_e || p->y < lo_n || p->y >= hi_n) return;
+                std::string name;
+                auto m = tg(nd.tags, name);
+                if (!rel(m, name)) return;
+                Feature f;
+                f.id = static_cast<std::uint64_t>(nd.id);
+                f.tags = std::move(m);
+                f.name = name;
+                f.e = p->x;
+                f.n = p->y;
+                feats.emplace(f.id, std::move(f));
+            }
+        };
+        const std::size_t before = features.size();
+        for (const std::string& pbf : pbfs) {
+            std::vector<MarginWay> ways;
+            std::set<std::int64_t> need;
+            WayPass wp(tags_of_pbf, relevant_map, ways, need);
+            decode::osm::read_pbf(pbf, wp, nullptr, decode::osm::PbfEntities::Ways);
+            std::map<std::int64_t, geom::PointMm> pos;
+            NodePass np(utm, out_zone, need, pos, tags_of_pbf, relevant_map, features, lo_e, lo_n, hi_e, hi_n);
+            decode::osm::read_pbf(pbf, np, nullptr, decode::osm::PbfEntities::Nodes);
+            for (const MarginWay& w : ways) {
+                long double se = 0, sn = 0;
+                std::size_t n = 0;
+                for (std::int64_t r : w.refs) {
+                    const auto p = pos.find(r);
+                    if (p == pos.end()) continue;
+                    se += p->second.x;
+                    sn += p->second.y;
+                    ++n;
+                }
+                if (n == 0) continue;
+                const std::int64_t ce = static_cast<std::int64_t>(se / n), cn = static_cast<std::int64_t>(sn / n);
+                if (ce < lo_e || ce >= hi_e || cn < lo_n || cn >= hi_n) continue;
+                Feature f;
+                f.id = w.id;
+                f.tags = w.tags;
+                f.name = w.name;
+                f.e = ce;
+                f.n = cn;
+                features.emplace(f.id, std::move(f));
+            }
+            std::cerr << "g2m_site_export: margin pass over " << pbf << ": " << features.size() - before << " features so far\n";
+        }
+        margin_features = features.size() - before;
+    }
+
     json fa = json::array(), ia = json::array();
     for (const auto& [id, f] : features) {
         json t = json::object();
@@ -222,6 +351,6 @@ int main(int argc, char** argv) {
                    {"industrial", ia}};
     std::ofstream o(args["--out"], std::ios::binary | std::ios::trunc);
     o << out.dump();
-    std::cerr << "g2m_site_export: " << tiles << " tiles, " << features.size() << " features, " << industrial.size() << " industrial candidates\n";
+    std::cerr << "g2m_site_export: " << tiles << " tiles, " << features.size() << " features, " << industrial.size() << " industrial candidates, " << margin_features << " from the PBF margin\n";
     return 0;
 }

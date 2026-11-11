@@ -4,6 +4,7 @@ Detail page of the [pipeline overview](README.md), section 2.9. Not a layer and 
 
 ```
 g2m_site_export --store DIR --scope SCOPE --rules data/site_export/de.json --out sites.json [--region-min E,N --region-max E,N]
+                [--pbf A.osm.pbf,B.osm.pbf --margin-km 60]
 ```
 
 ## What it writes
@@ -15,6 +16,12 @@ g2m_site_export --store DIR --scope SCOPE --rules data/site_export/de.json --out
 - `region`: the bounding box of the scope's tiles unless `--region-min/--region-max` (metres) are given.
 
 Tile halos repeat features; each id is kept once. Output is sorted by id and the same bytes on every run. The rules (`data/site_export/de.json`, `g2m.site_export_rules/1`) list tags and name words with their sources; they mirror the farm's `buyers.json`/`supply.json` and need a change only when the farm starts to classify on a new tag.
+
+## The margin (`--pbf`, `--margin-km`)
+
+The farm's fallback rule places a procedural plant only where no real plant of the kind lies within the kind's spacing (merchants 15 km, specialised plants 60 km), so the input must list the real plants up to **60 km outside the region**, or the farm puts a fake one next to a real plant just over the border. The scope's store holds only the region, so with `--pbf` (comma separated `.osm.pbf` files, any that cover the margin) the tool reads the margin straight from them: two passes per file (relevant ways and the node ids they need, then those node positions and the relevant tagged nodes), the same tag/name rules, ids as above, features already given by the store kept as they are, positions within `--margin-km` (default 60) of the region box. No industrial candidates come from the margin (a procedural site is only placed inside the region). Without `--pbf` the output is byte-identical to before.
+
+Home region with the margin (2026-11-11, PBFs Hessen 2026-09-25, Karlsruhe Regierungsbezirk, Rheinland-Pfalz and Unterfranken from Geofabrik): 4697 features (180 without), 254 industrial; the region box is 33.8 x 51.2 km, the margin box 154 x 171 km.
 
 ## Home region numbers (`home-2026-09r1`)
 
