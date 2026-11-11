@@ -94,6 +94,7 @@ int main(int argc, char** argv) {
     std::map<std::uint64_t, Industrial> industrial;   // keyed by the way id: the halo repeats ways
     std::int64_t min_e = INT64_MAX, min_n = INT64_MAX, max_e = INT64_MIN, max_n = INT64_MIN;
     std::size_t tiles = 0;
+    geo::UtmZone out_zone{32, geo::Hemisphere::North};
     for (const auto& entry : *index) {
         if (entry.layer != kSrcOsmLayer) continue;
         auto stored = (*store)->get({args["--scope"], entry.layer, entry.key});
@@ -103,6 +104,7 @@ int main(int argc, char** argv) {
         auto tile = decode_src_osm(*body);
         if (!tile) { std::cerr << "tile: " << tile.error().message << "\n"; return 1; }
         ++tiles;
+        out_zone = entry.key.zone;
         const std::int64_t sz = entry.key.size_m() * 1000;
         min_e = std::min<std::int64_t>(min_e, entry.key.x * sz);
         min_n = std::min<std::int64_t>(min_n, entry.key.y * sz);
@@ -214,6 +216,8 @@ int main(int argc, char** argv) {
     for (const auto& [id, c] : industrial) ia.push_back(json{{"e_mm", c.e}, {"n_mm", c.n}, {"road_mm", c.road}});
     const json out{{"format", "farm.site_input/1"},
                    {"region", json{{"min", json::array({rmin_e, rmin_n})}, {"max", json::array({rmax_e, rmax_n})}}},
+                   {"zone", out_zone.zone},
+                   {"north", out_zone.hemisphere == geo::Hemisphere::North},
                    {"features", fa},
                    {"industrial", ia}};
     std::ofstream o(args["--out"], std::ios::binary | std::ios::trunc);
