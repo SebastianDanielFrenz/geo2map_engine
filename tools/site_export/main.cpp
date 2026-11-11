@@ -5,6 +5,8 @@
 //
 // --pbf/--margin-km: the farm's fallback sites need the REAL plants up to the largest spacing (60 km) outside the region (else it places a fake one
 // next to a real plant just over the border). The scope's store holds only the region, so the margin is read straight from the given PBF files:
+// every feature also carries g2m:landuse (farmyard | industrial | commercial | retail | railway | none): the closed landuse way it lies in, so the farm can tell
+// a merchant's silo from a farmyard's. Multipolygon relations are not read.
 // every tagged node or way (the same rules) whose position lies within margin of the region and that the store did not already give. No industrial
 // candidates from the margin (a procedural site is only placed inside the region). Ids and positions as for the store's features.
 //
@@ -55,6 +57,31 @@ struct Feature {
 struct Industrial {
     std::int64_t e = 0, n = 0, road = 0;
 };
+// A closed landuse way of a kind that tells a merchant's silo from a farm's: the exporter writes the containing kind as the feature tag g2m:landuse.
+struct Poly {
+    std::string kind;
+    std::vector<std::pair<std::int64_t, std::int64_t>> pts;
+    std::int64_t x0 = INT64_MAX, y0 = INT64_MAX, x1 = INT64_MIN, y1 = INT64_MIN;
+};
+bool polygon_kind(const std::string& k) { return k == "farmyard" || k == "industrial" || k == "commercial" || k == "retail" || k == "railway"; }
+void close_poly(Poly& g) {
+    for (const auto& [x, y] : g.pts) {
+        g.x0 = std::min(g.x0, x);
+        g.y0 = std::min(g.y0, y);
+        g.x1 = std::max(g.x1, x);
+        g.y1 = std::max(g.y1, y);
+    }
+}
+bool inside(const Poly& g, std::int64_t px, std::int64_t py) {
+    if (px < g.x0 || px > g.x1 || py < g.y0 || py > g.y1) return false;
+    bool in = false;
+    for (std::size_t i = 0, j = g.pts.size() - 1; i < g.pts.size(); j = i++) {
+        const auto& a = g.pts[i];
+        const auto& b = g.pts[j];
+        if ((a.second > py) != (b.second > py) && static_cast<long double>(px - a.first) < static_cast<long double>(b.first - a.first) * (py - a.second) / (b.second - a.second)) in = !in;
+    }
+    return in;
+}
 
 bool get_pair(const std::string& s, std::int64_t& a, std::int64_t& b) {
     const auto c = s.find(',');
@@ -99,6 +126,7 @@ int main(int argc, char** argv) {
 
     const geo::Utm utm;
     std::map<std::uint64_t, Feature> features;
+    std::vector<Poly> polys;
     std::map<std::uint64_t, Industrial> industrial;   // keyed by the way id: the halo repeats ways
     std::int64_t min_e = INT64_MAX, min_n = INT64_MAX, max_e = INT64_MIN, max_n = INT64_MIN;
     std::size_t tiles = 0;
@@ -172,6 +200,16 @@ int main(int argc, char** argv) {
             if (w.tags_count == 0) continue;
             std::string name;
             auto m = tag_map(d.tags_of(w), name);
+            if (const auto lu = m.find("landuse"); lu != m.end() && polygon_kind(lu->second) && w.refs_count >= 4 && d.way_refs[w.refs_begin] == d.way_refs[w.refs_begin + w.refs_count - 1]) {
+                Poly pg;
+                pg.kind = lu->second;
+                for (std::uint32_t i = 0; i < w.refs_count; ++i)
+                    if (const auto q = pos.find(d.way_refs[w.refs_begin + i]); q != pos.end()) pg.pts.emplace_back(q->second.x, q->second.y);
+                if (pg.pts.size() >= 4) {
+                    close_poly(pg);
+                    polys.push_back(std::move(pg));
+                }
+            }
             const bool is_feature = relevant(m, name);
             bool is_land = false;
             for (const auto& [k, v] : land) {
@@ -254,16 +292,26 @@ int main(int argc, char** argv) {
             std::string name;
             std::vector<std::int64_t> refs;
         };
+        struct LandWay {
+            std::string kind;
+            std::vector<std::int64_t> refs;
+        };
         struct WayPass : decode::osm::PbfHandler {
             const decltype(tags_of_pbf)& tg;
             const decltype(relevant_map)& rel;
             std::vector<MarginWay>& out;
             std::set<std::int64_t>& need;
-            WayPass(const decltype(tags_of_pbf)& a, const decltype(relevant_map)& b, std::vector<MarginWay>& c, std::set<std::int64_t>& d) : tg(a), rel(b), out(c), need(d) {}
+            std::vector<LandWay>& land;
+            WayPass(const decltype(tags_of_pbf)& a, const decltype(relevant_map)& b, std::vector<MarginWay>& c, std::set<std::int64_t>& d, std::vector<LandWay>& e)
+                : tg(a), rel(b), out(c), need(d), land(e) {}
             void on_way(const decode::osm::OsmWay& w) override {
                 if (w.tags.empty()) return;
                 std::string name;
                 auto m = tg(w.tags, name);
+                if (const auto lu = m.find("landuse"); lu != m.end() && polygon_kind(lu->second) && w.node_refs.size() >= 4 && w.node_refs.front() == w.node_refs.back()) {
+                    for (std::int64_t r : w.node_refs) need.insert(r);
+                    land.push_back(LandWay{lu->second, w.node_refs});
+                }
                 if (!rel(m, name)) return;
                 for (std::int64_t r : w.node_refs) need.insert(r);
                 out.push_back(MarginWay{static_cast<std::uint64_t>(w.id) | kWayBit, std::move(m), name, w.node_refs});
@@ -305,11 +353,22 @@ int main(int argc, char** argv) {
         for (const std::string& pbf : pbfs) {
             std::vector<MarginWay> ways;
             std::set<std::int64_t> need;
-            WayPass wp(tags_of_pbf, relevant_map, ways, need);
+            std::vector<LandWay> lands;
+            WayPass wp(tags_of_pbf, relevant_map, ways, need, lands);
             decode::osm::read_pbf(pbf, wp, nullptr, decode::osm::PbfEntities::Ways);
             std::map<std::int64_t, geom::PointMm> pos;
             NodePass np(utm, out_zone, need, pos, tags_of_pbf, relevant_map, features, lo_e, lo_n, hi_e, hi_n);
             decode::osm::read_pbf(pbf, np, nullptr, decode::osm::PbfEntities::Nodes);
+            for (const LandWay& lw : lands) {
+                Poly pg;
+                pg.kind = lw.kind;
+                for (std::int64_t r : lw.refs)
+                    if (const auto q = pos.find(r); q != pos.end()) pg.pts.emplace_back(q->second.x, q->second.y);
+                if (pg.pts.size() >= 4) {
+                    close_poly(pg);
+                    polys.push_back(std::move(pg));
+                }
+            }
             for (const MarginWay& w : ways) {
                 long double se = 0, sn = 0;
                 std::size_t n = 0;
@@ -334,6 +393,21 @@ int main(int argc, char** argv) {
             std::cerr << "g2m_site_export: margin pass over " << pbf << ": " << features.size() - before << " features so far\n";
         }
         margin_features = features.size() - before;
+    }
+
+    // g2m:landuse of every feature: farmyard when inside a farmyard polygon, else the first industrial/commercial/retail/railway polygon it lies in, else none.
+    // A relation (multipolygon) landuse is not read; a feature near a PBF border may miss a polygon the neighbour file holds.
+    for (auto& [id, f] : features) {
+        std::string kind = "none";
+        for (const Poly& g : polys) {
+            if (!inside(g, f.e, f.n)) continue;
+            if (g.kind == "farmyard") {
+                kind = "farmyard";
+                break;
+            }
+            if (kind == "none") kind = g.kind;
+        }
+        f.tags["g2m:landuse"] = kind;
     }
 
     json fa = json::array(), ia = json::array();

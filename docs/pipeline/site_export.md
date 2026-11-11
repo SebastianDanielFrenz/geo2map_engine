@@ -23,6 +23,10 @@ The farm's fallback rule places a procedural plant only where no real plant of t
 
 Home region with the margin (2026-11-11, PBFs Hessen 2026-09-25, Karlsruhe Regierungsbezirk, Rheinland-Pfalz and Unterfranken from Geofabrik): 4697 features (180 without), 254 industrial; the region box is 33.8 x 51.2 km, the margin box 154 x 171 km.
 
+## The land under a feature (`g2m:landuse`)
+
+Every exported feature carries the extra tag `g2m:landuse`: `farmyard` when it lies inside a closed `landuse=farmyard` way, else the first `industrial`, `commercial`, `retail` or `railway` closed way it lies in, else `none`. A farm tells a merchant's silo (industrial or commercial land) from a farmyard's silo with it: `man_made=silo` is tagged on private farmyards too, and the 150 x 170 km margin box held 2406 silo features, 668 of them on farmyards and 878 on no listed land. Multipolygon relations are not read; a feature near a PBF border may miss a polygon the neighbouring file holds.
+
 ## Home region numbers (`home-2026-09r1`)
 
 1085 tiles, 180 features, 254 industrial candidates, 52 KB. A farm classification of the result is in the farm's economy doc.
