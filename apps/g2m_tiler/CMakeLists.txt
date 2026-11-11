@@ -56,3 +56,7 @@ target_link_libraries(g2m_fields_probe PRIVATE g2m_server g2m_warnings g2m_optio
 # Soil census and picture over a baked g2m.soil.grid store, read together with the fields (docs/pipeline/soil.md).
 add_executable(g2m_soil_probe ../../tools/soil_probe/main.cpp)
 target_link_libraries(g2m_soil_probe PRIVATE g2m_server g2m_warnings g2m_options)
+
+# Buyer / supply-store candidates for the farming game, exported from g2m.src.osm (docs/pipeline/site_export.md).
+add_executable(g2m_site_export ../../tools/site_export/main.cpp)
+target_link_libraries(g2m_site_export PRIVATE g2m_server g2m_dep_json g2m_warnings g2m_options)

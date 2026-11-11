@@ -1,0 +1,20 @@
+{
+  "format": "g2m.site_export_rules/1",
+  "tags": [
+    "shop=agrarian", "shop=farm", "shop=garden_centre",
+    "man_made=silo", "building=silo", "building=grain_store", "industrial=grain_store",
+    "industrial=flour_mill", "craft=miller", "product=flour",
+    "industrial=malting", "craft=maltster", "product=malt",
+    "industrial=oil_mill", "product=oil",
+    "industrial=sugar_refinery", "product=sugar",
+    "plant:source=biogas", "generator:source=biogas"
+  ],
+  "name_words": ["raiffeisen", "baywa", "landhandel", "genossenschaft", "agrar", "getreide", "lagerhaus"],
+  "industrial_land": ["landuse=industrial"],
+  "road_key": "highway",
+  "sources": {
+    "tags": "AS: the tags the farm's buyer and supply rules classify on (farming_sim data/farm/buyers.json, supply.json); an exported feature carries ALL its tags, so a rule change in the farm needs no re-export unless it names a new tag",
+    "name_words": "AS: the farm's merchant_names list; a feature with a name containing one is exported even without a listed tag",
+    "industrial_land": "AS: land a procedural site may stand on; road_mm = distance to the nearest highway=* way vertex of the same tile"
+  }
+}

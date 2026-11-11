@@ -207,6 +207,10 @@ Details: [fields.md](fields.md).
 
 Details: [soil.md](soil.md).
 
+### 2.9 Buyer and supply-store candidates (site export)
+
+Not a layer: a read-only tool, `g2m_site_export` (`tools/site_export/main.cpp`), reads every `g2m.src.osm` tile of a scope and writes one JSON file for the farming game, which places grain buyers and farm-supply stores from it. Details: [site_export.md](site_export.md).
+
 ---
 
 ## 3. Layer dependencies
