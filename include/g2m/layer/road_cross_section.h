@@ -212,6 +212,14 @@ struct CrossSectionEndTrace {
     std::int32_t gore_min_gap_mm = 0;                      // the smallest sampled lane-edge gap before the nose (negative: lanes cross)
     std::int32_t gore_min_gap_at_mm = 0;                   // ... and its station from the node
     std::int32_t gore_shoulder_mm = 0;                     // this way's full facing shoulder (0: none, nothing ramped)
+    // Clearance landing (ROADS stage 2a): this end is the ramp's landed end.
+    bool landing_clear = false;                            // the rule ran at this end
+    std::int32_t landing_base_mm = 0;                      // the slope-derived landing length (after the stretch fit)
+    std::int32_t landing_clear_mm = 0;                     // the first station where the unshifted lanes are clear (the cap when never)
+    bool landing_clear_reached = false;                    // ... found within the cap
+    std::int32_t landing_final_mm = 0;                     // the landing length served
+    std::int32_t landing_min_gap_mm = 0;                   // the smallest sampled lane-edge gap over the served landing
+    std::int32_t landing_min_gap_at_mm = 0;                // ... and its station from the node
 };
 struct CrossSectionTrace { CrossSectionEndTrace ends[2]{}; };
 // `fit_limits`: the planar reference fit of the served profiles (the gore-shoulder rule measures the ramp and the through

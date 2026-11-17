@@ -8,6 +8,9 @@
 //   G   way start_ref at_end node nose_mm reached min_gap_mm min_gap_at_mm shoulder_mm   the gore-shoulder rule ran at this end
 //       (ROADS stage 1, resolve_cross_section's trace: the nose station from the node, whether the lane-edge gap reached both
 //       facing shoulders within gore_max_m, the smallest gap before the nose and its station, this way's facing shoulder)
+//   L   way start_ref at_end node base_mm clear_mm clear_reached final_mm min_gap_mm min_gap_at_mm   the clearance landing ran at
+//       this ramp end (ROADS stage 2a: the slope-derived landing length, the first station where the unshifted ramp clears the
+//       through lanes, whether it did within the cap, the served landing length, the worst lane-edge gap over it and its station)
 //   END way start_ref at_end node deg E N kind neighbour raw_delta_mm      a stretch end in the box with its served join
 //   R   way start_ref v ref_E ref_N lat_lo lat_hi l_E l_N r_E r_N w lanes flags   one ribbon row of the entry's road bed
 //       (strip 1, from build_road_ribbons on a flat ground, PointSampled): lat_lo/lat_hi = lateral extent from the
@@ -177,8 +180,12 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                 if (builder && resolve_cross_section(*builder, en.way_id, en.stretch, en.profile->reference.length_m, rules, &gtr))
                     for (int ge = 0; ge < 2; ++ge) {
                         const auto& t = gtr.ends[ge];
-                        if (!t.gore) continue;
                         const std::uint32_t gr = ge ? en.stretch.end_ref : en.stretch.start_ref;
+                        if (t.landing_clear)
+                            std::printf("L %lld %u %d %lld %d %d %d %d %d %d\n", static_cast<long long>(en.way_id), en.stretch.start_ref, ge,
+                                        static_cast<long long>(gr < way->node_ids.size() ? way->node_ids[gr] : -1), t.landing_base_mm, t.landing_clear_mm,
+                                        t.landing_clear_reached ? 1 : 0, t.landing_final_mm, t.landing_min_gap_mm, t.landing_min_gap_at_mm);
+                        if (!t.gore) continue;
                         std::printf("G %lld %u %d %lld %d %d %d %d %d\n", static_cast<long long>(en.way_id), en.stretch.start_ref, ge,
                                     static_cast<long long>(gr < way->node_ids.size() ? way->node_ids[gr] : -1), t.gore_nose_mm, t.gore_nose_reached ? 1 : 0,
                                     t.gore_min_gap_mm, t.gore_min_gap_at_mm, t.gore_shoulder_mm);

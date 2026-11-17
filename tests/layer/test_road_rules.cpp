@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "0c75ad69256340a3c73dba0806bd4fb6af914df400c07a3825252c678c13ef18");
+    CHECK(to_hex(digest) == "ed4978dcee3e6c7a7e51745933e2c3bd80bbe4c3a6248971a9721dbb86136296");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -257,7 +257,7 @@ TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add
     CHECK(ml.enabled);
     CHECK(ml.max_through_deflection_deg == 35); CHECK(ml.max_ramp_angle_deg == 60); CHECK(ml.direction_probe_m == 10);
     CHECK(ml.landing_m_per_m == 12); CHECK(ml.landing_min_m == 30); CHECK(ml.landing_max_m == 80); CHECK(ml.max_landing_offset_mm == 8000);
-    CHECK(ml.gore_max_m == 150); CHECK(ml.gore_step_m == 5);
+    CHECK(ml.gore_max_m == 150); CHECK(ml.gore_step_m == 5); CHECK(ml.landing_clear_max_m == 250);
     const std::string from = "\"merge_lane\": { \"enabled\": true,";
     CHECK_FALSE(load_text(mutated(from, "\"merge_lanex\": { \"enabled\": true,")));        // the block is required
     CHECK_FALSE(load_text(mutated(from, "\"merge_lane\": { \"enabled\": 1,")));            // a boolean
@@ -270,6 +270,8 @@ TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add
     CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1001")));
     CHECK_FALSE(load_text(mutated("\"landing_min_m\": 30", "\"landing_min_m\": 81")));             // above landing_max_m
     CHECK_FALSE(load_text(mutated("\"gore_max_m\": 150, \"gore_step_m\": 5", "\"gore_max_m\": 4, \"gore_step_m\": 5")));   // step over the cap
+    CHECK_FALSE(load_text(mutated("\"landing_clear_max_m\": 250", "\"landing_clear_max_m\": 79")));   // below landing_max_m
+    CHECK_FALSE(load_text(mutated(", \"landing_clear_max_m\": 250", "")));   // the key is required
     CHECK_FALSE(load_text(mutated("\"max_landing_offset_mm\": 8000", "\"max_landing_offset_mm\": 20001")));
     // The landing S-ramp must not be sharper than min_edge_radius_m of the link classes: 4 W / a^2 <= 1 / R.
     CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1")));          // 8 m over 30 m: radius far under 60 m

@@ -97,7 +97,12 @@ TEST_CASE("M1 a merge ramp lands on the centre line of the added lane, over the 
     CHECK(std::abs(r.xs.offset.end_mm - std::round(centre_mm / ramp_cos)) <= 1);
     const double offset_m = std::abs(r.xs.offset.end_mm) / 1000.0;
     const auto& ml = rules.merge_lane;
-    CHECK(r.xs.offset.end_length_mm == std::clamp<std::int64_t>(static_cast<std::int64_t>(ml.landing_m_per_m * offset_m * 1000.0 + 0.5), ml.landing_min_m * 1000, ml.landing_max_m * 1000));
+    const std::int64_t slope_mm = std::clamp<std::int64_t>(static_cast<std::int64_t>(ml.landing_m_per_m * offset_m * 1000.0 + 0.5), ml.landing_min_m * 1000, ml.landing_max_m * 1000);
+    // The slope-derived length; this 12 m link still runs inside A's lanes beyond it, so the clearance landing (ROADS stage 2a,
+    // test_road_gore.cpp L1-L3) serves a longer one.
+    auto no_clear = rules; no_clear.merge_lane.landing_clear_max_m = 0;
+    CHECK(resolve_in(*builder, s.r, no_clear).xs.offset.end_length_mm == slope_mm);
+    CHECK(r.xs.offset.end_length_mm > slope_mm); CHECK(r.xs.offset.end_length_mm <= ml.landing_clear_max_m * 1000);
     // The ramp's end carries the landing record: the single arm and the offset.
     CHECK(r.xs.end_join.kind == JoinKind::Landing); CHECK(r.xs.end_join.neighbour_way_id == s.b); CHECK(r.xs.end_join.raw_delta_mm == r.xs.offset.end_mm);
     CHECK(r.xs.start_join.kind == JoinKind::None);

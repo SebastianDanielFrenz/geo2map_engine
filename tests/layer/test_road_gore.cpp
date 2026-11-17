@@ -10,6 +10,14 @@
 //      moves before the crossing; G1-G3 only check the ramp against the nose - the ribbon test GR1/GR2 catches the short nose)
 //   S3 resolve_cross_section: gore disabled (resolve_impl(..., false) on the served path)                           -> G1-G5 fail
 //   S4 apply_gore_shoulders: cap the gore ramp by its own band's far ramp only (the first version)                   -> G6 fails
+//
+// Clearance landing (ROADS stage 2a, L1-L3; G5 runs with it off). Recorded sabotages (2026-11-17):
+//   S5 resolve_impl: apply_clearance_landing never called                                                         -> L1, L2, L3 fail
+//      (L2 too: its clearance-off reference then equals the served section only by accident of the off switch - it fails on the
+//      landing_clear trace)
+//   S6 apply_clearance_landing: L = min(L_clear, cap) without max(base, .) - a link that clears early lands faster -> L2 fails
+//   S7 apply_clearance_landing: no lengthening past L_clear                                                       -> L1, L3 fail
+//      (worst gap L1 -2.39 m at 114 m, L3 -0.64 m at 52 m; with the rule +0.004 m and +0.08 m)
 #include "road_fixture.h"
 #include "g2m/layer/road_cross_section.h"
 #include <catch2/catch_test_macros.hpp>
@@ -36,10 +44,17 @@ RoadGraph graph_of(std::vector<std::pair<std::int64_t, std::pair<int, int>>> pts
     return g;
 }
 struct Resolved { RoadCrossSection xs; CrossSectionTrace trace; double length = 0; };
+// The fit the served path uses (resolve_cross_section's own limits), so the section's length matches the reference the rules re-fit.
+ReferenceFitLimits served_limits(const RoadRules& rules) {
+    ReferenceFitLimits limits; limits.allow_curvature_exceptions = true;
+    limits.chord_half_width_factor = static_cast<double>(rules.reference.chord_half_width_percent) / 100.0;
+    limits.chord_margin_m = static_cast<double>(rules.reference.chord_margin_mm) / 1000.0;
+    return limits;
+}
 Resolved resolve_in(const RoadReferenceBuilder& builder, std::int64_t way_id, const RoadRules& rules) {
     const auto stretches = builder.stretches(way_id); REQUIRE(stretches);
     REQUIRE(stretches->size() == 1);
-    ReferenceFitLimits limits; limits.allow_curvature_exceptions = true;
+    const ReferenceFitLimits limits = served_limits(rules);
     auto fit = builder.fit_stretch(way_id, (*stretches)[0], limits); REQUIRE(fit);
     Resolved out;
     const auto xs = resolve_cross_section(builder, way_id, (*stretches)[0], fit->length_m, rules, &out.trace);
@@ -151,9 +166,12 @@ TEST_CASE("G4 no landing, no gore: merge_lane disabled leaves the shoulders as t
     CHECK(r.trace.ends[1].gore);
 }
 TEST_CASE("G5 lanes that cross before the nose are reported, not fixed", "[layer][road_gore][roads]") {
+    // The clearance landing (stage 2a, L1-L3 below) mends this fixture's crossing; with it off the gore rule reports it.
+    auto rules = builtin_road_rules_de();
+    rules.merge_lane.landing_clear_max_m = 0;
     const auto s = scene(false, false, 12);
     const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
-    const auto r = resolve_in(*builder, s.r, builtin_road_rules_de());
+    const auto r = resolve_in(*builder, s.r, rules);
     const auto& t = r.trace.ends[1];
     REQUIRE(t.gore);
     CHECK(t.gore_min_gap_mm < -500);                                         // measured -952 mm (2026-11-17)
@@ -178,4 +196,91 @@ TEST_CASE("G6 a short through stretch already full of tapers: the gore ramp yiel
         for (const auto& b : a.xs.bands) { ms = std::max<std::int64_t>(ms, b.start.length_mm); me = std::max<std::int64_t>(me, b.end.length_mm); }
         CHECK(ms + me <= static_cast<std::int64_t>(std::ceil(a.length * 1000.0)) + 1);
     }
+}
+
+// ---- Clearance landing (ROADS stage 2a) ----
+namespace {
+RoadRules clearance_off() { auto r = builtin_road_rules_de(); r.merge_lane.landing_clear_max_m = 0; return r; }
+// The worst gap between the link R's lane edge facing the through way A and A's lane edge facing R, measured independently of the
+// rule: both ways' boundaries are read from their served sections and put into the world through their own reference lines.
+// A runs along +x on y = 0 from x = -400 to the node at x = 0; R lies on its right (y < 0) and ends at the node.
+double worst_gap(const RoadReferenceBuilder& builder, const Scene& s, const RoadRules& rules, double& at) {
+    const auto a = resolve_in(builder, s.a, rules), r = resolve_in(builder, s.r, rules);
+    const ReferenceFitLimits limits = served_limits(rules);
+    const auto rref = builder.fit_stretch(s.r, (*builder.stretches(s.r))[0], limits); REQUIRE(rref);
+    const auto aref = builder.fit_stretch(s.a, (*builder.stretches(s.a))[0], limits); REQUIRE(aref);
+    const std::size_t rf = first_counted(r.xs), al = last_counted(a.xs);
+    std::vector<double> rb(r.xs.bands.size() + 1), ab(a.xs.bands.size() + 1);
+    double worst = 1e9; at = -1;
+    for (double d = 0; d <= std::min(250.0, r.length); d += 1.0) {
+        REQUIRE(r.xs.boundaries_at(r.length - d, rb));
+        const auto p = lateral_point(*rref, r.length - d, rb[rf]); REQUIRE(p);    // R's left lane edge
+        const double sa = p->x - (-400.0);                                          // A is straight on y = 0
+        if (sa < 0 || sa > a.length) continue;
+        REQUIRE(a.xs.boundaries_at(sa, ab));
+        const auto q = lateral_point(*aref, sa, ab[al + 1]); REQUIRE(q);          // A's right lane edge
+        const double gap = q->y - p->y;
+        if (gap < worst) { worst = gap; at = d; }
+    }
+    return worst;
+}
+// A link whose own line runs inside the through carriageway's lanes for 120 m: it comes in at 3 m below A's line from 120 m back
+// (A's lanes reach 3.5 m below it) and only leaves A's lanes beyond that.
+Scene inside_scene() {
+    Scene s;
+    Tags b_tags = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "3"}, {"placement", "right_of:1"}, {"turn:lanes", "none|none|merge_to_left"}};
+    Tags a_tags = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}};
+    Tags r_tags = {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", "1"}};
+    s.graph = graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {200, 0}}, {4, {-400, -60}}, {5, {-120, -3}}},
+        {way(s.a, {1, 2}, a_tags), way(s.b, {2, 3}, b_tags), way(s.r, {4, 5, 2}, r_tags)});
+    return s;
+}
+} // namespace
+
+TEST_CASE("L1 a link inside the through lanes for 120 m: the landing lasts until it has cleared them", "[layer][road_gore][roads]") {
+    const auto s = inside_scene();
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    double at_off = 0, at_on = 0;
+    const double before = worst_gap(*builder, s, clearance_off(), at_off);
+    const double after = worst_gap(*builder, s, builtin_road_rules_de(), at_on);
+    INFO("worst gap without the rule " << before << " m at " << at_off << " m, with it " << after << " m at " << at_on << " m");
+    CHECK(before < -0.5);    // the landed lane snaps back across A's lanes
+    CHECK(after >= -0.05);
+    const auto r = resolve_in(*builder, s.r, builtin_road_rules_de());
+    const auto& t = r.trace.ends[1];
+    REQUIRE(t.landing_clear);
+    CHECK(t.landing_clear_reached);
+    CHECK(t.landing_clear_mm > 120000);                        // the link's own line leaves A's lanes beyond 120 m
+    CHECK(t.landing_final_mm >= t.landing_clear_mm);
+    CHECK(t.landing_final_mm > t.landing_base_mm);
+    CHECK(t.landing_base_mm <= 80000);
+    CHECK(r.xs.offset.end_length_mm == t.landing_final_mm);
+    CHECK(t.landing_min_gap_mm >= -50);
+}
+TEST_CASE("L2 an ordinary link that clears A within the slope-derived landing: the section is bit-identical", "[layer][road_gore][roads]") {
+    for (const bool left : {false, true}) for (const bool diverge : {false, true}) {
+        INFO("left " << left << " diverge " << diverge);
+        const auto s = scene(diverge, left);
+        const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+        for (const auto id : {s.a, s.b, s.r}) {
+            const auto on = resolve_in(*builder, id, builtin_road_rules_de()), off = resolve_in(*builder, id, clearance_off());
+            CHECK(on.xs == off.xs);
+        }
+        const auto r = resolve_in(*builder, s.r, builtin_road_rules_de());
+        const auto& t = r.trace.ends[diverge ? 0 : 1];
+        REQUIRE(t.landing_clear);
+        CHECK(t.landing_final_mm == t.landing_base_mm);
+    }
+}
+TEST_CASE("L3 G5's link 12 m off: the crossing the gore rule reported is gone", "[layer][road_gore][roads]") {
+    const auto s = scene(false, false, 12);
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    double at_off = 0, at_on = 0;
+    const double before = worst_gap(*builder, s, clearance_off(), at_off);
+    const double after = worst_gap(*builder, s, builtin_road_rules_de(), at_on);
+    INFO("worst gap without the rule " << before << " m at " << at_off << " m, with it " << after << " m at " << at_on << " m");
+    CHECK(before < -0.5);
+    CHECK(after >= -0.05);
+    const auto r = resolve_in(*builder, s.r, builtin_road_rules_de());
+    CHECK(r.trace.ends[1].gore_min_gap_mm >= -50);
 }

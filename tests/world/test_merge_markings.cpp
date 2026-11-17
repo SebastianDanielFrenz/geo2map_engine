@@ -84,7 +84,9 @@ TEST_CASE("MK1 a merge lane: the through edge on the ramp's side is broken and t
 
 TEST_CASE("MK2 the zone is the landing length from the node, and only there", "[world][road_ribbons][merge_markings]") {
     const auto& rules = builtin_road_rules_de();
-    const auto m = marked(scene("trunk_link", -12), rules);
+    // A link 40 m off the axis clears the through lanes within the slope-derived landing (ROADS stage 2a leaves it alone; the 12 m
+    // link of MK1 gets a longer clearance landing, below).
+    const auto m = marked(scene("trunk_link", -40), rules);
     REQUIRE_FALSE(m.right_broken.empty());
     // The landing offset is about 5.5 m: the length is 12 m per metre = 65 m, between the 30 m and 80 m bounds.
     const double lo = node_x() - rules.merge_lane.landing_max_m - 2.0, hi = node_x() + 0.5;
@@ -100,6 +102,18 @@ TEST_CASE("MK2 the zone is the landing length from the node, and only there", "[
         INFO("x " << x - node_x());
         CHECK(any);
     }
+}
+
+TEST_CASE("MK2b a clearance landing (ROADS stage 2a) lengthens the zone with it, up to landing_clear_max_m", "[world][road_ribbons][merge_markings]") {
+    const auto& rules = builtin_road_rules_de();
+    const auto m = marked(scene("trunk_link", -12), rules);
+    REQUIRE_FALSE(m.right_broken.empty());
+    double first = 1e9, last = -1e9;
+    for (const auto& v : m.right_broken) { first = std::min<double>(first, v.x); last = std::max<double>(last, v.x); }
+    INFO("zone from " << first - node_x() << " m");
+    CHECK(first < node_x() - rules.merge_lane.landing_max_m);   // longer than the slope-derived landing could be
+    CHECK(first > node_x() - rules.merge_lane.landing_clear_max_m - 2.0);
+    CHECK(last > node_x() - 5.0); CHECK(last <= node_x() + 0.5);
 }
 
 TEST_CASE("MK3 no landing, no marks: a link that is no merge lane and the switched-off rules", "[world][road_ribbons][merge_markings]") {
