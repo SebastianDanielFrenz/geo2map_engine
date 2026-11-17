@@ -28,6 +28,7 @@ for line in open(src,encoding='utf-8',errors='replace'):
 tris.sort(key=lambda t:t[0])
 img=np.zeros((W,W,3),np.float32); img[:]=(60,90,50)
 BASE={0:(120,125,80),1:(150,130,150),3:(95,80,100)}
+ROAD_GREY=(82,85,94)   # marked ribbons; was a lane-count shade (62+10*lanes), which read as a surface change at lane adds
 PAINT=np.array((240,240,235),np.float32)
 def stripe(d,w): return (np.abs(d)<w*0.5).astype(np.float32)
 for k,a in tris:
@@ -63,7 +64,7 @@ for k,a in tris:
     if k==0 or (fl&256): paint=paint*0
     if fl&16: paint=np.ones_like(paint)
     if k==2:
-        g=62+10*min(lanes,5); base=np.array((g,g+3,g+12),np.float32)
+        base=np.array(ROAD_GREY,np.float32)   # one asphalt grey for every marked ribbon, as in the game (ROADS 4b)
     elif k in (4,5): base=np.array((80,84,96),np.float32)
     else: base=np.array(BASE[k],np.float32)
     if fl&32: m=m&(paint>=.5)

@@ -720,7 +720,7 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
         const bool widths = len >= static_cast<std::int64_t>(rules.merge_lane.gore_step_m) * 1000;
         if (!widths) tr.ends[e].landing_widths_skipped = true;
         std::int64_t total = 0; int first = -1, last = -1;
-        for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t i = 0; i < xs.bands.size(); ++i)
             if (xs.bands[i].counted) { total += xs.bands[i].width_mm; if (first < 0) first = static_cast<int>(i); last = static_cast<int>(i); }
         if (total <= 0) continue;
         std::int64_t given = 0;
@@ -733,15 +733,32 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
         }
         const int sh = m.ramp_right ? last + 1 : first - 1;
         if (!widths) {
-        } else if (sh >= 0 && sh < static_cast<int>(n) && xs.bands[static_cast<std::size_t>(sh)].kind == LaneKind::Shoulder) {
+        } else if (sh >= 0 && sh < static_cast<int>(xs.bands.size()) && xs.bands[static_cast<std::size_t>(sh)].kind == LaneKind::Shoulder) {
             auto& b = xs.bands[static_cast<std::size_t>(sh)];
             if (b.width_mm != m.s_shoulder_mm) (at_end ? b.end : b.start) = WidthRamp{len, m.s_shoulder_mm};
-        } else tr.ends[e].landing_no_outer_shoulder = true;
+        } else {
+            tr.ends[e].landing_no_outer_shoulder = true;
+            // ROADS stage 3c-2: no outer shoulder band on the ramp: one is added beside its counted lanes on the outer side (the
+            // single arm's ramp side), width 0 away from this end and starting at the single arm's shoulder at the node, ramping to
+            // 0 over the same length as the lane widths (the mirror of the gore shoulder, which ramps from 0). Nowhere else.
+            if (m.s_shoulder_mm > 0 && xs.bands.size() < 32) {
+                CrossSectionBand b;
+                b.kind = LaneKind::Shoulder; b.direction = LaneDirection::None; b.counted = false; b.width_mm = 0;
+                b.paved = xs.bands[static_cast<std::size_t>(m.ramp_right ? last : first)].paved;
+                b.provenance.kind = Provenance::Inferred; b.provenance.direction = Provenance::Inferred; b.provenance.width = Provenance::Inferred;
+                b.provenance.turn = Provenance::Inferred; b.provenance.change = Provenance::Inferred;
+                (at_end ? b.end : b.start) = WidthRamp{len, m.s_shoulder_mm};
+                const int at = m.ramp_right ? last + 1 : first;
+                xs.bands.insert(xs.bands.begin() + at, b);
+                if (!m.ramp_right) { ++first; ++last; }
+                tr.ends[e].landing_shoulder_added = true;
+            }
+        }
         // The counted lanes' centre at the node with no landing offset (the ramp's frame): the landing shifts it, not the way line.
         RoadCrossSection probe = xs;
         (at_end ? probe.offset.end_mm : probe.offset.start_mm) = 0;
         std::array<double, 33> t{};
-        if (n <= 32 && probe.boundaries_at(at_end ? xs.length_m : 0.0, std::span<double>(t.data(), n + 1))) {
+        if (probe.bands.size() <= 32 && probe.boundaries_at(at_end ? xs.length_m : 0.0, std::span<double>(t.data(), probe.bands.size() + 1))) {
             const auto c0 = static_cast<std::int32_t>(std::lround((t[static_cast<std::size_t>(first)] + t[static_cast<std::size_t>(last) + 1]) / 2 * 1000.0));
             auto& off = at_end ? xs.offset.end_mm : xs.offset.start_mm;
             off -= c0;

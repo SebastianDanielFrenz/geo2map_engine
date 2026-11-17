@@ -34,6 +34,10 @@
 //       0.40 m), M1 fail
 //   S14 apply_clearance_landing: the lengthened landing moves the offset only, the band ramps keep the slope length -> M1, GB1, L1 fail
 //   (S13, the marking fade: tests/world/test_gore_ribbons.cpp GR3)
+//
+// Landed outer shoulder (ROADS stage 3c-2, W2). Recorded sabotages (2026-11-17):
+//   S15 resolve_impl: no shoulder band added where the ramp has none                                              -> W2 fails
+//   S16 resolve_impl: the added band's ramp at the far end instead of the landed end                              -> W2 fails
 #include "road_fixture.h"
 #include "g2m/layer/road_cross_section.h"
 #include <catch2/catch_test_macros.hpp>
@@ -91,7 +95,7 @@ std::size_t last_counted(const RoadCrossSection& xs) { for (std::size_t i = xs.b
 // 150 m back: at 40 m (15 degrees) the lanes stay apart; at the merge-lane tests' 12 m the landing S-ramp pulls R's lane over A's
 // (the way line converges more slowly than the landing offset decays), a negative gap the rule reports and leaves alone.
 struct Scene { RoadGraph graph; std::int64_t a = 10, b = 11, r = 12; };
-Scene scene(bool diverge, bool left, int ramp_dy = 40) {
+Scene scene(bool diverge, bool left, int ramp_dy = 40, Tags r_extra = {}) {
     Scene s;
     const int ramp_y = left ? ramp_dy : -ramp_dy;
     const std::string placement = left ? "right_of:2" : "right_of:1";
@@ -100,6 +104,7 @@ Scene scene(bool diverge, bool left, int ramp_dy = 40) {
     Tags b_tags = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "3"}, {"placement", placement}, {"turn:lanes", turns}};
     Tags a_tags = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}};
     Tags r_tags = {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", "1"}};
+    r_tags.insert(r_tags.end(), r_extra.begin(), r_extra.end());
     if (!diverge)
         s.graph = graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {200, 0}}, {4, {-150, ramp_y}}},
             {way(s.a, {1, 2}, a_tags), way(s.b, {2, 3}, b_tags), way(s.r, {4, 2}, r_tags)});
@@ -416,5 +421,68 @@ TEST_CASE("W1 at the node the landed lane and the ramp's outer shoulder meet the
             INFO(names[e] << ": R " << yr << " B " << yb << " residue " << residue);
             CHECK(std::abs(yr - yb) <= 0.05 + residue);
         }
+    }
+}
+
+// ---- Landed outer shoulder (ROADS stage 3c-2) ----
+// A ramp tagged without its outer shoulder (shoulder=left on a right-hand ramp) gets exactly one shoulder band on its outer side, beside
+// its counted lanes: width 0 everywhere except over the landing at the landed end, where it starts at the single arm's shoulder width
+// at the node and ramps to 0 over the landing widths' length. At the node its outer edge is the single arm's outer bed edge.
+TEST_CASE("W2 a ramp without an outer shoulder gets one at the landed end only, from the single arm's shoulder to 0", "[layer][road_gore][roads]") {
+    for (const bool left : {false, true}) for (const bool diverge : {false, true}) {
+        INFO("left " << left << " diverge " << diverge);
+        const auto& rules = builtin_road_rules_de();
+        const auto plain = scene(diverge, left);
+        const auto s = scene(diverge, left, 40, {{"shoulder", left ? "right" : "left"}});
+        const auto pbuilder = RoadReferenceBuilder::make(plain.graph); REQUIRE(pbuilder);
+        const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+        const auto r_plain = resolve_in(*pbuilder, plain.r, rules);
+        const auto b = resolve_in(*builder, s.b, rules), r = resolve_in(*builder, s.r, rules);
+        const bool at_end = !diverge;
+        const auto& t = r.trace.ends[at_end ? 1 : 0];
+        CHECK(t.landing_no_outer_shoulder);
+        CHECK(t.landing_shoulder_added);
+        CHECK(r.xs.bands.size() == r_plain.xs.bands.size());   // the plain ramp's outer shoulder replaced by the added band, nothing more
+        std::size_t shoulders = 0;
+        for (const auto& band : r.xs.bands) if (band.kind == LaneKind::Shoulder) ++shoulders;
+        CHECK(shoulders == 2);                                   // the facing (gore) shoulder and the added one
+        const std::size_t rf = first_counted(r.xs), rl = last_counted(r.xs);
+        const std::size_t o = left ? rf - 1 : rl + 1;            // the outer side is the ramp's side
+        REQUIRE(o < r.xs.bands.size());
+        const auto& band = r.xs.bands[o];
+        REQUIRE(band.kind == LaneKind::Shoulder);
+        CHECK_FALSE(band.counted);
+        CHECK(band.width_mm == 0);
+        const auto& landed = at_end ? band.end : band.start;
+        const auto& far = at_end ? band.start : band.end;
+        CHECK(far.length_mm == 0); CHECK(far.from_width_mm == 0);
+        const std::int32_t len = at_end ? r.xs.offset.end_length_mm : r.xs.offset.start_length_mm;
+        REQUIRE(len > 0);
+        CHECK(landed.length_mm == len);
+        // the single arm's outer shoulder at the node
+        const std::size_t k = left ? first_counted(b.xs) : last_counted(b.xs);
+        const std::size_t b_sh = left ? k - 1 : k + 1;
+        REQUIRE(b.xs.bands[b_sh].kind == LaneKind::Shoulder);
+        const double sb = at_end ? 0.0 : b.length;
+        const double b_width = band_width(b.xs, b_sh, sb);
+        CHECK(std::abs(landed.from_width_mm / 1000.0 - b_width) < 1e-3);
+        const auto st = [&](double d) { return at_end ? r.length - d : d; };
+        CHECK(std::abs(band_width(r.xs, o, st(0.0)) - b_width) < 1e-3);
+        CHECK(std::abs(band_width(r.xs, o, st(len / 1000.0))) < 1e-6);
+        CHECK(std::abs(band_width(r.xs, o, st(len / 1000.0 + 5.0))) < 1e-6);
+        // At the node the added band's outer edge is the single arm's outer bed edge (W1's measure, cos residue accepted).
+        const ReferenceFitLimits limits = served_limits(rules);
+        const auto rref = builder->fit_stretch(s.r, (*builder->stretches(s.r))[0], limits); REQUIRE(rref);
+        const auto bref = builder->fit_stretch(s.b, (*builder->stretches(s.b))[0], limits); REQUIRE(bref);
+        const double sr = at_end ? r.length : 0.0;
+        std::vector<double> rb(r.xs.bands.size() + 1), bb(b.xs.bands.size() + 1);
+        REQUIRE(r.xs.boundaries_at(sr, rb)); REQUIRE(b.xs.boundaries_at(sb, bb));
+        const std::size_t r_edge = left ? o : o + 1, b_edge = left ? b_sh : b_sh + 1;
+        const auto yr = lateral_point(*rref, sr, rb[r_edge]), yb = lateral_point(*bref, sb, bb[b_edge]);
+        REQUIRE(yr); REQUIRE(yb);
+        const double cos_phi = 150.0 / std::hypot(150.0, 40.0);
+        const double residue = std::abs(rb[r_edge] - (rb[rf] + rb[rl + 1]) / 2) * (1 - cos_phi);
+        INFO("outer bed edge: R " << yr->y << " B " << yb->y << " residue " << residue);
+        CHECK(std::abs(yr->y - yb->y) <= 0.05 + residue);
     }
 }
