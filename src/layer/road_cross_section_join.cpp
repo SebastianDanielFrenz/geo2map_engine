@@ -344,56 +344,61 @@ struct NodeArm {
     double dx = 0, dy = 0;     // unit travel direction at the node
 };
 
-bool make_arm(const RoadReferenceBuilder& builder, const RoadRules& rules, const RoadNodeArm& arm, const RoadGraphNode& node, NodeArm& out) {
+MergeNodeReason make_arm(const RoadReferenceBuilder& builder, const RoadRules& rules, const RoadNodeArm& arm, const RoadGraphNode& node, NodeArm& out) {
     const RoadGraph& g = builder.graph();
     out.arm = arm;
     out.way = find_way(g, arm.way_id);
-    if (!out.way) return false;
+    if (!out.way) return MergeNodeReason::ArmWayMissing;
     out.cls = rules.find_class(highway_of(*out.way));
-    if (!out.cls) return false;
+    if (!out.cls) return MergeNodeReason::ArmNoClass;
     auto base = resolve_cross_section_base(*out.way, rules);
-    if (!base || !base->xs) return false;
+    if (!base || !base->xs) return MergeNodeReason::ArmNoSection;
     out.xs = std::move(*base->xs);
-    if (!(out.xs.flags & kXsOneway) || (out.xs.flags & kXsReversedOneway)) return false;   // a one-way carriageway driven along its refs
+    if (!(out.xs.flags & kXsOneway) || (out.xs.flags & kXsReversedOneway)) return MergeNodeReason::ArmNotOneway;   // a one-way carriageway driven along its refs
     for (const auto& b : out.xs.bands) if (b.counted) out.counted += 1;
-    if (out.counted < 1) return false;
+    if (out.counted < 1) return MergeNodeReason::ArmNoCountedLane;
     // The point at least direction_probe_m away along the way (the last node if the way ends sooner).
     const double probe = static_cast<double>(rules.merge_lane.direction_probe_m);
     const std::ptrdiff_t step = arm.leaves_node ? 1 : -1;
     std::optional<geom::PointMm> far;
     for (auto k = static_cast<std::ptrdiff_t>(arm.ref) + step; k >= 0 && k < static_cast<std::ptrdiff_t>(out.way->node_ids.size()); k += step) {
         const auto* n = find_node(g, out.way->node_ids[static_cast<std::size_t>(k)]);
-        if (!n) return false;
+        if (!n) return MergeNodeReason::ArmNoDirection;
         if (n->position == node.position) continue;
         far = n->position;
         const double fx = static_cast<double>(far->x - node.position.x) / 1000.0, fy = static_cast<double>(far->y - node.position.y) / 1000.0;
         if (std::sqrt(fx * fx + fy * fy) >= probe) break;
     }
-    if (!far) return false;
+    if (!far) return MergeNodeReason::ArmNoDirection;
     out.fx = static_cast<double>(far->x - node.position.x) / 1000.0;
     out.fy = static_cast<double>(far->y - node.position.y) / 1000.0;
     const double len = std::sqrt(out.fx * out.fx + out.fy * out.fy);
-    if (!(len > 0)) return false;
+    if (!(len > 0)) return MergeNodeReason::ArmNoDirection;
     out.dx = (arm.leaves_node ? out.fx : -out.fx) / len;
     out.dy = (arm.leaves_node ? out.fy : -out.fy) / len;
-    return true;
+    return MergeNodeReason::Ok;
 }
 
 double angle_deg(double cos_angle) { return det::acos(std::clamp(cos_angle, -1.0, 1.0)) * 180.0 / det::kPi; }
 
-std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules) {
+std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules,
+        MergeNodeReason* why = nullptr) {
+    // Every refusal names its reason (diagnostics only, g2m_xs_probe --merge-census).
+    const auto refuse = [why](MergeNodeReason r) -> std::optional<MergeNode> { if (why) *why = r; return std::nullopt; };
+    if (why) *why = MergeNodeReason::Ok;
     const MergeLaneRules& ml = rules.merge_lane;
-    if (!ml.enabled) return {};
+    if (!ml.enabled) return refuse(MergeNodeReason::Disabled);
     auto arms = builder.arms(node_id);
-    if (arms.size() != 3) return {};
+    if (arms.size() != 3) return refuse(MergeNodeReason::ArmsNot3);
     std::sort(arms.begin(), arms.end(), [](const RoadNodeArm& a, const RoadNodeArm& b) { return a.way_id != b.way_id ? a.way_id < b.way_id : a.ref < b.ref; });
-    if (arms[0].way_id == arms[1].way_id || arms[1].way_id == arms[2].way_id) return {};   // a way passing through is no merge lane
+    if (arms[0].way_id == arms[1].way_id || arms[1].way_id == arms[2].way_id) return refuse(MergeNodeReason::WayPassesThrough);   // a way passing through is no merge lane
     const RoadGraphNode* node = find_node(builder.graph(), node_id);
-    if (!node) return {};
+    if (!node) return refuse(MergeNodeReason::NodeMissing);
     std::array<NodeArm, 3> a;
-    for (std::size_t i = 0; i < 3; ++i) if (!make_arm(builder, rules, arms[i], *node, a[i])) return {};
+    for (std::size_t i = 0; i < 3; ++i)
+        if (const auto r = make_arm(builder, rules, arms[i], *node, a[i]); r != MergeNodeReason::Ok) return refuse(r);
     const int leaving = static_cast<int>(a[0].arm.leaves_node) + static_cast<int>(a[1].arm.leaves_node) + static_cast<int>(a[2].arm.leaves_node);
-    if (leaving != 1 && leaving != 2) return {};
+    if (leaving != 1 && leaving != 2) return refuse(MergeNodeReason::AllSameDirection);
     MergeNode out;
     out.merge = leaving == 1;                  // one arm leaves: two roads merge
     // The single arm is the one alone in its direction.
@@ -405,11 +410,11 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     const bool x_through = cos_x > cos_y || (cos_x == cos_y && a[xi].arm.way_id < a[yi].arm.way_id);
     const NodeArm& T = x_through ? a[xi] : a[yi];
     const NodeArm& R = x_through ? a[yi] : a[xi];
-    if (angle_deg(x_through ? cos_x : cos_y) > static_cast<double>(ml.max_through_deflection_deg)) return {};
-    if (angle_deg(R.dx * S.dx + R.dy * S.dy) > static_cast<double>(ml.max_ramp_angle_deg)) return {};
+    if (angle_deg(x_through ? cos_x : cos_y) > static_cast<double>(ml.max_through_deflection_deg)) return refuse(MergeNodeReason::ThroughDeflection);
+    if (angle_deg(R.dx * S.dx + R.dy * S.dy) > static_cast<double>(ml.max_ramp_angle_deg)) return refuse(MergeNodeReason::RampAngle);
     const auto hw = highway_of(*R.way);
-    if (hw.size() < 5 || hw.substr(hw.size() - 5) != "_link") return {};
-    if (S.counted != T.counted + R.counted) return {};
+    if (hw.size() < 5 || hw.substr(hw.size() - 5) != "_link") return refuse(MergeNodeReason::RampNotLink);
+    if (S.counted != T.counted + R.counted) return refuse(MergeNodeReason::LaneSum);
     // The ramp's side of the carriageway: the left normal of S's travel direction against the ramp's far point.
     const bool ramp_right = R.fx * -S.dy + R.fy * S.dx < 0;
     // The through pair as a join in travel order: upstream = the arriving one.
@@ -417,7 +422,7 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     const NodeArm& downstream = out.merge ? S : T;
     const Side U = make_side(upstream.xs, upstream.cls, upstream.arm.way_id), D = make_side(downstream.xs, downstream.cls, downstream.arm.way_id);
     const JoinOutcome join = resolve_join(U, D, rules);
-    if (join.split) return {};
+    if (join.split) return refuse(MergeNodeReason::JoinSplit);
     // The added lanes: the counted bands of the single arm that meet no band of the through arm (join width 0).
     const Side& wide = out.merge ? D : U;
     const SideEval& wide_eval = out.merge ? join.d : join.u;
@@ -428,22 +433,23 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
         last_added = i;
         ++added;
     }
-    if (added != R.counted || last_added - first_added + 1 != added) return {};   // one contiguous group, the ramp's lanes
+    if (added != R.counted) return refuse(MergeNodeReason::AddedCountMismatch);
+    if (last_added - first_added + 1 != added) return refuse(MergeNodeReason::AddedNotContiguous);   // one contiguous group, the ramp's lanes
     // ... on the ramp's side: no matched counted band beyond it.
     for (int i = wide.first_counted; i <= wide.last_counted; ++i) {
         if (!wide.xs.bands[static_cast<std::size_t>(i)].counted || (i >= first_added && i <= last_added)) continue;
-        if (ramp_right ? i > first_added : i < last_added) return {};
+        if (ramp_right ? i > first_added : i < last_added) return refuse(MergeNodeReason::AddedNotOnRampSide);
     }
     // The centre line of the added lanes seen from the single arm's way line, with the join's own correction of that arm.
     std::array<double, 33> edge{};
-    if (wide.xs.bands.size() > 32 || !wide.xs.boundaries_at(0.0, std::span<double>(edge.data(), wide.xs.bands.size() + 1))) return {};
+    if (wide.xs.bands.size() > 32 || !wide.xs.boundaries_at(0.0, std::span<double>(edge.data(), wide.xs.bands.size() + 1))) return refuse(MergeNodeReason::Boundaries);
     const double centre_m = (edge[static_cast<std::size_t>(first_added)] + edge[static_cast<std::size_t>(last_added) + 1]) / 2;
     const std::int32_t correction = out.merge ? join.corr_d : join.corr_u;
     const double target_mm = std::round(centre_m * 1000.0) + static_cast<double>(correction);
     const double cos_phi = R.dx * S.dx + R.dy * S.dy;
-    if (!(cos_phi > 0)) return {};
+    if (!(cos_phi > 0)) return refuse(MergeNodeReason::RampBackward);
     const double landing = std::round(target_mm / cos_phi);
-    if (std::fabs(landing) > static_cast<double>(ml.max_landing_offset_mm)) return {};
+    if (std::fabs(landing) > static_cast<double>(ml.max_landing_offset_mm)) return refuse(MergeNodeReason::LandingTooFar);
     out.through_id = T.arm.way_id; out.single_id = S.arm.way_id; out.ramp_id = R.arm.way_id;
     out.through_leaves = T.arm.leaves_node; out.single_leaves = S.arm.leaves_node;
     out.landing_mm = static_cast<std::int32_t>(landing);
@@ -467,8 +473,36 @@ std::int32_t scaled(std::int32_t len, std::int64_t num, std::int64_t den) {
 }
 } // namespace
 
+const char* merge_node_reason_name(MergeNodeReason reason) {
+    static const char* const n[] = {"ok", "disabled", "arms_not_3", "way_passes_through", "node_missing",
+        "arm_way_missing", "arm_no_class", "arm_no_section", "arm_not_oneway", "arm_no_counted_lane", "arm_no_direction",
+        "all_same_direction", "through_deflection", "ramp_angle", "ramp_not_link", "lane_sum", "join_split",
+        "added_count_mismatch", "added_not_contiguous", "added_not_on_ramp_side", "boundaries", "ramp_backward", "landing_too_far"};
+    const auto i = static_cast<std::size_t>(reason);
+    return i < sizeof(n) / sizeof(n[0]) ? n[i] : "?";
+}
+
+const char* cross_section_end_note_name(CrossSectionEndNote note) {
+    static const char* const n[] = {"no_join", "joined", "neighbour_missing", "neighbour_no_section", "neighbour_no_class",
+        "landed", "landing_zero", "landing_offset_hold", "landing_offset_transition", "landing_end_taken"};
+    const auto i = static_cast<std::size_t>(note);
+    return i < sizeof(n) / sizeof(n[0]) ? n[i] : "?";
+}
+
+MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules) {
+    MergeNodeDiagnosis d;
+    if (const auto m = classify_merge_node(builder, node_id, rules, &d.reason)) {
+        d.merge = m->merge; d.through_id = m->through_id; d.single_id = m->single_id; d.ramp_id = m->ramp_id;
+        d.landing_mm = m->landing_mm; d.landing_length_mm = m->landing_length_mm;
+    }
+    return d;
+}
+
 Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& builder, std::int64_t way_id,
-        RoadStretch stretch, double length_m, const RoadRules& rules) {
+        RoadStretch stretch, double length_m, const RoadRules& rules, CrossSectionTrace* trace) {
+    CrossSectionTrace local_trace;   // diagnostics only: never read back into the result
+    CrossSectionTrace& tr = trace ? *trace : local_trace;
+    tr = CrossSectionTrace{};
     const RoadGraph& graph = builder.graph();
     const auto* way = find_way(graph, way_id);
     if (!way) return make_error(ErrorCode::NotFound, "cross section: way not in graph");
@@ -492,7 +526,8 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
         if (!*join && rules.merge_lane.enabled) {
             // A node of degree three: the through pair of a merge lane / lane drop joins like a degree-two node, the ramp lands.
             const auto node = way->node_ids[at_end ? stretch.end_ref : stretch.start_ref];
-            if (const auto merge = classify_merge_node(builder, node, rules)) {
+            tr.ends[e].merge_ran = true;
+            if (const auto merge = classify_merge_node(builder, node, rules, &tr.ends[e].merge_reason)) {
                 if (merge->through_id == way_id) join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->single_id, 0, merge->single_leaves}};
                 else if (merge->single_id == way_id) {
                     join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->through_id, 0, merge->through_leaves}};
@@ -502,16 +537,17 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
                     landing[static_cast<std::size_t>(e)] = merge->landing_mm;
                     landing_length[static_cast<std::size_t>(e)] = merge->landing_length_mm;
                     landing_single[static_cast<std::size_t>(e)] = merge->single_id;
+                    tr.ends[e].note = CrossSectionEndNote::LandingZero;   // until the landing below applies
                 }
             }
         }
         if (!*join) continue;
         const auto* other = find_way(graph, (*join)->way_id);
-        if (!other) continue;
+        if (!other) { tr.ends[e].note = CrossSectionEndNote::NeighbourMissing; continue; }
         auto other_base = resolve_cross_section_base(*other, rules);
-        if (!other_base || !other_base->xs) continue; // an unsupported or declined neighbour has no section to meet
+        if (!other_base || !other_base->xs) { tr.ends[e].note = CrossSectionEndNote::NeighbourNoSection; continue; } // an unsupported or declined neighbour has no section to meet
         const auto* cls_b = rules.find_class(highway_of(*other));
-        if (!cls_b) continue;
+        if (!cls_b) { tr.ends[e].note = CrossSectionEndNote::NeighbourNoClass; continue; }
         const bool same = at_end ? (*join)->leaves_node : !(*join)->leaves_node; // B has A's direction at the node
         const std::int64_t id_a = way_id, id_b = (*join)->way_id;
         const bool owner_a = id_a <= id_b;
@@ -528,6 +564,8 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
         auto& r = ends[static_cast<std::size_t>(e)];
         r.present = true;
         r.record = {out.kind, id_b, out.delta};
+        tr.ends[e].note = CrossSectionEndNote::Joined;
+        tr.ends[e].kind = out.kind;
         const SideEval& mine = a_is_u ? out.u : out.d;
         const std::int32_t corr = a_is_u ? out.corr_u : out.corr_d;
         r.correction = a_mirrored ? -corr : corr;
@@ -540,6 +578,7 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
             // standing beside the carriageway (G2M-032, B 8 west of Hoechst, exit to the Main-Taunus-Zentrum). The far end of
             // the single arm keeps its own join.
             if (single_at_merge[static_cast<std::size_t>(e)] && xs.bands[i].counted && mine.jw[ci] == 0) r.ramps[i] = WidthRamp{};
+            if (r.ramps[i].length_mm > 0) tr.ends[e].tapered = true;
         }
     }
 
@@ -565,11 +604,15 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
     // fills a free end of the ramp offsets; a hold or transition offset (a whole stretch shifted) keeps its own.
     for (int e = 0; e < 2; ++e) {
         const auto k = static_cast<std::size_t>(e);
-        if (landing[k] == 0 || landing_length[k] <= 0) continue;
+        if (landing[k] == 0 || landing_length[k] <= 0) continue;   // trace: LandingZero (set above) or no ramp role
         if (xs.offset.mode == OffsetMode::None) xs.offset = {OffsetMode::Ramps, 0, 0, 0, 0};
-        if (xs.offset.mode != OffsetMode::Ramps) continue;
-        if (e == 0 && xs.offset.start_mm == 0) { xs.offset.start_mm = landing[0]; xs.offset.start_length_mm = landing_length[0]; ends[0].present = true; ends[0].record = {JoinKind::Landing, landing_single[0], landing[0]}; }
-        if (e == 1 && xs.offset.end_mm == 0) { xs.offset.end_mm = landing[1]; xs.offset.end_length_mm = landing_length[1]; ends[1].present = true; ends[1].record = {JoinKind::Landing, landing_single[1], landing[1]}; }
+        if (xs.offset.mode != OffsetMode::Ramps) {
+            tr.ends[e].note = xs.offset.mode == OffsetMode::Hold ? CrossSectionEndNote::LandingOffsetHold : CrossSectionEndNote::LandingOffsetTransition;
+            continue;
+        }
+        tr.ends[e].note = CrossSectionEndNote::LandingEndTaken;   // until it lands below
+        if (e == 0 && xs.offset.start_mm == 0) { xs.offset.start_mm = landing[0]; xs.offset.start_length_mm = landing_length[0]; ends[0].present = true; ends[0].record = {JoinKind::Landing, landing_single[0], landing[0]}; tr.ends[0].note = CrossSectionEndNote::Landed; }
+        if (e == 1 && xs.offset.end_mm == 0) { xs.offset.end_mm = landing[1]; xs.offset.end_length_mm = landing_length[1]; ends[1].present = true; ends[1].record = {JoinKind::Landing, landing_single[1], landing[1]}; tr.ends[1].note = CrossSectionEndNote::Landed; }
     }
 
     // Band ramps (4.2) and exactness clipping (4.5).

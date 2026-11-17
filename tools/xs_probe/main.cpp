@@ -14,6 +14,10 @@
 // two together and one of those is a *_link (merge-lane / exit candidates, G2M-028), how many of them the cross-section
 // resolver gave a landing, and the degree-two nodes whose ways differ in counted lanes, with and without a join (a taper).
 // --merge-rules off resolves with merge_lane.enabled = false (the state before G2M-028).
+// With `list` after it, every candidate without a landing or without a lane taper, every other degree-three node with a
+// *_link arm, and every degree-two lane-count change without a lane-change join get a line
+// `reason KIND DIR CODE node ...` (diagnostics for the ramp-lane work): KIND cand_landing / cand_taper / near / d2; CODE
+// merge_<classification refusal>, join_<kind>_ramped|_unramped, or the resolver's end note (landing_offset_hold, ...).
 //
 // Not part of any product; used to inspect lane adds and lane drops by hand.
 #include "g2m/core/tile_key.h"
@@ -114,15 +118,43 @@ int merge_census(TileStore& store, const char* scope, const TileKey& zone_key, d
                 oneway_fwd = (b->xs->flags & kXsOneway) && !(b->xs->flags & kXsReversedOneway);
                 for (const auto& band : b->xs->bands) counted += band.counted;
             };
-            const auto section_at = [&](std::int64_t way_id, std::uint32_t ref, bool at_end) -> std::optional<RoadCrossSection> {
+            struct EndSection { RoadCrossSection xs; CrossSectionEndTrace trace; };
+            std::string section_miss;   // why the last section_at found no section
+            const auto section_at = [&](std::int64_t way_id, std::uint32_t ref, bool at_end) -> std::optional<EndSection> {
                 const auto fits = builder->fit_stretches(way_id);
-                if (!fits) return {};
+                section_miss = "stretch_not_found";
+                if (!fits) { section_miss = "stretch_fit_error"; return {}; }
                 for (const auto& fit : *fits) {
-                    if ((at_end ? fit.stretch.end_ref : fit.stretch.start_ref) != ref || !fit.reference) continue;
-                    const auto xs = resolve_cross_section(*builder, way_id, fit.stretch, fit.reference->length_m, rules);
-                    if (xs && xs->xs) return *xs->xs;
+                    if ((at_end ? fit.stretch.end_ref : fit.stretch.start_ref) != ref) continue;
+                    if (!fit.reference) {
+                        section_miss = "stretch_fit_declined:" + fit.reference.error().message;
+                        for (auto& ch : section_miss) if (ch == ' ') ch = '_';
+                        continue;
+                    }
+                    CrossSectionTrace trace;
+                    const auto xs = resolve_cross_section(*builder, way_id, fit.stretch, fit.reference->length_m, rules, &trace);
+                    if (xs && xs->xs) return EndSection{*xs->xs, trace.ends[at_end ? 1 : 0]};
+                    section_miss = xs ? "section_declined" : "section_error";
                 }
                 return {};
+            };
+            const auto is_link_hw = [](const std::string& h) { return h.size() > 5 && h.substr(h.size() - 5) == "_link"; };
+            // reason KIND DIR CODE node ID E e N n arms a/b/c lanes x/y/z
+            const auto reason_line = [&](const char* kind, const char* dir, const std::string& reason, const RoadGraphNode& nd, double e, double n,
+                                         const std::vector<RoadNodeArm>& arms, const int* cnt) {
+                if (!list_missed) return;
+                std::printf("reason %s %s %s node %lld E %.1f N %.1f arms", kind, dir, reason.c_str(), static_cast<long long>(nd.osm_id), e, n);
+                for (std::size_t i = 0; i < arms.size(); ++i) std::printf("%s%lld", i ? "/" : " ", static_cast<long long>(arms[i].way_id));
+                std::printf(" lanes");
+                for (std::size_t i = 0; i < arms.size(); ++i) std::printf("%s%d", i ? "/" : " ", cnt[i]);
+                std::printf("\n");
+            };
+            const auto end_reason = [&](const std::optional<EndSection>& x) -> std::string {
+                if (!x) return "?";
+                const auto& t = x->trace;
+                if (t.note == CrossSectionEndNote::Joined) return std::string("join_") + join_name(t.kind) + (t.tapered ? "_ramped" : "_unramped");
+                if (t.note == CrossSectionEndNote::NoJoin && t.merge_ran) return std::string("merge_") + merge_node_reason_name(t.merge_reason);
+                return cross_section_end_note_name(t.note);
             };
             for (const auto& node : merged->nodes) {
                 const double e = static_cast<double>(node.position.x) / 1000.0, n = static_cast<double>(node.position.y) / 1000.0;
@@ -131,12 +163,13 @@ int merge_census(TileStore& store, const char* scope, const TileKey& zone_key, d
                 const auto deg = builder->degree(node.osm_id);
                 const auto arms = builder->arms(node.osm_id);
                 if (deg == 2 && arms.size() == 2 && arms[0].way_id != arms[1].way_id) {
-                    int c0, c1; bool o0, o1; std::string h0, h1;
-                    info(arms[0].way_id, c0, o0, h0); info(arms[1].way_id, c1, o1, h1);
-                    if (c0 > 0 && c1 > 0 && c0 != c1) {
+                    int c[2]; bool o0, o1; std::string h0, h1;
+                    info(arms[0].way_id, c[0], o0, h0); info(arms[1].way_id, c[1], o1, h1);
+                    if (c[0] > 0 && c[1] > 0 && c[0] != c[1]) {
                         ++d2_differ;
                         const auto x = section_at(arms[0].way_id, arms[0].ref, !arms[0].leaves_node);
-                        if (x && (arms[0].leaves_node ? x->start_join : x->end_join).kind == JoinKind::LaneChange) ++d2_taper;
+                        if (x && (arms[0].leaves_node ? x->xs.start_join : x->xs.end_join).kind == JoinKind::LaneChange) ++d2_taper;
+                        else reason_line("d2", "-", x ? end_reason(x) : section_miss, node, e, n, arms, c);
                     }
                     continue;
                 }
@@ -146,24 +179,53 @@ int merge_census(TileStore& store, const char* scope, const TileKey& zone_key, d
                 std::array<int, 3> cnt{}; std::array<bool, 3> one{}; std::array<std::string, 3> hws;
                 bool all = true;
                 for (std::size_t i = 0; i < 3; ++i) { info(arms[i].way_id, cnt[i], one[i], hws[i]); all = all && one[i] && cnt[i] > 0; }
-                if (!all) continue;
                 const int leaving = int(arms[0].leaves_node) + int(arms[1].leaves_node) + int(arms[2].leaves_node);
-                if (leaving != 1 && leaving != 2) continue;
                 const bool merge = leaving == 1;
                 std::size_t si = 0;
                 for (std::size_t i = 0; i < 3; ++i) if (arms[i].leaves_node == merge) si = i;
                 const std::size_t xi = (si + 1) % 3, yi = (si + 2) % 3;
-                if (cnt[si] != cnt[xi] + cnt[yi]) continue;
-                const auto is_link = [&](std::size_t i) { const auto& h = hws[i]; return h.size() > 5 && h.substr(h.size() - 5) == "_link"; };
-                if (!is_link(xi) && !is_link(yi)) continue;
+                const bool any_link = is_link_hw(hws[0]) || is_link_hw(hws[1]) || is_link_hw(hws[2]);
+                const bool candidate = all && (leaving == 1 || leaving == 2) && cnt[si] == cnt[xi] + cnt[yi] && (is_link_hw(hws[xi]) || is_link_hw(hws[yi]));
+                if (!candidate) {
+                    // A degree-three node with a *_link arm that is no candidate: the classification's refusal.
+                    if (any_link) {
+                        const auto d = diagnose_merge_node(*builder, node.osm_id, rules);
+                        std::string why = merge_node_reason_name(d.reason);
+                        if (d.reason == MergeNodeReason::LaneSum)   // single = the arm alone in its direction
+                            why += cnt[si] > cnt[xi] + cnt[yi] ? "_single_gt_sum" : cnt[si] == std::max(cnt[xi], cnt[yi]) ? "_single_eq_max" : "_single_lt_sum";
+                        reason_line("near", leaving == 1 ? "merge" : leaving == 2 ? "diverge" : "-", why, node, e, n, arms, cnt.data());
+                    }
+                    continue;
+                }
                 ++candidates; (merge ? merges : diverges) += 1;
                 bool got_landing = false, got_through = false;
-                for (const auto& a : arms) {
-                    const auto x = section_at(a.way_id, a.ref, !a.leaves_node);
-                    if (!x) continue;
-                    const auto& j = a.leaves_node ? x->start_join : x->end_join;
+                std::array<std::optional<EndSection>, 3> secs;
+                std::array<std::string, 3> misses;
+                for (std::size_t i = 0; i < 3; ++i) {
+                    const auto& a = arms[i];
+                    secs[i] = section_at(a.way_id, a.ref, !a.leaves_node);
+                    misses[i] = section_miss;
+                    if (!secs[i]) continue;
+                    const auto& j = a.leaves_node ? secs[i]->xs.start_join : secs[i]->xs.end_join;
                     got_landing = got_landing || j.kind == JoinKind::Landing;
                     got_through = got_through || j.kind == JoinKind::LaneChange;
+                }
+                const char* dir = merge ? "merge" : "diverge";
+                if (!got_landing || !got_through) {
+                    const auto d = diagnose_merge_node(*builder, node.osm_id, rules);
+                    const auto arm_of = [&](std::int64_t id) { for (std::size_t i = 0; i < 3; ++i) if (arms[i].way_id == id) return i; return std::size_t{3}; };
+                    if (!got_landing) {
+                        std::string why;
+                        if (d.reason != MergeNodeReason::Ok) why = std::string("merge_") + merge_node_reason_name(d.reason);
+                        else { const auto r = arm_of(d.ramp_id); why = r < 3 ? (secs[r] ? end_reason(secs[r]) : misses[r]) : "ramp_arm_missing"; }
+                        reason_line("cand_landing", dir, why, node, e, n, arms, cnt.data());
+                    }
+                    if (!got_through) {
+                        std::string why;
+                        if (d.reason != MergeNodeReason::Ok) why = std::string("merge_") + merge_node_reason_name(d.reason);
+                        else { const auto t = arm_of(d.through_id); why = t < 3 ? (secs[t] ? end_reason(secs[t]) : misses[t]) : "through_arm_missing"; }
+                        reason_line("cand_taper", dir, why, node, e, n, arms, cnt.data());
+                    }
                 }
                 if (got_landing) { ++landed; (merge ? landed_merge : landed_diverge) += 1; }
                 else {

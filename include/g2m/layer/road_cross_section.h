@@ -162,8 +162,48 @@ Result<CrossSectionBase> resolve_cross_section_base(const RoadGraphWay& way, con
 // and the result is tile invariant. `length_m` is the stretch's reference length; the result's length_m is set.
 // A way whose base declines (or has no rules) yields the decline; a neighbour whose base declines is treated as
 // "no join" because it has no section to meet.
+//
+// Diagnostics (g2m_xs_probe --merge-census only; never read by the product): why a node of degree three is or is not a
+// merge-lane / lane-drop node (G2M-028), one code per refusal in the classification, in its order.
+enum class MergeNodeReason : std::uint8_t {
+    Ok = 0, Disabled, ArmsNot3, WayPassesThrough, NodeMissing,
+    ArmWayMissing, ArmNoClass, ArmNoSection, ArmNotOneway, ArmNoCountedLane, ArmNoDirection,
+    AllSameDirection, ThroughDeflection, RampAngle, RampNotLink, LaneSum, JoinSplit,
+    AddedCountMismatch, AddedNotContiguous, AddedNotOnRampSide, Boundaries, RampBackward, LandingTooFar,
+};
+const char* merge_node_reason_name(MergeNodeReason reason);
+// The classification of one node with its refusal reason and, when Ok, the roles and the landing offset.
+struct MergeNodeDiagnosis {
+    MergeNodeReason reason = MergeNodeReason::Ok;
+    bool merge = true;
+    std::int64_t through_id = 0, single_id = 0, ramp_id = 0;
+    std::int32_t landing_mm = 0, landing_length_mm = 0;
+};
+MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules);
+// What resolve_cross_section did at each end of the stretch (0 = start, 1 = end).
+enum class CrossSectionEndNote : std::uint8_t {
+    NoJoin = 0,             // no degree-two join and no merge-node role (the merge reason says why)
+    Joined,                 // a join was resolved (kind in `kind`)
+    NeighbourMissing,       // the joined way is not in the graph
+    NeighbourNoSection,     // the joined way has no section (unsupported or declined)
+    NeighbourNoClass,       // the joined way's highway has no rules
+    Landed,                 // this way is the ramp of a merge node and its end landed
+    LandingZero,            // ... the landing offset (or its length) is 0: nothing to land
+    LandingOffsetHold,      // ... the stretch's offset is a Hold (a whole-stretch shift) and keeps it
+    LandingOffsetTransition,// ... the stretch's offset is a Transition and keeps it
+    LandingEndTaken,        // ... this end already carries a join correction
+};
+const char* cross_section_end_note_name(CrossSectionEndNote note);
+struct CrossSectionEndTrace {
+    CrossSectionEndNote note = CrossSectionEndNote::NoJoin;
+    bool merge_ran = false;                                // the degree-three classification ran at this end
+    MergeNodeReason merge_reason = MergeNodeReason::Ok;
+    JoinKind kind = JoinKind::None;                        // the resolved join's kind (Joined)
+    bool tapered = false;                                  // some band of this end got a width ramp (before clipping)
+};
+struct CrossSectionTrace { CrossSectionEndTrace ends[2]{}; };
 Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& builder, std::int64_t way_id,
-    RoadStretch stretch, double length_m, const RoadRules& rules);
+    RoadStretch stretch, double length_m, const RoadRules& rules, CrossSectionTrace* trace = nullptr);
 
 // World-space point at station s and lateral offset t (metres, positive left of the reference direction), in the
 // same UTM frame as RoadReferenceLine::at.
