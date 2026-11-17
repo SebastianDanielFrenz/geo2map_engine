@@ -1,6 +1,8 @@
 // Edge markings along a merge lane or an exit (vault G2M-028): where a link lands on the added lane of a carriageway, the line between
 // them is one broken line - the through carriageway's edge on the link's side is drawn broken (flag 128, or 64 on the left), the
-// link's own facing edge line is dropped (flag 512, or 1024) - along the link's landing length from the node, and nowhere else.
+// link's own facing edge line is dropped (flag 512, or 1024) - from the node to the gore nose (the link's facing gore shoulder ramp,
+// ROADS stage 2b; without one its landing length; ROADS stage 4a), at every landed node whatever the through arm's join kind, and
+// nowhere else.
 //
 // Recorded sabotages (2026-10-20; each makes the named tests fail, then reverted):
 //   S1 road_ribbons.cpp: the through carriageway's broken bit on the wrong side (left for a ramp on the right)           -> MK1, MK2 fail
@@ -8,6 +10,8 @@
 //   S3 road_ribbons.cpp: the through carriageway is not marked (skip the LaneChange branch)                              -> MK1, MK2 fail
 //   S4 road_ribbons.cpp: the ramp's facing edge is not dropped (skip the Landing branch)                                 -> MK1 fails
 //   S5 road_junction.cpp build_from: no MergeLane decline at a landed ramp (2026-10-20, with MK4)                          -> MK4 fails
+//   S6 road_ribbons.cpp: the zone is the landing length even where a gore ramp exists (pre-4a) (2026-11-17)           -> MK2, MK2b fail
+//   S7 road_ribbons.cpp: only a LaneChange through arm is marked (pre-4a) (2026-11-17)                                 -> MK1b fails
 #include "road_fixture.h"
 
 #include "g2m/layer/road_rules.h"
@@ -34,18 +38,24 @@ RoadGraphWay way(std::int64_t id, std::vector<std::int64_t> nodes, Tags tags) {
 }
 // The site-4 shape on +x (cf. test_road_merge_lane.cpp): A (2 lanes) and the link R meet node 2 and B (3 lanes) leaves; `ramp_y` is the
 // link's start, south of the axis (right of the travel direction) for a negative value.
-RoadGraph scene(const std::string& ramp_highway, int ramp_y) {
+RoadGraph scene(const std::string& ramp_highway, int ramp_y, bool placement = true) {
     RoadGraph g;
     const auto node = [&](std::int64_t id, double x, double y) { g.nodes.push_back({id, {std::llround((kE0 + x) * 1000.0), std::llround((kN0 + y) * 1000.0)}, {}}); };
     node(1, -400, 0); node(2, 0, 0); node(3, 200, 0); node(4, -150, ramp_y);
     g.ways.push_back(way(10, {1, 2}, {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}}));
-    g.ways.push_back(way(11, {2, 3}, {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "3"}, {"placement", "right_of:1"}, {"turn:lanes", "none|none|merge_to_left"}}));
+    if (placement) g.ways.push_back(way(11, {2, 3}, {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "3"}, {"placement", "right_of:1"}, {"turn:lanes", "none|none|merge_to_left"}}));
+    else g.ways.push_back(way(11, {2, 3}, {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "3"}, {"turn:lanes", "none|none|merge_to_left"}}));
     g.ways.push_back(way(12, {4, 2}, {{"highway", ramp_highway}, {"oneway", "yes"}, {"lanes", "1"}}));
     for (const auto& w : g.ways) for (std::size_t i = 1; i < w.node_ids.size(); ++i)
         g.edges.push_back({w.osm_id, static_cast<std::uint32_t>(i - 1), w.node_ids[i - 1], w.node_ids[i]});
     return g;
 }
-struct Marked { std::vector<world::RoadRibbonVertex> right_broken, left_hidden, others; double ox = 0, oy = 0; };
+struct Marked {
+    std::vector<world::RoadRibbonVertex> right_broken, left_hidden, others;
+    double ox = 0, oy = 0;
+    double landing_m = 0, gore_m = 0;   // the link's landing length and its facing gore shoulder ramp at the node (0 = none)
+    JoinKind through_kind = JoinKind::None;   // B's join at the node
+};
 Marked marked(const RoadGraph& graph, const RoadRules& rules) {
     g2m_test::GeomOptions o;
     o.height_m = [](double, double) { return 100.0; };
@@ -57,6 +67,20 @@ Marked marked(const RoadGraph& graph, const RoadRules& rules) {
     options.drape = world::RibbonDrape::PointSampled;
     const auto ribbon = world::build_road_ribbons(*tile, kKey, [](double, double) -> std::optional<double> { return 100.0; }, 0.018, {}, options);
     Marked out;
+    for (const auto& e : tile->entries) {
+        if (!e.cross_section) continue;
+        if (e.way_id == 11) out.through_kind = e.cross_section->start_join.kind;
+        if (e.way_id != 12) continue;
+        const auto& xs = *e.cross_section;
+        out.landing_m = xs.offset.end_length_mm / 1000.0;
+        int first = -1, last = -1;
+        for (std::size_t i = 0; i < xs.bands.size(); ++i) if (xs.bands[i].counted) { if (first < 0) first = static_cast<int>(i); last = static_cast<int>(i); }
+        const int f = xs.end_join.raw_delta_mm < 0 ? first - 1 : last + 1;
+        if (first >= 0 && f >= 0 && f < static_cast<int>(xs.bands.size())) {
+            const auto& b = xs.bands[static_cast<std::size_t>(f)];
+            if (b.kind == LaneKind::Shoulder && b.end.length_mm > 0 && b.end.from_width_mm == 0) out.gore_m = b.end.length_mm / 1000.0;
+        }
+    }
     out.ox = static_cast<double>(kKey.min_easting()); out.oy = static_cast<double>(kKey.min_northing());
     for (const auto& v : ribbon.vertices) {
         const int f = static_cast<int>(v.flags);
@@ -82,38 +106,55 @@ TEST_CASE("MK1 a merge lane: the through edge on the ramp's side is broken and t
     CHECK(m.others.empty());
 }
 
-TEST_CASE("MK2 the zone is the landing length from the node, and only there", "[world][road_ribbons][merge_markings]") {
-    const auto& rules = builtin_road_rules_de();
-    // A link 40 m off the axis clears the through lanes within the slope-derived landing (ROADS stage 2a leaves it alone; the 12 m
-    // link of MK1 gets a longer clearance landing, below).
-    const auto m = marked(scene("trunk_link", -40), rules);
+TEST_CASE("MK1b an inferred alignment through arm is marked too (ROADS stage 4a)", "[world][road_ribbons][merge_markings]") {
+    const auto m = marked(scene("trunk_link", -12, false), builtin_road_rules_de());
+    INFO("through join kind " << static_cast<int>(m.through_kind));
+    REQUIRE(m.through_kind != JoinKind::LaneChange);
+    REQUIRE(m.through_kind != JoinKind::None);
     REQUIRE_FALSE(m.right_broken.empty());
-    // The landing offset is about 5.5 m: the length is 12 m per metre = 65 m, between the 30 m and 80 m bounds.
-    const double lo = node_x() - rules.merge_lane.landing_max_m - 2.0, hi = node_x() + 0.5;
-    double first = 1e9, last = -1e9;
-    for (const auto& v : m.right_broken) { CHECK(v.x >= lo); CHECK(v.x <= hi); first = std::min<double>(first, v.x); last = std::max<double>(last, v.x); }
-    // It starts before the node by about the landing length, and reaches the node.
-    CHECK(first < node_x() - 55.0); CHECK(first > node_x() - 80.0);
-    CHECK(last > node_x() - 5.0);
-    // Every 10 m of the zone carries a broken quad.
-    for (double x = node_x() - 60.0; x < node_x() - 10.0; x += 10.0) {
-        bool any = false;
-        for (const auto& v : m.right_broken) any = any || std::abs(v.x - x) < 2.0;
-        INFO("x " << x - node_x());
-        CHECK(any);
+    REQUIRE_FALSE(m.left_hidden.empty());
+    for (const auto& v : m.right_broken) CHECK(std::abs(v.y - node_y()) < 5.0);
+    CHECK(m.others.empty());
+}
+
+TEST_CASE("MK2 the zone runs from the node to the gore nose (else the landing length), and only there", "[world][road_ribbons][merge_markings]") {
+    const auto& rules = builtin_road_rules_de();
+    // A link 40 m off the axis (slope-derived landing) and the 12 m link of MK1 (clearance landing, ROADS stage 2a).
+    for (const int y : {-40, -12}) {
+        const auto m = marked(scene("trunk_link", y), rules);
+        INFO("link start y " << y << ", landing " << m.landing_m << " m, gore " << m.gore_m << " m");
+        REQUIRE_FALSE(m.right_broken.empty());
+        REQUIRE(m.landing_m > 0);
+        const double zone = m.gore_m > 0 ? m.gore_m : m.landing_m;
+        double first = 1e9, last = -1e9;
+        for (const auto& v : m.right_broken) { CHECK(v.x <= node_x() + 0.5); first = std::min<double>(first, v.x); last = std::max<double>(last, v.x); }
+        for (const auto& v : m.left_hidden) CHECK(v.x >= node_x() - zone - 2.5);
+        // It starts at the gore nose and reaches the node.
+        CHECK(first > node_x() - zone - 2.5); CHECK(first < node_x() - zone + 2.5);
+        CHECK(last > node_x() - 2.5);
+        // Every 5 m of the zone carries a broken quad.
+        for (double x = node_x() - zone + 2.5; x < node_x() - 2.5; x += 5.0) {
+            bool any = false;
+            for (const auto& v : m.right_broken) any = any || std::abs(v.x - x) < 2.5;
+            INFO("x " << x - node_x());
+            CHECK(any);
+        }
     }
 }
 
-TEST_CASE("MK2b a clearance landing (ROADS stage 2a) lengthens the zone with it, up to landing_clear_max_m", "[world][road_ribbons][merge_markings]") {
+TEST_CASE("MK2b a clearance landing with a gore ramp: the gore nose, not the landing, ends the zone", "[world][road_ribbons][merge_markings]") {
     const auto& rules = builtin_road_rules_de();
     const auto m = marked(scene("trunk_link", -12), rules);
-    REQUIRE_FALSE(m.right_broken.empty());
-    double first = 1e9, last = -1e9;
-    for (const auto& v : m.right_broken) { first = std::min<double>(first, v.x); last = std::max<double>(last, v.x); }
-    INFO("zone from " << first - node_x() << " m");
-    CHECK(first < node_x() - rules.merge_lane.landing_max_m);   // longer than the slope-derived landing could be
-    CHECK(first > node_x() - rules.merge_lane.landing_clear_max_m - 2.0);
-    CHECK(last > node_x() - 5.0); CHECK(last <= node_x() + 0.5);
+    INFO("landing " << m.landing_m << " m, gore " << m.gore_m << " m");
+    // The 12 m link gets a clearance landing longer than the slope-derived landing could be (ROADS stage 2a) ...
+    CHECK(m.landing_m > rules.merge_lane.landing_max_m);
+    CHECK(m.landing_m <= rules.merge_lane.landing_clear_max_m + 0.001);
+    // ... and a gore ramp (ROADS stage 2b, at most gore_max_m), which bounds the zone (stage 4a).
+    REQUIRE(m.gore_m > 0);
+    CHECK(m.gore_m <= rules.merge_lane.gore_max_m + 0.001);
+    double first = 1e9;
+    for (const auto& v : m.right_broken) first = std::min<double>(first, v.x);
+    CHECK(first > node_x() - m.gore_m - 2.5); CHECK(first < node_x() - m.gore_m + 2.5);
 }
 
 TEST_CASE("MK3 no landing, no marks: a link that is no merge lane and the switched-off rules", "[world][road_ribbons][merge_markings]") {

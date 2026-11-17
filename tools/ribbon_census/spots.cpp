@@ -33,7 +33,9 @@
 //       landing cannot close, since R's end cut is tilted), rRamp = the length in mm of R's counted-lane width ramp at the landed end
 //       (0 = no landing width ramp there), skip = 1 when the 3b rule gave R no landing widths at this end (its far end is a junction -
 //       degree > 2, no join - and the stretch minus merge_lane.landing_width_far_clear_m is shorter than gore_step_m); sRef / tRef / rRef
-//       = the lateral distance in mm (node frame, signed towards rside) of S's / T's / R's reference point at the node from the node
+//       = the lateral distance in mm (node frame, signed towards rside) of S's / T's / R's reference point at the node from the node;
+//       zoneL / zoneG = R's landing length and its gore shoulder ramp length (0 = none) at the landed end in mm: the merge-zone
+//       markings (broken T edge, hidden R edge) run over zoneG, else zoneL (ROADS stage 4a; before it: zoneL, LaneChange only)
 //   OV  wayA srA wayB srB s0 s1 maxw meanw E N   two entries' road beds overlapping more than 0.5 m wide over more than
 //       10 m (a raster of 0.25 m cells, 1 m station bins of A; s0/s1 stations of A)
 //
@@ -370,6 +372,19 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                     const long long phi_mdeg = std::llround(std::acos(cphi) * 180000.0 / 3.14159265358979323846);
                     const double side = r_left ? 1.0 : -1.0;
                     const auto ref_off = [&](const ArmAtNode& a) { return side * ((a.px - e) * nx + (a.py - nn) * ny); };
+                    std::int32_t zone_l = v.second ? rn.cross_section->offset.end_length_mm : rn.cross_section->offset.start_length_mm, zone_g = 0;
+                    {
+                        const auto& bands = rn.cross_section->bands;
+                        int first = -1, last = -1;
+                        for (std::size_t i = 0; i < bands.size(); ++i)
+                            if (bands[i].counted) { if (first < 0) first = static_cast<int>(i); last = static_cast<int>(i); }
+                        const int f = rj.raw_delta_mm < 0 ? first - 1 : last + 1;
+                        if (first >= 0 && f >= 0 && f < static_cast<int>(bands.size())) {
+                            const auto& b = bands[static_cast<std::size_t>(f)];
+                            const auto& r = v.second ? b.end : b.start;
+                            if (b.kind == LaneKind::Shoulder && r.length_mm > 0 && r.from_width_mm == 0) zone_g = r.length_mm;
+                        }
+                    }
                     int skip = 0;
                     if (const auto* rw = find_way(G, R)) {
                         const auto& fj = v.second ? rn.cross_section->start_join : rn.cross_section->end_join;
@@ -380,11 +395,11 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                                 static_cast<std::int64_t>(rules.merge_lane.gore_step_m) * 1000)
                             skip = 1;
                     }
-                    std::printf("E %lld %d %lld %lld %lld %s %s %s %d %d %lld %lld %lld %lld %lld %lld %lld %c %lld %lld %lld %d %d %lld %lld %lld\n", static_cast<long long>(node), degree[node],
+                    std::printf("E %lld %d %lld %lld %lld %s %s %s %d %d %lld %lld %lld %lld %lld %lld %lld %c %lld %lld %lld %d %d %lld %lld %lld %d %d\n", static_cast<long long>(node), degree[node],
                                 static_cast<long long>(S), static_cast<long long>(T), static_cast<long long>(R), join_name(sj.kind), join_name(tj.kind),
                                 join_name(rj.kind), as.lanes, at.lanes + ar.lanes, mm(as.lane_l - ul), mm(ur - as.lane_r), mm(as.bed_l - ubl), mm(ubr - as.bed_r),
                                 mm(interior_mismatch(as.bounds, ub, as.lane_r, as.lane_l, ur, ul)), mm(interior_mismatch(as.drawn, ud, as.lane_r, as.lane_l, ur, ul)),
-                                mm(gap), r_left ? 'L' : 'R', phi_mdeg, mm(res_lane), mm(res_bed), static_cast<int>(ar.lane_ramp_mm), skip, mm(ref_off(as)), mm(ref_off(at)), mm(ref_off(ar)));
+                                mm(gap), r_left ? 'L' : 'R', phi_mdeg, mm(res_lane), mm(res_bed), static_cast<int>(ar.lane_ramp_mm), skip, mm(ref_off(as)), mm(ref_off(at)), mm(ref_off(ar)), static_cast<int>(zone_l), static_cast<int>(zone_g));
                 }
             }
             // ribbon rows of the selected entries, and the bed overlap raster

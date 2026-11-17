@@ -642,7 +642,10 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
  std::map<std::int64_t,int> degree;for(const auto& edge:geometry.source.graph.edges){++degree[edge.from_node];++degree[edge.to_node];}
  // Merge lanes and exits (G2M-028): where a ramp lands on the added lane of a carriageway, the edge line between them is one
  // broken line (a Fahrbahnbegrenzung at an Einfaedelungs- or Ausfaedelungsstreifen): the through carriageway's edge on the ramp's
- // side is drawn broken and the ramp's own facing edge line is dropped, along the ramp's landing length from the node.
+ // side is drawn broken and the ramp's own facing edge line is dropped, from the node to the gore nose: the ramp's gore shoulder
+ // ramp (ROADS stage 2b, the shoulder band that starts at width 0 at the landed end), else its landing length (ROADS stage 4a).
+ // The through arm is found as the arm joined to the single arm at a landed node, whatever its join kind (lane change or an
+ // inferred alignment), so every landed node gets the one broken line, owned by the through ribbon.
  struct MergeZone { double length_m=0;bool ramp_right=true; };
  std::map<std::tuple<std::int64_t,std::int64_t>,MergeZone> merge_nodes; // (node, single arm) -> the ramp's side and landing length
  std::map<std::tuple<std::int64_t,std::uint32_t,bool>,MergeZone> ramp_ends;
@@ -652,7 +655,20 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
    const auto& join=at_end?entry.cross_section->end_join:entry.cross_section->start_join;
    if(join.kind!=g2m::JoinKind::Landing)continue;
    const std::uint32_t ref=at_end?entry.stretch.end_ref:entry.stretch.start_ref;if(ref>=way->node_ids.size())continue;
-   const MergeZone zone{(at_end?entry.cross_section->offset.end_length_mm:entry.cross_section->offset.start_length_mm)/1000.0,join.raw_delta_mm<0};
+   std::int32_t zone_mm=at_end?entry.cross_section->offset.end_length_mm:entry.cross_section->offset.start_length_mm;
+   // the facing shoulder (the band beside the counted lanes on the carriageway's side: left of a ramp that lies to the right)
+   std::int32_t gore_mm=0;
+   {
+    const auto& bands=entry.cross_section->bands;int first=-1,last=-1;
+    for(std::size_t i=0;i<bands.size();++i)if(bands[i].counted){if(first<0)first=static_cast<int>(i);last=static_cast<int>(i);}
+    const int f=join.raw_delta_mm<0?first-1:last+1;
+    if(first>=0&&f>=0&&f<static_cast<int>(bands.size())) {
+     const auto& b=bands[static_cast<std::size_t>(f)];const auto& r=at_end?b.end:b.start;
+     if(b.kind==g2m::LaneKind::Shoulder&&r.length_mm>0&&r.from_width_mm==0)gore_mm=r.length_mm;
+    }
+   }
+   if(gore_mm>0)zone_mm=gore_mm;
+   const MergeZone zone{zone_mm/1000.0,join.raw_delta_mm<0};
    merge_nodes[{way->node_ids[ref],join.neighbour_way_id}]=zone;ramp_ends[{entry.way_id,entry.stretch.start_ref,at_end}]=zone;
   }
  }
@@ -692,8 +708,9 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
     // The ramp: its edge on the carriageway's side (the left of a ramp that lies to the right) is dropped.
     const auto it=ramp_ends.find({entry.way_id,entry.stretch.start_ref,at_end});if(it==ramp_ends.end())continue;
     z={at_end?length-it->second.length_m:0.0,at_end?length:it->second.length_m,it->second.ramp_right?kLeftEdgeHidden:kRightEdgeHidden};
-   } else if(join.kind==g2m::JoinKind::LaneChange) {
-    // The through carriageway (not the single arm the ramp lands beside): its edge on the ramp's side is broken.
+   } else if(join.kind!=g2m::JoinKind::None) {
+    // The through carriageway (not the single arm the ramp lands beside), whatever its join kind: its edge on the ramp's side
+    // is broken.
     const std::uint32_t ref=at_end?entry.stretch.end_ref:entry.stretch.start_ref;if(ref>=w.node_ids.size())continue;
     const auto it=merge_nodes.find({w.node_ids[ref],entry.way_id});if(it!=merge_nodes.end())continue; // this is the single arm
     const auto other=merge_nodes.find({w.node_ids[ref],join.neighbour_way_id});if(other==merge_nodes.end())continue;
