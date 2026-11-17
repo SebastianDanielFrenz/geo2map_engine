@@ -211,6 +211,16 @@ struct CrossSectionEndTrace {
     bool gore_nose_reached = false;                        // the gap reached both full shoulders within the cap
     std::int32_t gore_min_gap_mm = 0;                      // the smallest sampled lane-edge gap before the nose (negative: lanes cross)
     std::int32_t gore_min_gap_at_mm = 0;                   // ... and its station from the node
+    // ROADS stage 2b: the facing shoulder's ramp length, shared by both ways of the node (from the link's gap profile).
+    std::int32_t gore_link_nose_mm = 0;                    // the link's nose (both ways use it)
+    bool gore_link_nose_reached = false;
+    std::int32_t gore_ramp_mm = 0;                         // L_g before the served-section trim
+    std::int32_t gore_overlap_mm = 0;                      // the worst shoulder overlap with L_g (<= gore_overlap_tol_mm unless capped)
+    std::int32_t gore_overlap_at_mm = 0;                   // ... and its station from the node
+    bool gore_capped = false;                              // no length within the cap met the condition
+    bool gore_stretch_bound = false;                       // ... and a stretch (not gore_max_m) set the cap
+    bool gore_other_shorter = false;                       // the other way's stretch allows less than this one's (and binds the cap)
+    bool gore_ramp_trimmed = false;                        // the served section's far-end ramps cut L_g further
     std::int32_t gore_shoulder_mm = 0;                     // this way's full facing shoulder (0: none, nothing ramped)
     // Clearance landing (ROADS stage 2a): this end is the ramp's landed end.
     bool landing_clear = false;                            // the rule ran at this end

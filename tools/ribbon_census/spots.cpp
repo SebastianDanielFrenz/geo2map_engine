@@ -8,6 +8,9 @@
 //   G   way start_ref at_end node nose_mm reached min_gap_mm min_gap_at_mm shoulder_mm   the gore-shoulder rule ran at this end
 //       (ROADS stage 1, resolve_cross_section's trace: the nose station from the node, whether the lane-edge gap reached both
 //       facing shoulders within gore_max_m, the smallest gap before the nose and its station, this way's facing shoulder)
+//       ... link_nose_mm ramp_mm overlap_mm overlap_at_mm capped stretch_bound other_shorter trimmed (ROADS stage 2b: the link's nose,
+//       the shared ramp length L_g, the worst shoulder overlap with it and its station, no length met the condition within the
+//       cap, a stretch set that cap, the other way's stretch allows less, the served section's far-end ramps cut L_g)
 //   L   way start_ref at_end node base_mm clear_mm clear_reached final_mm min_gap_mm min_gap_at_mm   the clearance landing ran at
 //       this ramp end (ROADS stage 2a: the slope-derived landing length, the first station where the unshifted ramp clears the
 //       through lanes, whether it did within the cap, the served landing length, the worst lane-edge gap over it and its station)
@@ -186,9 +189,11 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                                         static_cast<long long>(gr < way->node_ids.size() ? way->node_ids[gr] : -1), t.landing_base_mm, t.landing_clear_mm,
                                         t.landing_clear_reached ? 1 : 0, t.landing_final_mm, t.landing_min_gap_mm, t.landing_min_gap_at_mm);
                         if (!t.gore) continue;
-                        std::printf("G %lld %u %d %lld %d %d %d %d %d\n", static_cast<long long>(en.way_id), en.stretch.start_ref, ge,
+                        std::printf("G %lld %u %d %lld %d %d %d %d %d %d %d %d %d %d %d %d %d\n", static_cast<long long>(en.way_id), en.stretch.start_ref, ge,
                                     static_cast<long long>(gr < way->node_ids.size() ? way->node_ids[gr] : -1), t.gore_nose_mm, t.gore_nose_reached ? 1 : 0,
-                                    t.gore_min_gap_mm, t.gore_min_gap_at_mm, t.gore_shoulder_mm);
+                                    t.gore_min_gap_mm, t.gore_min_gap_at_mm, t.gore_shoulder_mm, t.gore_link_nose_mm, t.gore_ramp_mm,
+                                    t.gore_overlap_mm, t.gore_overlap_at_mm, t.gore_capped ? 1 : 0, t.gore_stretch_bound ? 1 : 0, t.gore_other_shorter ? 1 : 0,
+                                    t.gore_ramp_trimmed ? 1 : 0);
                     }
                 for (const bool at_end : {false, true}) {
                     const std::uint32_t r = at_end ? en.stretch.end_ref : en.stretch.start_ref;

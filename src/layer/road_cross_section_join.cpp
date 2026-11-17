@@ -856,11 +856,12 @@ void apply_gore_shoulders(const RoadReferenceBuilder& builder, const RoadGraphWa
         RoadCrossSection& xs, CrossSectionTrace& tr, int depth) {
     const MergeLaneRules& ml = rules.merge_lane;
     const auto length_mm = static_cast<std::int64_t>(std::floor(xs.length_m * 1000.0));
+    const RoadCrossSection xs0 = xs;   // pre-gore, as the other way sees this one: both ends of a node compute the same L_g
     for (int e = 0; e < 2; ++e) {
         const auto& m = merge_at[static_cast<std::size_t>(e)];
         if (!m) continue;
         const bool at_end = e == 1;
-        auto pair = gore_pair(builder, way, way_id, stretch, rules, fit_limits, *m, at_end, xs, depth);
+        auto pair = gore_pair(builder, way, way_id, stretch, rules, fit_limits, *m, at_end, xs0, depth);
         if (!pair) continue;
         GoreArm& self = pair->self; GoreArm& other = pair->other;
         const std::optional<bool> self_left = pair->self_left, other_left = pair->other_left;
@@ -897,12 +898,70 @@ void apply_gore_shoulders(const RoadReferenceBuilder& builder, const RoadGraphWa
         t.gore_nose_reached = reached;
         t.gore_min_gap_mm = static_cast<std::int32_t>(std::round(min_g * 1000.0));
         t.gore_min_gap_at_mm = static_cast<std::int32_t>(std::round(min_at * 1000.0));
-        if (!sb || t.gore_nose_mm <= 0) continue;
+        if (!sb) continue;
+        // The ramp length L_g (ROADS stage 2b), one per node: both ways compute it from the LINK's gap profile and both pre-gore
+        // sections, so the two facing shoulders share it. L_g is the smallest multiple of gore_step_m at or past the link's nose
+        // with smoothstep(s / L_g) * need <= max(gap(s), 0) + gore_overlap_tol at every sample s in [0, L_g] (no through way
+        // abreast: no limit), capped by gore_max_m and what both stretches allow (L plus the longest far-end ramp fits the stretch).
+        const bool ramp_self = pair->self_is_ramp;
+        const GoreArm& ra = ramp_self ? self : other; const GoreArm& ta = ramp_self ? other : self;
+        const bool t_on_r_left = ramp_self ? *self_left : *other_left, r_on_t_left = ramp_self ? *other_left : *self_left;
+        const std::int64_t step_mm = static_cast<std::int64_t>(ml.gore_step_m) * 1000;
+        const auto allowed = [](const GoreArm& a) { return static_cast<std::int64_t>(std::floor(a.length * 1000.0)) - far_ramp_max(a.xs, a.at_end); };
+        const std::int64_t allow_self = allowed(self), allow_other = allowed(other);
+        const std::int64_t cap_g = std::min<std::int64_t>({static_cast<std::int64_t>(ml.gore_max_m) * 1000, allow_self, allow_other,
+                                                           static_cast<std::int64_t>(std::floor(ra.length * 1000.0))});
+        if (cap_g <= 0) continue;
+        std::vector<std::optional<double>> prof;   // the link's gap every gore_step_m from the node, up to the cap
+        for (std::int64_t d = 0; d <= cap_g; d += step_mm) prof.push_back(facing_gap(ra, ta, t_on_r_left, r_on_t_left, static_cast<double>(d) / 1000.0));
+        double nose_r = 0; bool nose_r_reached = false;
+        for (std::size_t k = 0; k < prof.size(); ++k) {
+            if (!prof[k]) break;
+            if (*prof[k] >= need) {
+                nose_r = k == 0 || !prof[k - 1] ? 0.0
+                       : (static_cast<double>(k - 1) + (need - *prof[k - 1]) / (*prof[k] - *prof[k - 1])) * static_cast<double>(ml.gore_step_m);
+                nose_r_reached = true; break;
+            }
+            nose_r = static_cast<double>(k) * static_cast<double>(ml.gore_step_m);
+        }
+        const double tol = static_cast<double>(ml.gore_overlap_tol_mm) / 1000.0;
+        const auto overlap = [&](std::int64_t len, std::int64_t& at) {   // the worst shoulder overlap with ramp length len
+            double worst = -1e9; at = 0;
+            for (std::size_t k = 0; k < prof.size() && static_cast<std::int64_t>(k) * step_mm <= len; ++k) {
+                if (!prof[k]) continue;
+                const double s = static_cast<double>(static_cast<std::int64_t>(k) * step_mm) / static_cast<double>(len);
+                const double o = road_smooth_step(s) * need - std::max(*prof[k], 0.0);
+                if (o > worst) { worst = o; at = static_cast<std::int64_t>(k) * step_mm; }
+            }
+            return worst;
+        };
+        t.gore_link_nose_mm = static_cast<std::int32_t>(std::round(nose_r * 1000.0)); t.gore_link_nose_reached = nose_r_reached;
+        // A gap that holds both shoulders at the node already (or none measured there): no ramp, as in stage 1.
+        std::int64_t lg = (static_cast<std::int64_t>(t.gore_link_nose_mm) + step_mm - 1) / step_mm * step_mm;
+        if (lg <= 0) continue;
+        bool capped = false;
+        std::int64_t at = 0;
+        double worst = 0;
+        if (lg >= cap_g) { lg = cap_g; worst = overlap(lg, at); capped = worst > tol; }
+        else for (;; lg += step_mm) {
+            if (lg >= cap_g) { lg = cap_g; worst = overlap(lg, at); capped = worst > tol; break; }
+            worst = overlap(lg, at);
+            if (worst <= tol) break;
+        }
+        // Would a longer ramp have met the condition where the stretches (not gore_max_m) stopped it?
+        const std::int64_t gore_max_mm = static_cast<std::int64_t>(ml.gore_max_m) * 1000;
+        t.gore_ramp_mm = static_cast<std::int32_t>(lg);
+        t.gore_overlap_mm = static_cast<std::int32_t>(std::round(std::max(worst, 0.0) * 1000.0));
+        t.gore_overlap_at_mm = static_cast<std::int32_t>(at);
+        t.gore_capped = capped;
+        t.gore_stretch_bound = capped && std::min(allow_self, allow_other) < gore_max_mm;
+        t.gore_other_shorter = allow_other < allow_self && allow_other < gore_max_mm;
         auto& band = xs.bands[*sb];
         // The section format bounds the longest ramp at one end plus the longest at the other (every band and the offset) by the
-        // stretch length: the gore ramp yields to whatever already reaches in from the far end.
-        const std::int64_t far_max = far_ramp_max(xs, at_end);
-        const std::int64_t len = std::min<std::int64_t>(t.gore_nose_mm, length_mm - far_max);
+        // stretch length: the gore ramp yields to whatever reaches in from the far end of the served section (its other end may
+        // carry a gore ramp the pre-gore length above did not see).
+        const std::int64_t len = std::min<std::int64_t>(lg, length_mm - far_ramp_max(xs, at_end));
+        t.gore_ramp_trimmed = len < lg;
         if (len <= 0) continue;
         (at_end ? band.end : band.start) = WidthRamp{static_cast<std::int32_t>(len), 0};
     }

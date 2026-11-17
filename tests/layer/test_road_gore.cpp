@@ -18,6 +18,11 @@
 //   S6 apply_clearance_landing: L = min(L_clear, cap) without max(base, .) - a link that clears early lands faster -> L2 fails
 //   S7 apply_clearance_landing: no lengthening past L_clear                                                       -> L1, L3 fail
 //      (worst gap L1 -2.39 m at 114 m, L3 -0.64 m at 52 m; with the rule +0.004 m and +0.08 m)
+//
+// Overlap-free gore ramp (ROADS stage 2b, GB1-GB2; G1-G3 check the shared L_g). Recorded sabotages (2026-11-17):
+//   S8 apply_gore_shoulders: L_g = the first candidate (the nose rounded up to gore_step_m), no lengthening      -> GB1, GB2 fail
+//   S9 apply_gore_shoulders: each way its own gap profile instead of the link's                                 -> G3 fails (the two
+//      facing shoulders of the mirrored scene get different lengths)
 #include "road_fixture.h"
 #include "g2m/layer/road_cross_section.h"
 #include <catch2/catch_test_macros.hpp>
@@ -106,8 +111,12 @@ void check_arm(const Resolved& w, bool at_end, bool facing_left, const char* wha
     REQUIRE(i < w.xs.bands.size());
     REQUIRE(w.xs.bands[i].kind == LaneKind::Shoulder);
     const auto& ramp = at_end ? w.xs.bands[i].end : w.xs.bands[i].start;
-    CHECK(ramp.from_width_mm == 0); CHECK(ramp.length_mm == t.gore_nose_mm);
-    const double full = w.xs.bands[i].width_mm / 1000.0, nose = t.gore_nose_mm / 1000.0;
+    // Stage 2b: the ramp runs over L_g (the node's shared length), a multiple of gore_step_m at or past the link's nose.
+    CHECK(ramp.from_width_mm == 0); CHECK(ramp.length_mm == t.gore_ramp_mm);
+    CHECK_FALSE(t.gore_ramp_trimmed); CHECK_FALSE(t.gore_capped);
+    CHECK(t.gore_ramp_mm % 5000 == 0); CHECK(t.gore_ramp_mm >= t.gore_link_nose_mm);
+    CHECK(t.gore_overlap_mm <= 250);
+    const double full = w.xs.bands[i].width_mm / 1000.0, nose = t.gore_ramp_mm / 1000.0;
     const auto st = [&](double d) { return at_end ? w.length - d : d; };
     CHECK(std::abs(band_width(w.xs, i, st(0.0))) < 1e-6);
     CHECK(std::abs(band_width(w.xs, i, st(nose / 2)) - full / 2) < 0.01);   // the smoothstep's midpoint
@@ -131,6 +140,8 @@ void check_scene(bool diverge, bool left) {
     // R lies right of A for a right-hand ramp: A's right shoulder and R's left shoulder face each other.
     check_arm(a, at_end, left, "the through way");
     check_arm(r, at_end, !left, "the link");
+    // One length per node: both facing shoulders share it.
+    CHECK(a.trace.ends[at_end ? 1 : 0].gore_ramp_mm == r.trace.ends[at_end ? 1 : 0].gore_ramp_mm);
     // The single arm keeps its shoulders.
     const auto& tb = b.trace.ends[at_end ? 0 : 1];
     CHECK_FALSE(tb.gore);
@@ -283,4 +294,68 @@ TEST_CASE("L3 G5's link 12 m off: the crossing the gore rule reported is gone", 
     CHECK(after >= -0.05);
     const auto r = resolve_in(*builder, s.r, builtin_road_rules_de());
     CHECK(r.trace.ends[1].gore_min_gap_mm >= -50);
+}
+
+// ---- Overlap-free gore ramp (ROADS stage 2b) ----
+namespace {
+// The worst overlap of the two facing shoulders (R's left, A's right; R on A's right, both ending at node 2), read from the served
+// sections through each way's own reference: max(0, -(gap between the shoulders' outer edges)) over R's last `upto` metres.
+// `stage1` puts back the stage-1 ramp: each facing shoulder ramps over that way's own nose.
+double worst_shoulder_overlap(const RoadReferenceBuilder& builder, const Scene& s, const RoadRules& rules, bool stage1, double& at) {
+    auto a = resolve_in(builder, s.a, rules), r = resolve_in(builder, s.r, rules);
+    const std::size_t rf = first_counted(r.xs), al = last_counted(a.xs);
+    REQUIRE(rf > 0); REQUIRE(r.xs.bands[rf - 1].kind == LaneKind::Shoulder);
+    REQUIRE(al + 1 < a.xs.bands.size()); REQUIRE(a.xs.bands[al + 1].kind == LaneKind::Shoulder);
+    if (stage1) {
+        r.xs.bands[rf - 1].end.length_mm = r.trace.ends[1].gore_nose_mm;
+        a.xs.bands[al + 1].end.length_mm = a.trace.ends[1].gore_nose_mm;
+    }
+    const ReferenceFitLimits limits = served_limits(rules);
+    const auto rref = builder.fit_stretch(s.r, (*builder.stretches(s.r))[0], limits); REQUIRE(rref);
+    const auto aref = builder.fit_stretch(s.a, (*builder.stretches(s.a))[0], limits); REQUIRE(aref);
+    std::vector<double> rb(r.xs.bands.size() + 1), ab(a.xs.bands.size() + 1);
+    double worst = 0; at = -1;
+    for (double d = 0; d <= std::min(200.0, r.length); d += 0.5) {
+        REQUIRE(r.xs.boundaries_at(r.length - d, rb));
+        const auto p = lateral_point(*rref, r.length - d, rb[rf - 1]); REQUIRE(p);   // R's left shoulder, outer edge
+        const double sa = p->x - (-400.0);
+        if (sa < 0 || sa > a.length) continue;
+        REQUIRE(a.xs.boundaries_at(sa, ab));
+        const auto q = lateral_point(*aref, sa, ab[al + 2]); REQUIRE(q);             // A's right shoulder, outer edge
+        const double ov = p->y - q->y;                                                 // R's shoulder reaches above A's
+        if (ov > worst) { worst = ov; at = d; }
+    }
+    return worst;
+}
+} // namespace
+
+TEST_CASE("GB1 a late-opening gap: the shared ramp keeps the facing shoulders within the tolerance where the stage-1 nose ramp did not", "[layer][road_gore][roads]") {
+    // G5's 12 m link: after the clearance landing (stage 2a) its lane edge runs close beside A's for ~80 m and only then opens.
+    const auto s = scene(false, false, 12);
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    const auto& rules = builtin_road_rules_de();
+    const double tol = rules.merge_lane.gore_overlap_tol_mm / 1000.0;
+    double at1 = 0, at2 = 0;
+    const double o1 = worst_shoulder_overlap(*builder, s, rules, true, at1), o2 = worst_shoulder_overlap(*builder, s, rules, false, at2);
+    const auto r = resolve_in(*builder, s.r, rules), a = resolve_in(*builder, s.a, rules);
+    const auto& t = r.trace.ends[1];
+    INFO("stage-1 overlap " << o1 << " m at " << at1 << " m (nose " << t.gore_nose_mm << " mm), stage 2b " << o2 << " m at " << at2
+         << " m (L_g " << t.gore_ramp_mm << " mm, traced " << t.gore_overlap_mm << " mm)");
+    CHECK(o1 > tol);           // measured 0.651 m at 62 m (2026-11-17)
+    CHECK(o2 <= tol + 0.01);   // measured 0.219 m at 63 m; the rule samples every 5 m, this every 0.5 m
+    CHECK_FALSE(t.gore_capped);
+    CHECK(t.gore_ramp_mm > t.gore_nose_mm);   // the shoulders reach full width past the nose
+    CHECK(a.trace.ends[1].gore_ramp_mm == t.gore_ramp_mm);
+}
+TEST_CASE("GB2 a gap that does not open within gore_max_m: the cap is reported with the worst overlap", "[layer][road_gore][roads]") {
+    const auto s = inside_scene();
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    const auto& rules = builtin_road_rules_de();
+    const auto r = resolve_in(*builder, s.r, rules), a = resolve_in(*builder, s.a, rules);
+    for (const auto* w : {&r, &a}) {
+        const auto& t = w->trace.ends[1];
+        CHECK(t.gore_capped); CHECK_FALSE(t.gore_stretch_bound);
+        CHECK(t.gore_ramp_mm == rules.merge_lane.gore_max_m * 1000);
+        CHECK(t.gore_overlap_mm > rules.merge_lane.gore_overlap_tol_mm);   // measured 853 mm at 118 m
+    }
 }

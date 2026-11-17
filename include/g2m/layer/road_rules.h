@@ -165,6 +165,8 @@ struct MergeLaneRules {
     // carriageway's lanes, and is lengthened in gore_step_m steps while the shifted lanes still cross; at most landing_clear_max_m
     // (0 = off, only in rules built in code: the loader requires at least landing_max_m).
     std::int32_t landing_clear_max_m = 0;
+    // Overlap-free gore ramp (ROADS stage 2b): the facing shoulders' smoothstep may run ahead of the lane-edge gap by this much.
+    std::int32_t gore_overlap_tol_mm = 0;
     friend bool operator==(const MergeLaneRules&, const MergeLaneRules&) = default;
 };
 
@@ -222,7 +224,7 @@ struct RoadRules {
 // and the merge_lane block (G2M-028; angles 1..89 degrees, landing shift length
 // per metre 1..1000 with min <= max in 1..2000 m, maximum landing offset 1..20000 mm, and the landing S-ramp
 // curvature bound 4 W / a^2 <= 1 / min_edge_radius_m of every link class at the largest offset;
-// gore_max_m 1..1000, gore_step_m 1..50 <= gore_max_m, landing_clear_max_m landing_max_m..2000).
+// gore_max_m 1..1000, gore_step_m 1..50 <= gore_max_m, landing_clear_max_m landing_max_m..2000, gore_overlap_tol_mm 0..2000).
 Result<RoadRules> load_road_rules(std::span<const std::byte> json);
 // The embedded data/road_rules/de.json, parsed once. A corrupt build aborts.
 const RoadRules& builtin_road_rules_de();

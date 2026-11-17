@@ -178,7 +178,7 @@ bool read_merge_lane_rules(Reader& rd, const json& root, MergeLaneRules& out) {
     const auto* m = rd.field(root, "root", "merge_lane");
     static constexpr const char* kPath = "merge_lane";
     if (!m || !rd.keys(*m, kPath, {"enabled", "max_through_deflection_deg", "max_ramp_angle_deg", "direction_probe_m", "landing_m_per_m",
-            "landing_min_m", "landing_max_m", "max_landing_offset_mm", "gore_max_m", "gore_step_m", "landing_clear_max_m"}) ||
+            "landing_min_m", "landing_max_m", "max_landing_offset_mm", "gore_max_m", "gore_step_m", "landing_clear_max_m", "gore_overlap_tol_mm"}) ||
         !rd.boolean(*m, kPath, "enabled", out.enabled) ||
         !rd.integer(*m, kPath, "max_through_deflection_deg", 1, 89, out.max_through_deflection_deg) ||
         !rd.integer(*m, kPath, "max_ramp_angle_deg", 1, 89, out.max_ramp_angle_deg) ||
@@ -189,7 +189,8 @@ bool read_merge_lane_rules(Reader& rd, const json& root, MergeLaneRules& out) {
         !rd.integer(*m, kPath, "max_landing_offset_mm", 1, 20000, out.max_landing_offset_mm) ||
         !rd.integer(*m, kPath, "gore_max_m", 1, 1000, out.gore_max_m) ||
         !rd.integer(*m, kPath, "gore_step_m", 1, 50, out.gore_step_m) ||
-        !rd.integer(*m, kPath, "landing_clear_max_m", 1, 2000, out.landing_clear_max_m)) return false;
+        !rd.integer(*m, kPath, "landing_clear_max_m", 1, 2000, out.landing_clear_max_m) ||
+        !rd.integer(*m, kPath, "gore_overlap_tol_mm", 0, 2000, out.gore_overlap_tol_mm)) return false;
     if (out.gore_step_m > out.gore_max_m) return rd.fail("merge_lane: gore_step_m exceeds gore_max_m");
     if (out.landing_min_m > out.landing_max_m) return rd.fail("merge_lane: landing_min_m exceeds landing_max_m");
     if (out.landing_clear_max_m < out.landing_max_m) return rd.fail("merge_lane: landing_clear_max_m below landing_max_m");
