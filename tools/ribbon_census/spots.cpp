@@ -1,0 +1,314 @@
+// tools/ribbon_census/spots.cpp - g2m_ribbon_census --spots E0 N0 E1 N1: the served road data at every stretch end in a box,
+// tied to the ribbon the game draws there (diagnostics, stage 0c of the merge-lane work). Prints line records:
+//
+//   W   way hw lanes oneway n E N E N ...      the way's OSM polyline (every way with a stretch in the box), once
+//   X   way start_ref end_ref len_m hw counted   one served entry (stretch) with a cross-section in the box
+//   B   way start_ref i kind dir counted width_mm start_len start_from end_len end_from   its bands
+//   O   way start_ref mode start_mm start_len end_mm end_len   its offset correction
+//   END way start_ref at_end node deg E N kind neighbour raw_delta_mm      a stretch end in the box with its served join
+//   R   way start_ref v ref_E ref_N lat_lo lat_hi l_E l_N r_E r_N w lanes flags   one ribbon row of the entry's road bed
+//       (strip 1, from build_road_ribbons on a flat ground, PointSampled): lat_lo/lat_hi = lateral extent from the
+//       reference line, l/r = the bed's left/right edge point, w/lanes/flags = the row's vertex attributes
+//   NODE node E N deg codes                  a stretch end node; codes: PATCH (a served junction patch), JD:<decline>,
+//       LAND (a ramp landed here), TAPER (a LaneChange join here), M:<merge reason> (degree-3 classification), J:<kind>
+//   OV  wayA srA wayB srB s0 s1 maxw meanw E N   two entries' road beds overlapping more than 0.5 m wide over more than
+//       10 m (a raster of 0.25 m cells, 1 m station bins of A; s0/s1 stations of A)
+//
+// Rows are matched to entries by geometry: a vertex at station v belongs to the entry whose reference normal at v
+// passes through it (tangential residual < 2 cm, lateral < 40 m). Rows of a tile are the ones the tile owns.
+#include "g2m/core/tile_key.h"
+#include "g2m/layer/road_cross_section.h"
+#include "g2m/layer/road_geom_tile.h"
+#include "g2m/layer/road_reference.h"
+#include "g2m/layer/road_rules.h"
+#include "g2m/world/road_ribbons.h"
+#include "g2m/world/terrain_service.h"
+#include "g2m/world/ticket.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <map>
+#include <set>
+#include <string>
+#include <tuple>
+#include <vector>
+
+using namespace g2m;
+using namespace g2m::world;
+
+namespace {
+
+const char* join_name(JoinKind k) {
+    switch (k) {
+    case JoinKind::None: return "none";
+    case JoinKind::Consistent: return "consistent";
+    case JoinKind::LaneChange: return "lane_change";
+    case JoinKind::InferredAlignment: return "inferred_alignment";
+    case JoinKind::PlacementConflict: return "placement_conflict";
+    case JoinKind::Landing: return "landing";
+    }
+    return "?";
+}
+const char* decline_name(JunctionDecline d) {
+    switch (d) {
+    case JunctionDecline::None: return "none";
+    case JunctionDecline::ClusterTooLarge: return "cluster_too_large";
+    case JunctionDecline::ReachExceeded: return "reach_exceeded";
+    case JunctionDecline::SingleApproach: return "single_approach";
+    case JunctionDecline::Degenerate: return "degenerate";
+    case JunctionDecline::Underground: return "underground";
+    case JunctionDecline::MergeLane: return "merge_lane";
+    }
+    return "?";
+}
+const char* offset_name(OffsetMode m) {
+    switch (m) {
+    case OffsetMode::None: return "none";
+    case OffsetMode::Ramps: return "ramps";
+    case OffsetMode::Hold: return "hold";
+    case OffsetMode::Transition: return "transition";
+    }
+    return "?";
+}
+std::string tag_of(const RoadGraphWay& w, const char* key) {
+    for (const auto& [k, v] : w.tags) if (k == key) return v;
+    return "-";
+}
+const RoadGraphWay* find_way(const RoadGraph& g, std::int64_t id) {
+    const auto it = std::lower_bound(g.ways.begin(), g.ways.end(), id, [](const RoadGraphWay& w, std::int64_t x) { return w.osm_id < x; });
+    return it != g.ways.end() && it->osm_id == id ? &*it : nullptr;
+}
+const RoadGraphNode* find_node(const RoadGraph& g, std::int64_t id) {
+    const auto it = std::lower_bound(g.nodes.begin(), g.nodes.end(), id, [](const RoadGraphNode& n, std::int64_t x) { return n.osm_id < x; });
+    return it != g.nodes.end() && it->osm_id == id ? &*it : nullptr;
+}
+using EntryKey = std::pair<std::int64_t, std::uint32_t>;
+
+} // namespace
+
+int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]) {
+    const RoadRules& rules = builtin_road_rules_de();
+    const auto k0 = tile_key_at(zone, 2, box[0], box[1]), k1 = tile_key_at(zone, 2, box[2], box[3]);
+    if (!k0 || !k1) return 1;
+    const auto in_box = [&](double e, double n, double m = 0) { return e >= box[0] - m && e <= box[2] + m && n >= box[1] - m && n <= box[3] + m; };
+    std::set<std::int64_t> ways_printed;
+    std::map<std::int64_t, std::set<std::string>> node_codes;
+    std::map<std::int64_t, std::tuple<double, double, std::uint32_t>> node_pos;
+    std::set<EntryKey> entries_printed;
+    struct Ov { std::map<int, int> cells; std::map<int, std::pair<double, double>> at; };
+    std::map<std::tuple<std::int64_t, std::uint32_t, std::int64_t, std::uint32_t>, Ov> overlaps;
+    const RoadRibbonGround flat = [](double, double) -> std::optional<double> { return 0.0; };
+    RoadRibbonOptions point;
+    point.drape = RibbonDrape::PointSampled;
+    for (std::int32_t ty = k0->y; ty <= k1->y; ++ty)
+        for (std::int32_t tx = k0->x; tx <= k1->x; ++tx) {
+            TileKey key = *k0; key.x = tx; key.y = ty;
+            auto ticket = svc.road_geom(key, Priority::Render);
+            ticket.wait_for(std::chrono::minutes(30));
+            const auto geometry = ticket.value();
+            if (!geometry) continue;
+            const RoadGraph& G = geometry->source.graph;
+            const auto builder = RoadReferenceBuilder::make(G);
+            std::map<std::int64_t, int> degree;
+            for (const auto& e : G.edges) { ++degree[e.from_node]; ++degree[e.to_node]; }
+            const double ox = static_cast<double>(key.min_easting()), oy = static_cast<double>(key.min_northing());
+            const auto owned = [&](double e, double n) { return std::floor(e / 1024) == key.x && std::floor(n / 1024) == key.y; };
+            // entries in the box (any reference point within 60 m of it)
+            std::vector<std::size_t> sel;
+            for (std::size_t i = 0; i < geometry->entries.size(); ++i) {
+                const auto& en = geometry->entries[i];
+                if (!en.profile) continue;
+                const auto& ref = en.profile->reference;
+                bool hit = false;
+                for (double s = 0; s <= ref.length_m + 1e-9 && !hit; s += 2.0) {
+                    const auto p = ref.at(std::min(s, ref.length_m));
+                    if (p && in_box(p->x, p->y, 60)) hit = true;
+                }
+                if (hit) sel.push_back(i);
+            }
+            // junction codes (owner tile records)
+            for (const auto& j : geometry->junctions)
+                for (const auto n : j.nodes) {
+                    if (j.decline == JunctionDecline::None) node_codes[n].insert("PATCH");
+                    else node_codes[n].insert(std::string("JD:") + decline_name(j.decline));
+                }
+            for (const std::size_t i : sel) {
+                const auto& en = geometry->entries[i];
+                const auto* way = find_way(G, en.way_id);
+                if (!way) continue;
+                const EntryKey ek{en.way_id, en.stretch.start_ref};
+                const bool first = entries_printed.insert(ek).second;
+                if (ways_printed.insert(en.way_id).second) {
+                    std::printf("W %lld %s %s %s %zu", static_cast<long long>(en.way_id), tag_of(*way, "highway").c_str(), tag_of(*way, "lanes").c_str(),
+                                tag_of(*way, "oneway").c_str(), way->node_ids.size());
+                    for (const auto id : way->node_ids) {
+                        const auto* n = find_node(G, id);
+                        if (n) std::printf(" %.2f %.2f", static_cast<double>(n->position.x) / 1000.0, static_cast<double>(n->position.y) / 1000.0);
+                        else std::printf(" nan nan");
+                    }
+                    std::printf("\n");
+                }
+                if (!first) continue;
+                int counted = 0;
+                if (en.cross_section) for (const auto& b : en.cross_section->bands) counted += b.counted ? 1 : 0;
+                std::printf("X %lld %u %u %.2f %s %d %s\n", static_cast<long long>(en.way_id), en.stretch.start_ref, en.stretch.end_ref, en.profile->reference.length_m,
+                            tag_of(*way, "highway").c_str(), counted, en.cross_section ? "xs" : "noxs");
+                if (!en.cross_section) continue;
+                const auto& xs = *en.cross_section;
+                for (std::size_t b = 0; b < xs.bands.size(); ++b) {
+                    const auto& band = xs.bands[b];
+                    std::printf("B %lld %u %zu %d %d %d %d %d %d %d %d\n", static_cast<long long>(en.way_id), en.stretch.start_ref, b, static_cast<int>(band.kind),
+                                static_cast<int>(band.direction), band.counted ? 1 : 0, band.width_mm, band.start.length_mm, band.start.from_width_mm, band.end.length_mm,
+                                band.end.from_width_mm);
+                }
+                std::printf("O %lld %u %s %d %d %d %d\n", static_cast<long long>(en.way_id), en.stretch.start_ref, offset_name(xs.offset.mode), xs.offset.start_mm,
+                            xs.offset.start_length_mm, xs.offset.end_mm, xs.offset.end_length_mm);
+                for (const bool at_end : {false, true}) {
+                    const std::uint32_t r = at_end ? en.stretch.end_ref : en.stretch.start_ref;
+                    if (r >= way->node_ids.size()) continue;
+                    const std::int64_t node = way->node_ids[r];
+                    const auto* n = find_node(G, node);
+                    if (!n) continue;
+                    const double e = static_cast<double>(n->position.x) / 1000.0, nn = static_cast<double>(n->position.y) / 1000.0;
+                    const auto& jr = at_end ? xs.end_join : xs.start_join;
+                    const int deg = degree[node];
+                    std::printf("END %lld %u %d %lld %d %.2f %.2f %s %lld %d\n", static_cast<long long>(en.way_id), en.stretch.start_ref, at_end ? 1 : 0,
+                                static_cast<long long>(node), deg, e, nn, join_name(jr.kind), static_cast<long long>(jr.neighbour_way_id), jr.raw_delta_mm);
+                    if (owned(e, nn)) node_pos[node] = {e, nn, static_cast<std::uint32_t>(deg)};
+                    if (jr.kind == JoinKind::Landing) node_codes[node].insert("LAND");
+                    else if (jr.kind == JoinKind::LaneChange) node_codes[node].insert("TAPER");
+                    else if (jr.kind != JoinKind::None) node_codes[node].insert(std::string("J:") + join_name(jr.kind));
+                    if (deg >= 3 && builder && owned(e, nn)) {
+                        const auto d = diagnose_merge_node(*builder, node, rules);
+                        node_codes[node].insert(std::string("M:") + merge_node_reason_name(d.reason));
+                    }
+                }
+            }
+            // ribbon rows of the selected entries, and the bed overlap raster
+            const RoadRibbonTile mesh = build_road_ribbons(*geometry, key, flat, 0.0, {}, point);
+            struct Cand { std::size_t entry; double lo_e, lo_n, hi_e, hi_n; };
+            std::vector<Cand> cands;
+            for (const std::size_t i : sel) {
+                const auto& ref = geometry->entries[i].profile->reference;
+                Cand c{i, 1e30, 1e30, -1e30, -1e30};
+                for (double s = 0; s <= ref.length_m + 1e-9; s += 2.0) {
+                    const auto p = ref.at(std::min(s, ref.length_m));
+                    if (!p) continue;
+                    c.lo_e = std::min(c.lo_e, p->x); c.hi_e = std::max(c.hi_e, p->x); c.lo_n = std::min(c.lo_n, p->y); c.hi_n = std::max(c.hi_n, p->y);
+                }
+                if (const auto p = ref.at(ref.length_m)) { c.lo_e = std::min(c.lo_e, p->x); c.hi_e = std::max(c.hi_e, p->x); c.lo_n = std::min(c.lo_n, p->y); c.hi_n = std::max(c.hi_n, p->y); }
+                cands.push_back(c);
+            }
+            // vertex -> entry (or npos)
+            std::vector<std::size_t> owner(mesh.vertices.size(), static_cast<std::size_t>(-1));
+            std::vector<double> lateral(mesh.vertices.size(), 0.0);
+            for (std::size_t vi = 0; vi < mesh.vertices.size(); ++vi) {
+                const auto& v = mesh.vertices[vi];
+                if ((static_cast<int>(v.flags) & (16 | 32)) || v.verge > 0.5f || v.lanes == 0) continue;
+                const double e = ox + v.x, n = oy + v.y;
+                double best = 0.02;
+                for (const auto& c : cands) {
+                    if (e < c.lo_e - 40 || e > c.hi_e + 40 || n < c.lo_n - 40 || n > c.hi_n + 40) continue;
+                    const auto& ref = geometry->entries[c.entry].profile->reference;
+                    const double s = std::clamp(static_cast<double>(v.v), 0.0, ref.length_m);
+                    const auto p = ref.at(s);
+                    if (!p) continue;
+                    const double dx = e - p->x, dy = n - p->y, ce = std::cos(p->heading), se = std::sin(p->heading);
+                    const double tan_r = std::abs(dx * ce + dy * se), lat = -dx * se + dy * ce;
+                    if (tan_r < best && std::abs(lat) < 40) { best = tan_r; owner[vi] = c.entry; lateral[vi] = lat; }
+                }
+            }
+            // rows: per (entry, v) the lateral extent
+            struct RowAcc { double lo = 1e30, hi = -1e30; float w = 0, ln = 0, fl = 0; };
+            std::map<std::pair<std::size_t, long long>, RowAcc> rows;
+            for (std::size_t vi = 0; vi < mesh.vertices.size(); ++vi) {
+                if (owner[vi] == static_cast<std::size_t>(-1)) continue;
+                const auto& v = mesh.vertices[vi];
+                auto& r = rows[{owner[vi], std::llround(static_cast<double>(v.v) * 1000.0)}];
+                r.lo = std::min(r.lo, lateral[vi]); r.hi = std::max(r.hi, lateral[vi]); r.w = v.width; r.ln = v.lanes; r.fl = std::max(r.fl, v.flags);
+            }
+            for (const auto& [k, r] : rows) {
+                const auto& en = geometry->entries[k.first];
+                const double s = static_cast<double>(k.second) / 1000.0;
+                const auto p = en.profile->reference.at(std::clamp(s, 0.0, en.profile->reference.length_m));
+                if (!p) continue;
+                const double nx = -std::sin(p->heading), ny = std::cos(p->heading);
+                std::printf("R %lld %u %.3f %.2f %.2f %.3f %.3f %.2f %.2f %.2f %.2f %.3f %g %g\n", static_cast<long long>(en.way_id), en.stretch.start_ref, s, p->x, p->y,
+                            r.lo, r.hi, p->x + nx * r.hi, p->y + ny * r.hi, p->x + nx * r.lo, p->y + ny * r.lo, static_cast<double>(r.w), static_cast<double>(r.ln),
+                            static_cast<double>(r.fl));
+            }
+            // raster of the bed triangles inside the box: first owner wins, a second entry records an overlap cell
+            const double cell = 0.25;
+            const double r_lo_e = std::max(ox, box[0]), r_lo_n = std::max(oy, box[1]), r_hi_e = std::min(ox + 1024, box[2]), r_hi_n = std::min(oy + 1024, box[3]);
+            if (r_hi_e <= r_lo_e || r_hi_n <= r_lo_n) continue;
+            const int nx_c = static_cast<int>(std::ceil((r_hi_e - r_lo_e) / cell)), ny_c = static_cast<int>(std::ceil((r_hi_n - r_lo_n) / cell));
+            std::vector<std::int32_t> cell_owner(static_cast<std::size_t>(nx_c) * static_cast<std::size_t>(ny_c), -1);
+            std::vector<float> cell_station(cell_owner.size(), 0.f);
+            for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+                const std::size_t a = static_cast<std::size_t>(mesh.indices[t]), b = static_cast<std::size_t>(mesh.indices[t + 1]), c = static_cast<std::size_t>(mesh.indices[t + 2]);
+                if (owner[a] == static_cast<std::size_t>(-1) || owner[a] != owner[b] || owner[a] != owner[c]) continue;
+                const std::size_t ei = owner[a];
+                const double xa = ox + mesh.vertices[a].x, ya = oy + mesh.vertices[a].y, xb = ox + mesh.vertices[b].x, yb = oy + mesh.vertices[b].y,
+                             xc = ox + mesh.vertices[c].x, yc = oy + mesh.vertices[c].y;
+                const double den = (yb - yc) * (xa - xc) + (xc - xb) * (ya - yc);
+                if (std::abs(den) < 1e-12) continue;
+                const int i0 = std::max(0, static_cast<int>(std::floor((std::min({xa, xb, xc}) - r_lo_e) / cell))),
+                          i1 = std::min(nx_c - 1, static_cast<int>(std::floor((std::max({xa, xb, xc}) - r_lo_e) / cell)));
+                const int j0 = std::max(0, static_cast<int>(std::floor((std::min({ya, yb, yc}) - r_lo_n) / cell))),
+                          j1 = std::min(ny_c - 1, static_cast<int>(std::floor((std::max({ya, yb, yc}) - r_lo_n) / cell)));
+                for (int j = j0; j <= j1; ++j)
+                    for (int i = i0; i <= i1; ++i) {
+                        const double px = r_lo_e + (i + 0.5) * cell, py = r_lo_n + (j + 0.5) * cell;
+                        const double l0 = ((yb - yc) * (px - xc) + (xc - xb) * (py - yc)) / den, l1 = ((yc - ya) * (px - xc) + (xa - xc) * (py - yc)) / den, l2 = 1 - l0 - l1;
+                        if (l0 < 0 || l1 < 0 || l2 < 0) continue;
+                        const double st = l0 * mesh.vertices[a].v + l1 * mesh.vertices[b].v + l2 * mesh.vertices[c].v;
+                        const std::size_t ci = static_cast<std::size_t>(j) * static_cast<std::size_t>(nx_c) + static_cast<std::size_t>(i);
+                        if (cell_owner[ci] < 0) { cell_owner[ci] = static_cast<std::int32_t>(ei); cell_station[ci] = static_cast<float>(st); continue; }
+                        const std::size_t ej = static_cast<std::size_t>(cell_owner[ci]);
+                        if (ej == ei) continue;
+                        const auto& A = geometry->entries[ej];
+                        const auto& Bn = geometry->entries[ei];
+                        auto& ov = overlaps[{A.way_id, A.stretch.start_ref, Bn.way_id, Bn.stretch.start_ref}];
+                        const int bin = static_cast<int>(std::floor(cell_station[ci]));
+                        ++ov.cells[bin];
+                        ov.at[bin] = {px, py};
+                    }
+            }
+        }
+    for (const auto& [node, codes] : node_codes) {
+        const auto it = node_pos.find(node);
+        if (it == node_pos.end()) continue;
+        const auto [e, n, deg] = it->second;
+        if (!in_box(e, n, 0)) continue;
+        std::printf("NODE %lld %.2f %.2f %u", static_cast<long long>(node), e, n, deg);
+        for (const auto& c : codes) std::printf(" %s", c.c_str());
+        std::printf("\n");
+    }
+    for (const auto& [node, pos] : node_pos)
+        if (!node_codes.contains(node) && in_box(std::get<0>(pos), std::get<1>(pos), 0))
+            std::printf("NODE %lld %.2f %.2f %u\n", static_cast<long long>(node), std::get<0>(pos), std::get<1>(pos), std::get<2>(pos));
+    for (const auto& [k, ov] : overlaps) {
+        // runs of consecutive 1 m bins of A wider than 0.5 m
+        int run0 = 0, prev = 0, len = 0;
+        double maxw = 0, sumw = 0;
+        const auto flush = [&]() {
+            if (len > 10) {
+                const auto at = ov.at.at(run0 + len / 2);
+                std::printf("OV %lld %u %lld %u %d %d %.2f %.2f %.1f %.1f\n", static_cast<long long>(std::get<0>(k)), std::get<1>(k), static_cast<long long>(std::get<2>(k)),
+                            std::get<3>(k), run0, run0 + len, maxw, sumw / len, at.first, at.second);
+            }
+            len = 0; maxw = 0; sumw = 0;
+        };
+        for (const auto& [bin, cells] : ov.cells) {
+            const double w = cells * 0.0625;
+            if (w <= 0.5) { flush(); continue; }
+            if (len > 0 && bin != prev + 1) flush();
+            if (len == 0) run0 = bin;
+            ++len; prev = bin; maxw = std::max(maxw, w); sumw += w;
+        }
+        flush();
+    }
+    return 0;
+}

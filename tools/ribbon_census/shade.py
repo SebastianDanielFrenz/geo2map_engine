@@ -1,9 +1,15 @@
-import re,sys,math
+import re,sys,math,os
 import numpy as np
 from PIL import Image,ImageDraw,ImageFont
-src,out=sys.argv[1],sys.argv[2]; ce,cn,half=map(float,sys.argv[3:6]); LW=float(sys.argv[6])
-marks=[(float(a),float(b),c) for a,b,c in (m.split(',') for m in sys.argv[7:])]
-W=2000; sc=W/(2*half)
+# options (before or after the positional arguments): --size N output pixels (default 1300); --ann RECORDS draws the
+# stage-0c annotation overlay from `g2m_ribbon_census ... --spots` records (spots.py): OSM way lines and ids, stretch-end
+# nodes with their served codes, width ramps (orange), offset ramps (magenta), landings (red), square steps, slivers.
+argv=list(sys.argv[1:]); OUT_PX=1300; ANN=None
+while '--size' in argv: i=argv.index('--size'); OUT_PX=int(argv[i+1]); del argv[i:i+2]
+while '--ann' in argv: i=argv.index('--ann'); ANN=argv[i+1]; del argv[i:i+2]
+src,out=argv[0],argv[1]; ce,cn,half=map(float,argv[2:5]); LW=float(argv[5])
+marks=[(float(a),float(b),c) for a,b,c in (m.split(',') for m in argv[6:])]
+W=max(2000,round(OUT_PX*2000/1300)); sc=W/(2*half); FS=W/2000
 pat=re.compile(r"E ([\d.]+) N ([\d.]+) z \S+ terr \S+ v (\S+) fl (\S+) vg (\S+) u (\S+) w (\S+) ln (\S+) fw (\S+) fd (\S+)")
 tris=[]
 for line in open(src,encoding='utf-8',errors='replace'):
@@ -64,16 +70,76 @@ for k,a in tris:
     col=base[None,None,:]*(1-paint[...,None])+PAINT*paint[...,None]
     sub=img[y0:y1+1,x0:x1+1]; sub[m]=col[m]
 im=Image.fromarray(img.astype(np.uint8)); d=ImageDraw.Draw(im)
-try: f=ImageFont.truetype('arial.ttf',24)
+try: f=ImageFont.truetype('arial.ttf',round(24*FS))
 except: f=None
 g=20 if half<=120 else 50
 x=math.ceil((ce-half)/g)*g
 while x<ce+half:
-    px=(x-ce+half)*sc; d.line([(px,0),(px,12)],fill=(255,255,0),width=2); d.text((px+3,12),str(int(x)),fill=(255,255,0),font=f); x+=g
+    px=(x-ce+half)*sc; d.line([(px,0),(px,12*FS)],fill=(255,255,0),width=round(2*FS)); d.text((px+3,12*FS),str(int(x)),fill=(255,255,0),font=f); x+=g
 yy=math.ceil((cn-half)/g)*g
 while yy<cn+half:
-    py=W-(yy-cn+half)*sc; d.line([(0,py),(12,py)],fill=(255,255,0),width=2); d.text((14,py-12),str(int(yy)),fill=(255,255,0),font=f); yy+=g
+    py=W-(yy-cn+half)*sc; d.line([(0,py),(12*FS,py)],fill=(255,255,0),width=round(2*FS)); d.text((14*FS,py-12*FS),str(int(yy)),fill=(255,255,0),font=f); yy+=g
 for e,n,lab in marks:
     px,py=(e-ce+half)*sc,W-(n-cn+half)*sc
     d.ellipse([px-10,py-10,px+10,py+10],outline=(255,40,40),width=3); d.text((px+13,py-13),lab,fill=(255,70,70),font=f)
-im.resize((1300,1300),Image.LANCZOS).save(out)
+if ANN:
+    sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
+    import spots
+    D=spots.parse(ANN)
+    P=lambda e,n:((e-ce+half)*sc,W-(n-cn+half)*sc)
+    inside=lambda e,n,m=0:abs(e-ce)<=half+m and abs(n-cn)<=half+m
+    try: fs=ImageFont.truetype('arial.ttf',round(17*FS)); fb=ImageFont.truetype('arialbd.ttf',round(19*FS))
+    except: fs=fb=None
+    def label(x,y,text,col,font):
+        bb=d.textbbox((x,y),text,font=font); d.rectangle([bb[0]-3,bb[1]-2,bb[2]+3,bb[3]+2],fill=(0,0,0)); d.text((x,y),text,fill=col,font=font)
+    # OSM way lines, way id once per way at the vertex nearest the view centre
+    for wid,w in D['ways'].items():
+        pts=w['pts']
+        if len(pts)>1: d.line([P(*p) for p in pts],fill=(0,230,255),width=max(1,round(1.5*FS)))
+    # ramps along the stretch's reference (from the ribbon rows' reference points)
+    def along(e,at,length,col,width,shift):
+        rows=e['rows']
+        if not rows or length<=0: return
+        L=e['len']; sel=[r for r in rows if (r['v']<=length if at==0 else r['v']>=L-length)]
+        if len(sel)<2: return
+        pts=[]
+        for r in sel:
+            k=rows.index(r); a=rows[max(k-1,0)]['ref']; b=rows[min(k+1,len(rows)-1)]['ref']; hx,hy=b[0]-a[0],b[1]-a[1]; hl=math.hypot(hx,hy) or 1
+            pts.append(P(r['ref'][0]-hy/hl*shift,r['ref'][1]+hx/hl*shift))
+        d.line(pts,fill=col,width=round(width*FS))
+    for e in D['entries'].values():
+        for at,x in e['ends'].items():
+            if not inside(x['E'],x['N'],half*0.5): continue
+            along(e,at,spots.ramp_len(e,at),(255,150,0),7,0)
+            if x['kind']=='landing': along(e,at,spots.offset_len(e,at),(255,40,40),5,1.2)
+            elif spots.offset_len(e,at)>0: along(e,at,spots.offset_len(e,at),(230,0,230),4,1.2)
+    # square steps and slivers
+    for e in D['entries'].values():
+        for st in spots.interior_steps(e):
+            x,y=P(*st['pos']); r=7*FS; d.rectangle([x-r,y-r,x+r,y+r],outline=(255,0,0),width=round(3*FS))
+    for j in spots.joint_steps(D):
+        if inside(j['E'],j['N']):
+            x,y=P(j['E'],j['N']); r=14*FS; d.rectangle([x-r,y-r,x+r,y+r],outline=(255,0,0),width=round(4*FS)); label(x+r,y+r,'STEP %.1f m'%j['jump'],(255,90,90),fs)
+    for ov in D['ovs']:
+        if inside(ov['E'],ov['N']):
+            x,y=P(ov['E'],ov['N']); r=12*FS; d.ellipse([x-r,y-r,x+r,y+r],outline=(255,255,0),width=round(4*FS))
+            label(x+r,y-r,'SLIVER %d/%d %.1f m x %d m'%(ov['a'][0],ov['b'][0],ov['maxw'],ov['s1']-ov['s0']),(255,255,0),fs)
+    # stretch-end nodes: a dot each; labels for degree >= 3 and for degree-2 lane-count changes
+    counted={k:e['counted'] for k,e in D['entries'].items()}
+    by_node={}
+    for x in D['ends']: by_node.setdefault(x['node'],[]).append(x)
+    for nid,ends in by_node.items():
+        x0,y0=ends[0]['E'],ends[0]['N']
+        if not inside(x0,y0): continue
+        x,y=P(x0,y0); r=6*FS; d.ellipse([x-r,y-r,x+r,y+r],fill=(255,255,255),outline=(0,0,0))
+        deg=ends[0]['deg']; codes=D['nodes'].get(nid,{}).get('codes',[])
+        lane_change=len({counted.get((z['way'],z['sr'])) for z in ends})>1
+        if deg>=3 or (deg==2 and lane_change):
+            label(x+9*FS,y-24*FS,'%d %s'%(nid,','.join(codes) or ('J:'+ends[0]['kind'])),(255,255,255),fb)
+    # way ids last (on top)
+    for wid,w in D['ways'].items():
+        dense=[(a[0]+(b[0]-a[0])*k/10,a[1]+(b[1]-a[1])*k/10) for a,b in zip(w['pts'],w['pts'][1:]) for k in range(10)]+w['pts'][-1:]; cand=[p for p in dense if inside(*p,-5)]
+        if not cand: continue
+        p=min(cand,key=lambda q:(q[0]-ce)**2+(q[1]-cn)**2); x,y=P(*p)
+        label(x+4*FS,y+4*FS,str(wid),(0,230,255),fs)
+im.resize((OUT_PX,OUT_PX),Image.LANCZOS).save(out)
