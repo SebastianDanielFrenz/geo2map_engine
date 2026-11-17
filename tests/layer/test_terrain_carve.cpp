@@ -290,6 +290,52 @@ TEST_CASE("carve T12 sabotage: blending toward the raw DEM steps at the blend ed
     CHECK(j.blend_terrain > 0.005);
 }
 
+// ROADS stage 3b: a ramp's landing widths (its landed lane and outer shoulder start at the single arm's widths) end
+// landing_width_far_clear_m before the stretch's other end when that end is a junction. On this tile a 29.6 m ramp stretch lands at
+// one end and meets a junction 10.5 m from the other; with the widths ramping over the whole stretch its widened verge reached
+// into the neighbouring arm at the ring corner and the junction surface stepped 0.081 m on the trim line. Negative control in the
+// test: the same tile with the clearance set to 0 (recorded sabotage S15) brings the step back.
+TEST_CASE("carve T12b: landing widths end before a short ramp's far-end junction (ROADS 3b)", "[layer][carve][road_merge_lane]") {
+    const TileKey key = l0(1822, 21685);
+    const auto run = [&](const RoadRules& rules, const char* what, std::size_t& capped) {
+        g2m_test::CarveFixture fx(world(kA66));
+        fx.rules = &rules;
+        const auto m = fx.model(key);
+        const Jumps j = measure_jumps(*m.model, key);
+        print_jumps(what, j);
+        // Every landed stretch whose other end has no join: no width ramp at the landed end runs into the far clearance.
+        const auto& tile = m.model->core_tile();
+        const auto clear_mm = static_cast<std::int64_t>(rules.merge_lane.landing_width_far_clear_m) * 1000;
+        capped = 0;
+        for (const auto& en : tile.entries) {
+            if (!en.cross_section || !en.profile) continue;
+            const auto& xs = *en.cross_section;
+            const auto length_mm = static_cast<std::int64_t>(std::floor(en.profile->reference.length_m * 1000.0));
+            for (const bool at_end : {false, true}) {
+                if ((at_end ? xs.end_join : xs.start_join).kind != JoinKind::Landing) continue;
+                if ((at_end ? xs.start_join : xs.end_join).kind != JoinKind::None) continue;
+                const std::int32_t offset_len = at_end ? xs.offset.end_length_mm : xs.offset.start_length_mm;
+                for (const auto& b : xs.bands) {
+                    const auto& r = at_end ? b.end : b.start;
+                    if (r.length_mm <= 0 || r.from_width_mm == 0) continue;   // from 0: the facing gore shoulder (stage 2b), not a landing width
+                    CHECK(r.length_mm <= std::max<std::int64_t>(0, length_mm - clear_mm));
+                    if (r.length_mm < offset_len) ++capped;
+                }
+            }
+        }
+        return j;
+    };
+    std::size_t capped = 0, capped_sab = 0;
+    const RoadRules& rules = builtin_road_rules_de();
+    REQUIRE(rules.merge_lane.landing_width_far_clear_m > 0);
+    const Jumps j = run(rules, "a66 1822/21685 flat, landing widths with far clearance", capped);
+    CHECK(capped > 0);   // the short ramp stretch is on this tile
+    CHECK(j.trim < 0.01);
+    RoadRules sabotage = rules; sabotage.merge_lane.landing_width_far_clear_m = 0;
+    const Jumps js = run(sabotage, "a66 1822/21685 flat, far clearance 0 (sabotage)", capped_sab);
+    CHECK(js.trim > 0.05);   // measured 0.0814
+}
+
 TEST_CASE("carve T12: continuity on every busy fixture tile, flat and tilted DEM (G3-D)", "[layer][carve][long]") {
     std::size_t steep = 0, stations = 0;
     for (const auto& ft : kBusy)

@@ -230,6 +230,10 @@ struct CrossSectionEndTrace {
     std::int32_t landing_final_mm = 0;                     // the landing length served
     std::int32_t landing_min_gap_mm = 0;                   // the smallest sampled lane-edge gap over the served landing
     std::int32_t landing_min_gap_at_mm = 0;                // ... and its station from the node
+    bool landing_no_outer_shoulder = false;                 // ROADS 3b: a landed end with no outer shoulder band to widen
+    std::int32_t landing_centre_mm = 0;                     // ROADS 3b: counted-lane centre at the node before the landing (subtracted)
+    std::int32_t landing_width_mm = 0;                      // ROADS 3b: the landed width ramps' length (min of L and the far-end cap)
+    bool landing_widths_skipped = false;                    // ROADS 3b: that length is below gore_step_m: no landing widths at this end
 };
 struct CrossSectionTrace { CrossSectionEndTrace ends[2]{}; };
 // `fit_limits`: the planar reference fit of the served profiles (the gore-shoulder rule measures the ramp and the through

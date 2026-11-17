@@ -331,6 +331,10 @@ struct MergeNode {
     bool through_leaves = false, single_leaves = false; // direction of each arm at the node
     std::int32_t landing_mm = 0;             // the ramp's offset at its node end (its own frame, + = left)
     std::int32_t landing_length_mm = 0;
+    // ROADS stage 3b: what the ramp's landed end takes over from the single arm at the node
+    bool ramp_right = false;                 // the ramp lies right of the single arm (its outer side)
+    std::int32_t added_mm = 0;               // the single arm's added counted lanes, total width
+    std::int32_t s_shoulder_mm = 0;          // the single arm's shoulder beyond them at the node (0: none)
 };
 
 const RoadGraphNode* find_node(const RoadGraph& g, std::int64_t id) {
@@ -444,9 +448,16 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
         if (!wide.xs.bands[static_cast<std::size_t>(i)].counted || (i >= first_added && i <= last_added)) continue;
         if (ramp_right ? i > first_added : i < last_added) return refuse(MergeNodeReason::AddedNotOnRampSide);
     }
-    // The centre line of the added lanes seen from the single arm's way line, with the join's own correction of that arm.
+    // The centre line of the added lanes seen from the single arm's way line, with the join's own correction of that arm. The
+    // single arm's bands take their widths AT the node (a matched band's join width; the added lanes stay full width, G2M-032), so
+    // the landed lanes meet the added lanes' edges as the single arm serves them there (ROADS stage 3b).
+    RoadCrossSection at_node = wide.xs;
+    for (std::size_t i = 0; i < at_node.bands.size(); ++i) {
+        const int ii = static_cast<int>(i);
+        if (wide_eval.len[i] > 0 && !(ii >= first_added && ii <= last_added)) at_node.bands[i].width_mm = wide_eval.jw[i];
+    }
     std::array<double, 33> edge{};
-    if (wide.xs.bands.size() > 32 || !wide.xs.boundaries_at(0.0, std::span<double>(edge.data(), wide.xs.bands.size() + 1))) return refuse(MergeNodeReason::Boundaries);
+    if (at_node.bands.size() > 32 || !at_node.boundaries_at(0.0, std::span<double>(edge.data(), at_node.bands.size() + 1))) return refuse(MergeNodeReason::Boundaries);
     const double centre_m = (edge[static_cast<std::size_t>(first_added)] + edge[static_cast<std::size_t>(last_added) + 1]) / 2;
     const std::int32_t correction = out.merge ? join.corr_d : join.corr_u;
     const double target_mm = std::round(centre_m * 1000.0) + static_cast<double>(correction);
@@ -457,6 +468,12 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     out.through_id = T.arm.way_id; out.single_id = S.arm.way_id; out.ramp_id = R.arm.way_id;
     out.through_leaves = T.arm.leaves_node; out.single_leaves = S.arm.leaves_node;
     out.landing_mm = static_cast<std::int32_t>(landing);
+    out.ramp_right = ramp_right;
+    for (int i = first_added; i <= last_added; ++i) out.added_mm += wide.xs.bands[static_cast<std::size_t>(i)].width_mm;
+    if (const int sh = ramp_right ? last_added + 1 : first_added - 1; sh >= 0 && sh < static_cast<int>(wide.xs.bands.size())) {
+        const auto k = static_cast<std::size_t>(sh);
+        if (wide.xs.bands[k].kind == LaneKind::Shoulder) out.s_shoulder_mm = wide_eval.len[k] > 0 ? wide_eval.jw[k] : wide.xs.bands[k].width_mm;
+    }
     const std::int64_t length = std::clamp<std::int64_t>(static_cast<std::int64_t>(ml.landing_m_per_m) * std::abs(out.landing_mm),
         static_cast<std::int64_t>(ml.landing_min_m) * 1000, static_cast<std::int64_t>(ml.landing_max_m) * 1000);
     out.landing_length_mm = static_cast<std::int32_t>(out.landing_mm == 0 ? 0 : length);
@@ -503,6 +520,14 @@ MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std:
 }
 
 namespace {
+// Landing widths (ROADS stage 3b): the longest the landed lane and outer shoulder ramps may run at one end of a ramp. When the
+// stretch's other end is a junction (a node of degree > 2 with no join there) they end landing_width_far_clear_m before it, so the
+// junction meets the ramp's own widths at its trim; otherwise (a join, a dead end) only the stretch bounds them.
+std::int64_t landing_width_cap_mm(double length_m, bool far_junction, const MergeLaneRules& ml) {
+    const auto length_mm = static_cast<std::int64_t>(std::floor(length_m * 1000.0));
+    return far_junction ? length_mm - static_cast<std::int64_t>(ml.landing_width_far_clear_m) * 1000 : length_mm;
+}
+
 Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::int64_t way_id, RoadStretch stretch, double length_m,
         const RoadRules& rules, CrossSectionTrace* trace, const ReferenceFitLimits& fit_limits, bool gore, int depth);
 void apply_clearance_landing(const RoadReferenceBuilder& builder, const RoadGraphWay& way, std::int64_t way_id, RoadStretch stretch,
@@ -646,6 +671,55 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
     // Band ramps (4.2) and exactness clipping (4.5).
     for (std::size_t i = 0; i < n; ++i) { xs.bands[i].start = ends[0].ramps.empty() ? WidthRamp{} : ends[0].ramps[i];
                                           xs.bands[i].end = ends[1].ramps.empty() ? WidthRamp{} : ends[1].ramps[i]; }
+    // Landing widths (ROADS stage 3b): at a landed end the ramp's counted lanes start at the total width of the single arm's added
+    // lanes (shared in proportion to their own widths) and its outer shoulder at the single arm's shoulder beyond them, both ramping
+    // to the ramp's own widths over the landing length (the offset's); the landing then puts the counted lanes' centre, not the way
+    // line, on the added lanes' centre, so the lane edges meet at the node up to the angle's cos residue.
+    for (int e = 0; e < 2; ++e) {
+        const auto k = static_cast<std::size_t>(e);
+        if (tr.ends[e].note != CrossSectionEndNote::Landed || !merge_at[k] || merge_at[k]->added_mm <= 0) continue;
+        const MergeNode& m = *merge_at[k];
+        const bool at_end = e == 1;
+        const std::int32_t len_offset = at_end ? xs.offset.end_length_mm : xs.offset.start_length_mm;
+        if (len_offset <= 0) continue;
+        // The width ramps end at min(L, the far-end clearance); a remainder below gore_step_m makes none (the end keeps its stage-2
+        // widths, the centring below still applies).
+        const bool far_junction = !ends[1 - k].present && builder.degree(way->node_ids[at_end ? stretch.start_ref : stretch.end_ref]) > 2;
+        const std::int64_t width_cap = landing_width_cap_mm(xs.length_m, far_junction, rules.merge_lane);
+        const auto len = static_cast<std::int32_t>(std::min<std::int64_t>(len_offset, width_cap));
+        tr.ends[e].landing_width_mm = len;
+        const bool widths = len >= static_cast<std::int64_t>(rules.merge_lane.gore_step_m) * 1000;
+        if (!widths) tr.ends[e].landing_widths_skipped = true;
+        std::int64_t total = 0; int first = -1, last = -1;
+        for (std::size_t i = 0; i < n; ++i)
+            if (xs.bands[i].counted) { total += xs.bands[i].width_mm; if (first < 0) first = static_cast<int>(i); last = static_cast<int>(i); }
+        if (total <= 0) continue;
+        std::int64_t given = 0;
+        for (int i = first; i <= last; ++i) {
+            auto& b = xs.bands[static_cast<std::size_t>(i)];
+            if (!b.counted) continue;
+            const std::int64_t w = i == last ? m.added_mm - given : (static_cast<std::int64_t>(b.width_mm) * m.added_mm + total / 2) / total;
+            given += w;
+            if (widths && w != b.width_mm) (at_end ? b.end : b.start) = WidthRamp{len, static_cast<std::int32_t>(w)};
+        }
+        const int sh = m.ramp_right ? last + 1 : first - 1;
+        if (!widths) {
+        } else if (sh >= 0 && sh < static_cast<int>(n) && xs.bands[static_cast<std::size_t>(sh)].kind == LaneKind::Shoulder) {
+            auto& b = xs.bands[static_cast<std::size_t>(sh)];
+            if (b.width_mm != m.s_shoulder_mm) (at_end ? b.end : b.start) = WidthRamp{len, m.s_shoulder_mm};
+        } else tr.ends[e].landing_no_outer_shoulder = true;
+        // The counted lanes' centre at the node with no landing offset (the ramp's frame): the landing shifts it, not the way line.
+        RoadCrossSection probe = xs;
+        (at_end ? probe.offset.end_mm : probe.offset.start_mm) = 0;
+        std::array<double, 33> t{};
+        if (n <= 32 && probe.boundaries_at(at_end ? xs.length_m : 0.0, std::span<double>(t.data(), n + 1))) {
+            const auto c0 = static_cast<std::int32_t>(std::lround((t[static_cast<std::size_t>(first)] + t[static_cast<std::size_t>(last) + 1]) / 2 * 1000.0));
+            auto& off = at_end ? xs.offset.end_mm : xs.offset.start_mm;
+            off -= c0;
+            ends[k].record.raw_delta_mm = off;
+            tr.ends[e].landing_centre_mm = c0;
+        }
+    }
     xs.start_join = ends[0].present ? ends[0].record : JoinRecord{};
     xs.end_join = ends[1].present ? ends[1].record : JoinRecord{};
     std::int64_t a_start = 0, a_end = 0;
@@ -788,6 +862,15 @@ std::int64_t far_ramp_max(const RoadCrossSection& xs, bool at_end) {
 // UNSHIFTED ramp already keeps its facing lane edge outside the through lanes, and grows in gore_step_m steps while the landed lanes
 // still cross by more than 0.05 m and a step still narrows the crossing (a crossing at the node itself no length mends), up to
 // landing_clear_max_m and what the stretch fits.
+// The landing length at one end of a ramp: the offset's and that of every band ramp there (before the gore rule the only band
+// ramps at a landed end are the landing widths of stage 3b, which share the offset's length).
+// The width ramps keep their far-end clearance (landing_width_cap_mm).
+void set_landing_length(RoadCrossSection& xs, bool at_end, std::int32_t len, bool far_junction, const MergeLaneRules& ml) {
+    (at_end ? xs.offset.end_length_mm : xs.offset.start_length_mm) = len;
+    const auto w = static_cast<std::int32_t>(std::min<std::int64_t>(len, landing_width_cap_mm(xs.length_m, far_junction, ml)));
+    for (auto& b : xs.bands) if (auto& r = at_end ? b.end : b.start; r.length_mm > 0) r.length_mm = w;
+}
+
 void apply_clearance_landing(const RoadReferenceBuilder& builder, const RoadGraphWay& way, std::int64_t way_id, RoadStretch stretch,
         const RoadRules& rules, const ReferenceFitLimits& fit_limits, const std::array<std::optional<MergeNode>, 2>& merge_at,
         RoadCrossSection& xs, CrossSectionTrace& tr, int depth) {
@@ -801,6 +884,8 @@ void apply_clearance_landing(const RoadReferenceBuilder& builder, const RoadGrap
         if (!m || m->ramp_id != way_id) continue;
         const bool at_end = e == 1;
         if ((at_end ? xs.end_join : xs.start_join).kind != JoinKind::Landing) continue;
+        const bool far_junction = (at_end ? xs.start_join : xs.end_join).kind == JoinKind::None &&
+                                  builder.degree(way.node_ids[at_end ? stretch.start_ref : stretch.end_ref]) > 2;
         const std::int32_t landing_mm = at_end ? xs.offset.end_mm : xs.offset.start_mm;
         const std::int32_t base = at_end ? xs.offset.end_length_mm : xs.offset.start_length_mm;
         if (landing_mm == 0 || base <= 0) continue;
@@ -809,7 +894,7 @@ void apply_clearance_landing(const RoadReferenceBuilder& builder, const RoadGrap
         GoreArm& r = pair->self;
         const auto set_landing = [&](std::int32_t mm, std::int64_t len) {
             (at_end ? r.xs.offset.end_mm : r.xs.offset.start_mm) = mm;
-            (at_end ? r.xs.offset.end_length_mm : r.xs.offset.start_length_mm) = static_cast<std::int32_t>(len);
+            set_landing_length(r.xs, at_end, static_cast<std::int32_t>(len), far_junction, ml);
         };
         const auto gap = [&](double d) { return facing_gap(r, pair->other, pair->self_left, pair->other_left, d); };
         const std::int64_t cap = std::max<std::int64_t>(base, std::min<std::int64_t>(static_cast<std::int64_t>(ml.landing_clear_max_m) * 1000,
@@ -844,7 +929,8 @@ void apply_clearance_landing(const RoadReferenceBuilder& builder, const RoadGrap
             if (w <= worst + 0.001) break;   // no progress: the crossing is not the landing's to mend
             len = next; worst = w; at = next_at;
         }
-        (at_end ? xs.offset.end_length_mm : xs.offset.start_length_mm) = static_cast<std::int32_t>(len);
+        set_landing_length(xs, at_end, static_cast<std::int32_t>(len), far_junction, ml);
+        t.landing_width_mm = static_cast<std::int32_t>(std::min<std::int64_t>(len, landing_width_cap_mm(xs.length_m, far_junction, ml)));
         t.landing_final_mm = static_cast<std::int32_t>(len);
         t.landing_min_gap_mm = static_cast<std::int32_t>(std::round(worst * 1000.0));
         t.landing_min_gap_at_mm = static_cast<std::int32_t>(at);

@@ -20,13 +20,20 @@
 //       reference line, l/r = the bed's left/right edge point, w/lanes/flags = the row's vertex attributes
 //   NODE node E N deg codes                  a stretch end node; codes: PATCH (a served junction patch), JD:<decline>,
 //       LAND (a ramp landed here), TAPER (a LaneChange join here), M:<merge reason> (degree-3 classification), J:<kind>
+//   TJ  junctionNode way stretchLen trim landingLenMm  (ROADS stage 3b) a used approach of a built junction whose stretch lands at its other end
 //   E   node deg S T R kindS kindT kindR lanesS lanesU dLaneL dLaneR dBedL dBedR intData intDrawn gapTR rside  (ROADS stage 3a) at a node
 //       where a ramp landed: in the node's cross frame (S's reference pose at the node, t positive left of S's way direction),
 //       S's outer counted-lane and road-bed edges minus those of the union of T and R, signed OUTWARD in mm (positive = S
 //       reaches further out than T and R on that side); intData = the largest distance in mm from an interior lane boundary of
 //       one side (S, or T and R incl. their facing edges) to the nearest boundary of the other, from the served bands;
 //       intDrawn = the same for the boundaries the shader draws (equal division of the counted span, mark_width/lanes);
-//       gapTR = the gap in mm between T's and R's facing lane edges at the node (negative = they overlap); rside = L or R, R's side of S
+//       gapTR = the gap in mm between T's and R's facing lane edges at the node (negative = they overlap); rside = L or R, R's side of S;
+//       then (ROADS stage 3b) phi = the angle between R's and S's cross lines at the node in millidegrees, resLane / resBed = the cos
+//       residue in mm of R's ramp-side lane / bed edge (its distance from R's counted-lane centre times 1 - cos phi: the amount the
+//       landing cannot close, since R's end cut is tilted), rRamp = the length in mm of R's counted-lane width ramp at the landed end
+//       (0 = no landing width ramp there), skip = 1 when the 3b rule gave R no landing widths at this end (its far end is a junction -
+//       degree > 2, no join - and the stretch minus merge_lane.landing_width_far_clear_m is shorter than gore_step_m); sRef / tRef / rRef
+//       = the lateral distance in mm (node frame, signed towards rside) of S's / T's / R's reference point at the node from the node
 //   OV  wayA srA wayB srB s0 s1 maxw meanw E N   two entries' road beds overlapping more than 0.5 m wide over more than
 //       10 m (a raster of 0.25 m cells, 1 m station bins of A; s0/s1 stations of A)
 //
@@ -111,6 +118,10 @@ struct ArmAtNode {
     std::vector<double> bounds;                            // every counted-lane boundary incl. the outer two, node frame
     std::vector<double> drawn;                             // the boundaries the shader draws: equal division of the span
     int lanes = 0;
+    double nrx = 0, nry = 0;                               // the arm's own cross-line normal at the node
+    double px = 0, py = 0;                                 // the arm's reference point at the node
+    double half_l = 0, half_r = 0, bedd_l = 0, bedd_r = 0; // own frame: lane / bed edge distance from the counted-lane centre
+    std::int32_t lane_ramp_mm = 0;                         // length of the first counted band's width ramp at this end
 };
 ArmAtNode arm_at_node(const RoadGeomEntry& en, bool at_end, double ox, double oy, double nx, double ny) {
     ArmAtNode a;
@@ -139,6 +150,11 @@ ArmAtNode arm_at_node(const RoadGeomEntry& en, bool at_end, double ox, double oy
     const double pl = proj(left), pr = proj(right), qbl = proj(bl), qbr = proj(br);
     a.lane_l = std::max(pl, pr); a.lane_r = std::min(pl, pr);
     a.bed_l = std::max(qbl, qbr); a.bed_r = std::min(qbl, qbr);
+    a.nrx = -sh; a.nry = ch; a.px = p->x; a.py = p->y;
+    const double c = 0.5 * (left + right);
+    a.half_l = left - c; a.half_r = c - right; a.bedd_l = bl - c; a.bedd_r = c - br;
+    for (std::size_t i = 0; i < nb; ++i)
+        if (xs.bands[i].counted) { a.lane_ramp_mm = (at_end ? xs.bands[i].end : xs.bands[i].start).length_mm; break; }
     std::sort(a.bounds.begin(), a.bounds.end());
     a.bounds.erase(std::unique(a.bounds.begin(), a.bounds.end(), [](double x, double y) { return std::abs(x - y) < 1e-6; }), a.bounds.end());
     if (a.lanes > 0)
@@ -206,6 +222,21 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                     if (p && in_box(p->x, p->y, 60)) hit = true;
                 }
                 if (hit) sel.push_back(i);
+            }
+            // TJ records (ROADS stage 3b): every used approach of a built junction whose stretch has a Landing join at its
+            // OTHER end: way, stretch length, the trim at this junction, the landing length at the other end (mm)
+            for (const auto& j : geometry->junctions) {
+                if (j.decline != JunctionDecline::None) continue;
+                for (const auto& a : j.approaches) {
+                    if (a.status != JunctionApproachStatus::Used || a.entry_index >= geometry->entries.size()) continue;
+                    const auto& en = geometry->entries[a.entry_index];
+                    if (!en.cross_section || !en.profile) continue;
+                    const auto& xs = *en.cross_section;
+                    const auto& other = a.at_end ? xs.start_join : xs.end_join;
+                    if (other.kind != JoinKind::Landing) continue;
+                    std::printf("TJ %lld %lld %.3f %.3f %d\n", static_cast<long long>(j.nodes.front()), static_cast<long long>(en.way_id),
+                                en.profile->reference.length_m, a.trim_m, a.at_end ? xs.offset.start_length_mm : xs.offset.end_length_mm);
+                }
             }
             // junction codes (owner tile records)
             for (const auto& j : geometry->junctions)
@@ -331,11 +362,29 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                     const auto& sj = s_end ? sn.cross_section->end_join : sn.cross_section->start_join;
                     const auto& tj = ti->second.second ? tn.cross_section->end_join : tn.cross_section->start_join;
                     const auto mm = [](double x) { return static_cast<long long>(std::llround(x * 1000.0)); };
-                    std::printf("E %lld %d %lld %lld %lld %s %s %s %d %d %lld %lld %lld %lld %lld %lld %lld %c\n", static_cast<long long>(node), degree[node],
+                    // cos residue of R's ramp-side edges: R's own side that projects outward (towards rside)
+                    const double dotn = ar.nrx * nx + ar.nry * ny, cphi = std::min(1.0, std::abs(dotn));
+                    const bool own_left_out = (dotn > 0) == r_left;
+                    const double res_lane = (own_left_out ? ar.half_l : ar.half_r) * (1.0 - cphi);
+                    const double res_bed = (own_left_out ? ar.bedd_l : ar.bedd_r) * (1.0 - cphi);
+                    const long long phi_mdeg = std::llround(std::acos(cphi) * 180000.0 / 3.14159265358979323846);
+                    const double side = r_left ? 1.0 : -1.0;
+                    const auto ref_off = [&](const ArmAtNode& a) { return side * ((a.px - e) * nx + (a.py - nn) * ny); };
+                    int skip = 0;
+                    if (const auto* rw = find_way(G, R)) {
+                        const auto& fj = v.second ? rn.cross_section->start_join : rn.cross_section->end_join;
+                        const std::uint32_t fr = v.second ? rn.stretch.start_ref : rn.stretch.end_ref;
+                        const auto len_mm = static_cast<std::int64_t>(std::floor(rn.cross_section->length_m * 1000.0));
+                        if (fj.kind == JoinKind::None && fr < rw->node_ids.size() && degree[rw->node_ids[fr]] > 2 &&
+                            len_mm - static_cast<std::int64_t>(rules.merge_lane.landing_width_far_clear_m) * 1000 <
+                                static_cast<std::int64_t>(rules.merge_lane.gore_step_m) * 1000)
+                            skip = 1;
+                    }
+                    std::printf("E %lld %d %lld %lld %lld %s %s %s %d %d %lld %lld %lld %lld %lld %lld %lld %c %lld %lld %lld %d %d %lld %lld %lld\n", static_cast<long long>(node), degree[node],
                                 static_cast<long long>(S), static_cast<long long>(T), static_cast<long long>(R), join_name(sj.kind), join_name(tj.kind),
                                 join_name(rj.kind), as.lanes, at.lanes + ar.lanes, mm(as.lane_l - ul), mm(ur - as.lane_r), mm(as.bed_l - ubl), mm(ubr - as.bed_r),
                                 mm(interior_mismatch(as.bounds, ub, as.lane_r, as.lane_l, ur, ul)), mm(interior_mismatch(as.drawn, ud, as.lane_r, as.lane_l, ur, ul)),
-                                mm(gap), r_left ? 'L' : 'R');
+                                mm(gap), r_left ? 'L' : 'R', phi_mdeg, mm(res_lane), mm(res_bed), static_cast<int>(ar.lane_ramp_mm), skip, mm(ref_off(as)), mm(ref_off(at)), mm(ref_off(ar)));
                 }
             }
             // ribbon rows of the selected entries, and the bed overlap raster

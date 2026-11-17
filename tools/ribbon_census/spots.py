@@ -15,7 +15,7 @@ STEP_M = 0.5
 
 
 def parse(path):
-    d = {'ways': {}, 'entries': {}, 'nodes': {}, 'ovs': [], 'ends': []}
+    d = {'ways': {}, 'entries': {}, 'nodes': {}, 'ovs': [], 'ends': [], 'landed': {}}
     E = d['entries']
     def ent(w, sr):
         return E.setdefault((w, sr), {'way': w, 'sr': sr, 'bands': [], 'rows': [], 'ends': {}, 'off': None, 'len': 0, 'hw': '?', 'counted': 0, 'xs': False})
@@ -43,6 +43,9 @@ def parse(path):
                                                      'l': (float(p[8]), float(p[9])), 'r': (float(p[10]), float(p[11])), 'w': float(p[12]), 'ln': float(p[13]), 'fl': int(float(p[14]))})
         elif t == 'NODE':
             d['nodes'][int(p[1])] = {'E': float(p[2]), 'N': float(p[3]), 'deg': int(p[4]), 'codes': p[5:]}
+        elif t == 'E' and len(p) >= 19:   # a landed merge node with all three arms (spots.cpp, ROADS stage 3a)
+            d['landed'][int(p[1])] = {'S': int(p[3]), 'T': int(p[4]), 'R': int(p[5]), 'dLane': (int(p[11]), int(p[12])),
+                                      'dBed': (int(p[13]), int(p[14])), 'rside': p[18]}
         elif t == 'OV':
             d['ovs'].append({'a': (int(p[1]), int(p[2])), 'b': (int(p[3]), int(p[4])), 's0': int(p[5]), 's1': int(p[6]), 'maxw': float(p[7]), 'meanw': float(p[8]),
                              'E': float(p[9]), 'N': float(p[10])})
@@ -102,12 +105,21 @@ def end_row(e, at):
 
 def joint_steps(d):
     """At a node where two stretch ends meet (degree 2, or the through pair of a join): the road-bed edge points of the
-    two end rows, paired by orientation; a step when either pair is more than STEP_M apart."""
+    two end rows, paired by orientation; a step when either pair is more than STEP_M apart. At a landed merge node (an E
+    record; ROADS stage 3b) the single arm S is compared with the through arm T and the ramp R together: a step when S's
+    outer road-bed edge on either side lies more than STEP_M from that of T and R (the E record's dBedL/dBedR)."""
     E = d['entries']
     out, seen = [], set()
     by_node = collections.defaultdict(list)
     for x in d['ends']: by_node[x['node']].append(x)
+    for node, rec in d.get('landed', {}).items():
+        jump = max(abs(v) for v in rec['dBed']) / 1000.0
+        if jump > STEP_M:
+            x = next((e for e in by_node.get(node, []) if e['way'] == rec['S']), None) or {'way': rec['S'], 'kind': '?', 'deg': 3, 'E': 0.0, 'N': 0.0}
+            out.append({'node': node, 'a': x, 'b': {'way': rec['T'], 'kind': '?', 'deg': 3}, 'jump': jump, 'wa': 0.0, 'wb': 0.0, 'landed': True,
+                        'E': x['E'], 'N': x['N']})
     for node, ends in by_node.items():
+        if node in d.get('landed', {}): continue
         for x in ends:
             if x['nb'] == 0 or x['kind'] == 'landing': continue
             for y in ends:
@@ -184,6 +196,7 @@ def view_report(d, name, ce, cn, half, steps_j, out):
         for j in steps_j:
             if (j['a'] is x or j['b'] is x):
                 other = j['b'] if j['a'] is x else j['a']
+                if j.get('landed'): out.append('    SQUARE STEP at the landed node: S outer bed edge %.2f m from T+R' % j['jump']); continue
                 out.append('    SQUARE STEP across the join: edges %.2f m apart (bed %.2f vs %.2f m) to way %d' % (j['jump'], j['wa'], j['wb'], other['way']))
     for ov in d['ovs']:
         if not inside(ov['E'], ov['N']): continue
@@ -197,7 +210,7 @@ def summary(d):
     js = joint_steps(d)
     ist = [(e, s) for e in E.values() for s in interior_steps(e)]
     out = ['joint steps (edge jump > %.1f m across a join): %d' % (STEP_M, len(js))]
-    c = collections.Counter((j['a']['kind'], j['a']['deg']) for j in js)
+    c = collections.Counter(('landed node (S vs T+R)' if j.get('landed') else j['a']['kind'], j['a']['deg']) for j in js)
     for k, n in c.most_common(): out.append('  %-24s deg %d: %d' % (k[0], k[1], n))
     out.append('interior steps (edge moves > %.1f m within 1 m inside a stretch): %d rows in %d stretches' % (STEP_M, len(ist), len({(e['way'], e['sr']) for e, _ in ist})))
     def where(e, s):

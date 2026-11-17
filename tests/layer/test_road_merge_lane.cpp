@@ -85,9 +85,10 @@ TEST_CASE("M1 a merge ramp lands on the centre line of the added lane, over the 
     const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
     const auto& rules = builtin_road_rules_de();
     const auto a = resolve_in(*builder, s.a, rules), b = resolve_in(*builder, s.b, rules), r = resolve_in(*builder, s.r, rules);
-    // B's added lane is its last counted band; its centre at full width, seen from B's way line.
+    // B's added lane is its last counted band; its centre AT THE NODE as B serves it there (its other lanes at their join widths,
+    // the added lane full width; ROADS stage 3b), seen from B's way line.
     const auto l = last_counted(b.xs);
-    const auto bd = boundaries(b.xs, 100.0);
+    const auto bd = boundaries(b.xs, 0.0);
     const double centre_mm = std::round((bd[l] + bd[l + 1]) / 2 * 1000.0);
     // The ramp's last 150 m run from (-150, -12) to (0, 0): direction cos = 150 / hypot(150, 12).
     const double ramp_cos = 150.0 / std::hypot(150.0, 12.0);
@@ -106,6 +107,23 @@ TEST_CASE("M1 a merge ramp lands on the centre line of the added lane, over the 
     // The ramp's end carries the landing record: the single arm and the offset.
     CHECK(r.xs.end_join.kind == JoinKind::Landing); CHECK(r.xs.end_join.neighbour_way_id == s.b); CHECK(r.xs.end_join.raw_delta_mm == r.xs.offset.end_mm);
     CHECK(r.xs.start_join.kind == JoinKind::None);
+    // ROADS stage 3b: R's landed lane starts at the added lane's width and its outer (right) shoulder at B's right shoulder width at
+    // the node, both ramping to R's own widths over the landing length; at the node R's lane edges are the added lane's (R's frame,
+    // up to the cos residue the frames differ by).
+    const auto rl = last_counted(r.xs);
+    REQUIRE(rl + 1 < r.xs.bands.size()); REQUIRE(r.xs.bands[rl + 1].kind == LaneKind::Shoulder);
+    REQUIRE(l + 1 < b.xs.bands.size()); REQUIRE(b.xs.bands[l + 1].kind == LaneKind::Shoulder);
+    const auto added_mm = b.xs.bands[l].width_mm;
+    CHECK(r.xs.bands[rl].end == WidthRamp{r.xs.offset.end_length_mm, added_mm});
+    const double b_shoulder_mm = std::round((bd[l + 1] - bd[l + 2]) * 1000.0);
+    if (r.xs.bands[rl + 1].width_mm != b_shoulder_mm) CHECK(r.xs.bands[rl + 1].end == WidthRamp{r.xs.offset.end_length_mm, static_cast<std::int32_t>(b_shoulder_mm)});
+    const auto rd = boundaries(r.xs, r.length);
+    CHECK(std::abs(std::round((rd[rl] - rd[rl + 1]) * 1000.0) - added_mm) <= 1);
+    CHECK(std::abs(std::round((rd[rl] + rd[rl + 1]) / 2 * 1000.0) - r.xs.offset.end_mm) <= 1);   // centred on the landing
+    CHECK(std::abs(std::round((rd[rl + 1] - rd[rl + 2]) * 1000.0) - b_shoulder_mm) <= 1);
+    // Far from the node R has its own widths again.
+    const auto rf = boundaries(r.xs, r.length - r.xs.offset.end_length_mm / 1000.0 - 1.0);
+    CHECK(std::abs(std::round((rf[rl] - rf[rl + 1]) * 1000.0) - r.xs.bands[rl].width_mm) <= 1);
     (void)a;
 }
 

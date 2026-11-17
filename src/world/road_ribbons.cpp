@@ -664,8 +664,12 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
   const auto& direction=layout->direction;const bool one=layout->one;
   const int lanes=layout->lanes,forward=layout->forward,flags=layout->flags;
   const double length=p.reference.length_m;if(length<=.01)continue;
-  const bool start_junction=p.stretch.start_ref<w.node_ids.size()&&degree[w.node_ids[p.stretch.start_ref]]>2;
-  const bool end_junction=p.stretch.end_ref<w.node_ids.size()&&degree[w.node_ids[p.stretch.end_ref]]>2;
+  // A landed join (ROADS stage 3b): a node of degree > 2 where this end carries a join is a merge-lane node (only the merge-lane
+  // rule gives an end there a join); its three arms continue each other and keep their markings to the node. Read from the
+  // stretch's own section, so every tile agrees.
+  const auto joined=[&](bool at_end){return entry.cross_section&&(at_end?entry.cross_section->end_join:entry.cross_section->start_join).kind!=g2m::JoinKind::None;};
+  const bool start_junction=p.stretch.start_ref<w.node_ids.size()&&degree[w.node_ids[p.stretch.start_ref]]>2&&!joined(false);
+  const bool end_junction=p.stretch.end_ref<w.node_ids.size()&&degree[w.node_ids[p.stretch.end_ref]]>2&&!joined(true);
   // A junction served for this stretch end (owner tile only) gives the exact trim; elsewhere the 3-11 m ramp stays. A
   // through road's markings do not fade: the junction overlay continues them.
   const auto trim_of=[&](bool at_end)->std::optional<double>{auto t=trims.find({entry.way_id,entry.stretch.start_ref,at_end});if(t==trims.end())return {};return t->second;};

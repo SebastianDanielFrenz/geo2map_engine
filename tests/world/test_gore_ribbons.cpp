@@ -7,6 +7,8 @@
 //   S1 road_cross_section_join.cpp resolve_cross_section: gore disabled (resolve_impl(..., false) on the served path)      -> GR1, GR2 fail (0.675 m)
 //   S2 apply_gore_shoulders: ramp the shoulder on the side away from the other way                                        -> GR1, GR2 fail (0.675 m)
 //   S3 apply_gore_shoulders: nose where the gap reaches the larger shoulder only (need = max, not sum)                     -> GR1, GR2 fail (0.425 m)
+//   S13 road_ribbons.cpp: the 3-11 m junction fade kept at a START end that carries a join (ROADS stage 3b)             -> GR3 fails (fade 0
+//       at the node for every arm that starts there: the single arm of the merge, the through arm and the link of the diverge)
 #include "road_fixture.h"
 
 #include "g2m/layer/road_rules.h"
@@ -119,4 +121,34 @@ TEST_CASE("GR2 a diverge: the same", "[world][road_ribbons][road_gore]") {
     const double w = worst_overlap(true);
     INFO("worst overlap " << w << " m");
     CHECK(w <= 0.05);
+}
+
+// ROADS stage 3b: at a landed merge node the three arms continue each other; no arm's markings fade toward the node (the 3-11 m
+// junction fade stays for other nodes of degree > 2).
+double min_fade_near_node(bool diverge, std::int64_t way_id) {
+    const auto graph = scene(diverge);
+    g2m_test::GeomOptions o;
+    o.height_m = [](double, double) { return 100.0; };
+    o.completion = served_road_completion_options();
+    auto tile = g2m_test::geometry_in_tile_with(graph, kKey, o);
+    REQUIRE(tile);
+    double worst = 2;
+    for (const auto& entry : tile->entries) {
+        if (entry.way_id != way_id || !entry.cross_section || !entry.profile) continue;
+        RoadGeomTile one = *tile; one.entries = {entry}; one.features.clear();
+        world::RoadRibbonOptions options; options.drape = world::RibbonDrape::PointSampled;
+        const auto mesh = world::build_road_ribbons(one, kKey, [](double, double) -> std::optional<double> { return 100.0; }, 0.0, {}, options);
+        const double ox = static_cast<double>(kKey.min_easting()), oy = static_cast<double>(kKey.min_northing());
+        for (const auto& v : mesh.vertices) {
+            const double x = ox + v.x - kE0, y = oy + v.y - kN0;
+            if (std::hypot(x, y) < 11.0) worst = std::min(worst, static_cast<double>(v.fade));
+        }
+    }
+    return worst;
+}
+TEST_CASE("GR3 a landed merge node: the markings of all three arms run to the node unfaded", "[world][road_ribbons][road_gore]") {
+    for (const bool diverge : {false, true}) for (const std::int64_t id : {10, 11, 12}) {
+        INFO("diverge " << diverge << " way " << id);
+        CHECK(min_fade_near_node(diverge, id) == 1.0);
+    }
 }

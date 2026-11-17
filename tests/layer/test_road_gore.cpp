@@ -23,6 +23,17 @@
 //   S8 apply_gore_shoulders: L_g = the first candidate (the nose rounded up to gore_step_m), no lengthening      -> GB1, GB2 fail
 //   S9 apply_gore_shoulders: each way its own gap profile instead of the link's                                 -> G3 fails (the two
 //      facing shoulders of the mirrored scene get different lengths)
+//
+// Landing widths (ROADS stage 3b, W1; M1 in test_road_merge_lane.cpp). W1's bound is 0.05 m plus the cos residue of each edge.
+// Recorded sabotages (2026-11-17):
+//   S10 classify_merge_node: landing target from the single arm's base widths, not its widths at the node         -> W1 (merge and
+//       diverge right: 0.19/0.21 m vs 0.11/0.13), M1, G1, G2 (gore gap -62 mm), GB1, L1, L3 fail (the landed lane sits 0.12 m inside
+//       the through lanes at the node)
+//   S11 resolve_impl: no width ramp on the landed lanes (link width kept)                                         -> W1, M1, L1, GB1 fail
+//   S12 resolve_impl: no width ramp on the outer shoulder                                                         -> W1 (outer bed edge
+//       0.40 m), M1 fail
+//   S14 apply_clearance_landing: the lengthened landing moves the offset only, the band ramps keep the slope length -> M1, GB1, L1 fail
+//   (S13, the marking fade: tests/world/test_gore_ribbons.cpp GR3)
 #include "road_fixture.h"
 #include "g2m/layer/road_cross_section.h"
 #include <catch2/catch_test_macros.hpp>
@@ -122,11 +133,17 @@ void check_arm(const Resolved& w, bool at_end, bool facing_left, const char* wha
     CHECK(std::abs(band_width(w.xs, i, st(nose / 2)) - full / 2) < 0.01);   // the smoothstep's midpoint
     CHECK(std::abs(band_width(w.xs, i, st(nose)) - full) < 1e-6);
     CHECK(std::abs(band_width(w.xs, i, st(nose + 5.0)) - full) < 1e-6);
-    // The outer shoulder is untouched.
+    // The outer shoulder is not the gore's: the through way's is untouched, the link's carries only its landing width (ROADS stage
+    // 3b: from the single arm's shoulder at the node over the landing length).
     const std::size_t o = facing_left ? last_counted(w.xs) + 1 : first_counted(w.xs) - 1;
     if (o < w.xs.bands.size() && w.xs.bands[o].kind == LaneKind::Shoulder) {
         const auto& outer = at_end ? w.xs.bands[o].end : w.xs.bands[o].start;
-        CHECK(outer.length_mm == 0);
+        const bool landed = (at_end ? w.xs.end_join : w.xs.start_join).kind == JoinKind::Landing;
+        if (!landed) CHECK(outer.length_mm == 0);
+        else if (outer.length_mm != 0) {   // right: trunk_link 1.0 m from trunk 0.5 m; left: both 0.5 m, no ramp
+            CHECK(outer.length_mm == (at_end ? w.xs.offset.end_length_mm : w.xs.offset.start_length_mm));
+            CHECK(outer.from_width_mm != w.xs.bands[o].width_mm);
+        }
     }
 }
 void check_scene(bool diverge, bool left) {
@@ -259,6 +276,8 @@ TEST_CASE("L1 a link inside the through lanes for 120 m: the landing lasts until
     CHECK(after >= -0.05);
     const auto r = resolve_in(*builder, s.r, builtin_road_rules_de());
     const auto& t = r.trace.ends[1];
+    INFO("landing base " << t.landing_base_mm << " clear " << t.landing_clear_mm << " final " << t.landing_final_mm << " min gap " << t.landing_min_gap_mm
+         << " at " << t.landing_min_gap_at_mm << " centre " << t.landing_centre_mm);
     REQUIRE(t.landing_clear);
     CHECK(t.landing_clear_reached);
     CHECK(t.landing_clear_mm > 120000);                        // the link's own line leaves A's lanes beyond 120 m
@@ -357,5 +376,45 @@ TEST_CASE("GB2 a gap that does not open within gore_max_m: the cap is reported w
         CHECK(t.gore_capped); CHECK_FALSE(t.gore_stretch_bound);
         CHECK(t.gore_ramp_mm == rules.merge_lane.gore_max_m * 1000);
         CHECK(t.gore_overlap_mm > rules.merge_lane.gore_overlap_tol_mm);   // measured 853 mm at 118 m
+    }
+}
+
+// ---- Landing widths (ROADS stage 3b) ----
+// At the node the landed lane's edges are the single arm's added lane's edges and the ramp's outer road-bed edge is the single arm's
+// shoulder edge there, read independently of the rule: both ways' boundaries from their served sections, put into the world through
+// their own reference lines and compared along the single arm's normal (y: B runs along +x). The landing puts R's centre on the added
+// lane's centre along that normal; an edge a distance h from R's centre lands h * cos(phi) from it, the cos residue the rule accepts.
+TEST_CASE("W1 at the node the landed lane and the ramp's outer shoulder meet the single arm's added lane and shoulder", "[layer][road_gore][roads]") {
+    for (const bool left : {false, true}) for (const bool diverge : {false, true}) {
+        INFO("left " << left << " diverge " << diverge);
+        const auto s = scene(diverge, left);
+        const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+        const auto& rules = builtin_road_rules_de();
+        const auto b = resolve_in(*builder, s.b, rules), r = resolve_in(*builder, s.r, rules);
+        const ReferenceFitLimits limits = served_limits(rules);
+        const auto rref = builder->fit_stretch(s.r, (*builder->stretches(s.r))[0], limits); REQUIRE(rref);
+        const auto bref = builder->fit_stretch(s.b, (*builder->stretches(s.b))[0], limits); REQUIRE(bref);
+        const bool at_end = !diverge;                      // R ends at the node for a merge, starts there for a diverge
+        const double sr = at_end ? r.length : 0.0, sb = at_end ? 0.0 : b.length;
+        std::vector<double> rb(r.xs.bands.size() + 1), bb(b.xs.bands.size() + 1);
+        REQUIRE(r.xs.boundaries_at(sr, rb)); REQUIRE(b.xs.boundaries_at(sb, bb));
+        const std::size_t rf = first_counted(r.xs), rl = last_counted(r.xs);
+        const std::size_t k = left ? first_counted(b.xs) : last_counted(b.xs);   // B's added lane
+        REQUIRE(rf == rl);
+        // band i spans boundaries [i] (left) .. [i + 1] (right); the outer side is the ramp's side
+        const std::size_t r_sh = left ? rf - 1 : rl + 2, b_sh = left ? k - 1 : k + 2;
+        REQUIRE(r.xs.bands[left ? rf - 1 : rl + 1].kind == LaneKind::Shoulder);
+        REQUIRE(b.xs.bands[left ? k - 1 : k + 1].kind == LaneKind::Shoulder);
+        const double cos_phi = 150.0 / std::hypot(150.0, 40.0);
+        const double centre = (rb[rf] + rb[rl + 1]) / 2;
+        const auto y_of = [](const RoadReferenceLine& ref, double st, double t) { const auto p = lateral_point(ref, st, t); REQUIRE(p); return p->y; };
+        const std::pair<std::size_t, std::size_t> edges[] = {{rf, k}, {rl + 1, k + 1}, {r_sh, b_sh}};
+        const char* names[] = {"lane edge (left)", "lane edge (right)", "outer bed edge"};
+        for (int e = 0; e < 3; ++e) {
+            const double yr = y_of(*rref, sr, rb[edges[e].first]), yb = y_of(*bref, sb, bb[edges[e].second]);
+            const double residue = std::abs(rb[edges[e].first] - centre) * (1 - cos_phi);
+            INFO(names[e] << ": R " << yr << " B " << yb << " residue " << residue);
+            CHECK(std::abs(yr - yb) <= 0.05 + residue);
+        }
     }
 }
