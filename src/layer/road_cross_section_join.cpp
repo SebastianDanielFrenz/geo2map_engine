@@ -389,8 +389,28 @@ MergeNodeReason make_arm(const RoadReferenceBuilder& builder, const RoadRules& r
 
 double angle_deg(double cos_angle) { return det::acos(std::clamp(cos_angle, -1.0, 1.0)) * 180.0 / det::kPi; }
 
+// The served planar reference fit (curvature exceptions on, the rules' chord bound), as the served tiles fit.
+ReferenceFitLimits served_fit_limits(const RoadRules& rules) {
+    ReferenceFitLimits served;
+    served.allow_curvature_exceptions = true;
+    served.chord_half_width_factor = static_cast<double>(rules.reference.chord_half_width_percent) / 100.0;
+    served.chord_margin_m = static_cast<double>(rules.reference.chord_margin_mm) / 1000.0;
+    return served;
+}
+// The fitted reference's pose of an arm's stretch at the node (ROADS stage 3c-1); nullopt when the stretch does not fit.
+std::optional<geom::CurvePose> arm_pose(const RoadReferenceBuilder& builder, const NodeArm& a, const ReferenceFitLimits& limits) {
+    const auto stretches = builder.stretches(a.arm.way_id); if (!stretches) return std::nullopt;
+    for (const auto& st : *stretches) {
+        if (a.arm.leaves_node ? st.start_ref != a.arm.ref : st.end_ref != a.arm.ref) continue;
+        const auto f = builder.fit_stretch(a.arm.way_id, st, limits); if (!f) return std::nullopt;
+        const auto pose = f->at(a.arm.leaves_node ? 0.0 : f->length_m); if (!pose) return std::nullopt;
+        return *pose;
+    }
+    return std::nullopt;
+}
+
 std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules,
-        MergeNodeReason* why = nullptr) {
+        const ReferenceFitLimits& fit_limits, MergeNodeReason* why = nullptr) {
     // Every refusal names its reason (diagnostics only, g2m_xs_probe --merge-census).
     const auto refuse = [why](MergeNodeReason r) -> std::optional<MergeNode> { if (why) *why = r; return std::nullopt; };
     if (why) *why = MergeNodeReason::Ok;
@@ -461,9 +481,18 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     const double centre_m = (edge[static_cast<std::size_t>(first_added)] + edge[static_cast<std::size_t>(last_added) + 1]) / 2;
     const std::int32_t correction = out.merge ? join.corr_d : join.corr_u;
     const double target_mm = std::round(centre_m * 1000.0) + static_cast<double>(correction);
-    const double cos_phi = R.dx * S.dx + R.dy * S.dy;
+    // The landing is R's lateral offset in R's own frame that puts its counted-lane centre on the target in S's frame at the node.
+    // Both frames are the fitted references' poses at the node (ROADS stage 3c-1): R's offset reaches S's frame scaled by cos phi of
+    // the two headings, and R's reference point lies `lat` left of S's. A stretch that does not fit falls back to the chords
+    // (direction_probe_m) and coincident reference points.
+    double cos_phi = R.dx * S.dx + R.dy * S.dy, lat_mm = 0;
+    if (const auto ps = arm_pose(builder, S, fit_limits), pr = ps ? arm_pose(builder, R, fit_limits) : std::nullopt; ps && pr) {
+        double ss, cs, sr, cr; det::sincos(ps->heading, ss, cs); det::sincos(pr->heading, sr, cr);
+        cos_phi = cr * cs + sr * ss;
+        lat_mm = (-(pr->x - ps->x) * ss + (pr->y - ps->y) * cs) * 1000.0;
+    }
     if (!(cos_phi > 0)) return refuse(MergeNodeReason::RampBackward);
-    const double landing = std::round(target_mm / cos_phi);
+    const double landing = std::round((target_mm - lat_mm) / cos_phi);
     if (std::fabs(landing) > static_cast<double>(ml.max_landing_offset_mm)) return refuse(MergeNodeReason::LandingTooFar);
     out.through_id = T.arm.way_id; out.single_id = S.arm.way_id; out.ramp_id = R.arm.way_id;
     out.through_leaves = T.arm.leaves_node; out.single_leaves = S.arm.leaves_node;
@@ -512,7 +541,7 @@ const char* cross_section_end_note_name(CrossSectionEndNote note) {
 
 MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules) {
     MergeNodeDiagnosis d;
-    if (const auto m = classify_merge_node(builder, node_id, rules, &d.reason)) {
+    if (const auto m = classify_merge_node(builder, node_id, rules, served_fit_limits(rules), &d.reason)) {
         d.merge = m->merge; d.through_id = m->through_id; d.single_id = m->single_id; d.ramp_id = m->ramp_id;
         d.landing_mm = m->landing_mm; d.landing_length_mm = m->landing_length_mm;
     }
@@ -567,7 +596,7 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
             // A node of degree three: the through pair of a merge lane / lane drop joins like a degree-two node, the ramp lands.
             const auto node = way->node_ids[at_end ? stretch.end_ref : stretch.start_ref];
             tr.ends[e].merge_ran = true;
-            if (const auto merge = classify_merge_node(builder, node, rules, &tr.ends[e].merge_reason)) {
+            if (const auto merge = classify_merge_node(builder, node, rules, fit_limits, &tr.ends[e].merge_reason)) {
                 merge_at[static_cast<std::size_t>(e)] = *merge;
                 if (merge->through_id == way_id) join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->single_id, 0, merge->single_leaves}};
                 else if (merge->single_id == way_id) {
@@ -1056,11 +1085,7 @@ void apply_gore_shoulders(const RoadReferenceBuilder& builder, const RoadGraphWa
 
 Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& builder, std::int64_t way_id,
         RoadStretch stretch, double length_m, const RoadRules& rules, CrossSectionTrace* trace, const ReferenceFitLimits* fit_limits) {
-    ReferenceFitLimits served;
-    served.allow_curvature_exceptions = true;
-    served.chord_half_width_factor = static_cast<double>(rules.reference.chord_half_width_percent) / 100.0;
-    served.chord_margin_m = static_cast<double>(rules.reference.chord_margin_mm) / 1000.0;
-    return resolve_impl(builder, way_id, stretch, length_m, rules, trace, fit_limits ? *fit_limits : served, true, 0);
+    return resolve_impl(builder, way_id, stretch, length_m, rules, trace, fit_limits ? *fit_limits : served_fit_limits(rules), true, 0);
 }
 
 Result<LateralPoint> lateral_point(const RoadReferenceLine& reference, double s, double t) {
