@@ -20,6 +20,13 @@
 //       reference line, l/r = the bed's left/right edge point, w/lanes/flags = the row's vertex attributes
 //   NODE node E N deg codes                  a stretch end node; codes: PATCH (a served junction patch), JD:<decline>,
 //       LAND (a ramp landed here), TAPER (a LaneChange join here), M:<merge reason> (degree-3 classification), J:<kind>
+//   E   node deg S T R kindS kindT kindR lanesS lanesU dLaneL dLaneR dBedL dBedR intData intDrawn gapTR rside  (ROADS stage 3a) at a node
+//       where a ramp landed: in the node's cross frame (S's reference pose at the node, t positive left of S's way direction),
+//       S's outer counted-lane and road-bed edges minus those of the union of T and R, signed OUTWARD in mm (positive = S
+//       reaches further out than T and R on that side); intData = the largest distance in mm from an interior lane boundary of
+//       one side (S, or T and R incl. their facing edges) to the nearest boundary of the other, from the served bands;
+//       intDrawn = the same for the boundaries the shader draws (equal division of the counted span, mark_width/lanes);
+//       gapTR = the gap in mm between T's and R's facing lane edges at the node (negative = they overlap); rside = L or R, R's side of S
 //   OV  wayA srA wayB srB s0 s1 maxw meanw E N   two entries' road beds overlapping more than 0.5 m wide over more than
 //       10 m (a raster of 0.25 m cells, 1 m station bins of A; s0/s1 stations of A)
 //
@@ -35,6 +42,7 @@
 #include "g2m/world/ticket.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <iostream>
 #include <cmath>
@@ -95,6 +103,64 @@ const RoadGraphNode* find_node(const RoadGraph& g, std::int64_t id) {
     return it != g.nodes.end() && it->osm_id == id ? &*it : nullptr;
 }
 using EntryKey = std::pair<std::int64_t, std::uint32_t>;
+
+// One arm's lateral layout at the node, in the node frame (origin o, unit normal n pointing left of S).
+struct ArmAtNode {
+    bool ok = false;
+    double lane_l = 0, lane_r = 0, bed_l = 0, bed_r = 0;   // counted-lane span and road bed (ribbon span_at), node frame
+    std::vector<double> bounds;                            // every counted-lane boundary incl. the outer two, node frame
+    std::vector<double> drawn;                             // the boundaries the shader draws: equal division of the span
+    int lanes = 0;
+};
+ArmAtNode arm_at_node(const RoadGeomEntry& en, bool at_end, double ox, double oy, double nx, double ny) {
+    ArmAtNode a;
+    if (!en.cross_section || !en.profile) return a;
+    const auto& xs = *en.cross_section;
+    const std::size_t nb = xs.bands.size();
+    if (nb == 0 || nb > 32) return a;
+    const double s = at_end ? en.profile->reference.length_m : 0.0;
+    const auto p = en.profile->reference.at(s);
+    if (!p) return a;
+    std::array<double, 33> t{};
+    if (!xs.boundaries_at(s, std::span<double>(t.data(), nb + 1))) return a;
+    const double sh = std::sin(p->heading), ch = std::cos(p->heading);
+    const auto proj = [&](double tt) { return (p->x - sh * tt - ox) * nx + (p->y + ch * tt - oy) * ny; };
+    // counted lanes as the ribbon draws them (span_at): their extent, the bed around them
+    double left = -1e9, right = 1e9;
+    for (std::size_t i = 0; i < nb; ++i)
+        if (xs.bands[i].counted) {
+            left = std::max(left, t[i]); right = std::min(right, t[i + 1]);
+            if (t[i] - t[i + 1] > 1e-6) { a.bounds.push_back(proj(t[i])); a.bounds.push_back(proj(t[i + 1])); ++a.lanes; }
+        }
+    const auto fp = carve_footprint(xs, s);
+    if (left <= right) { left = fp.carriageway_left; right = fp.carriageway_right; }
+    if (!(left > right)) return a;
+    const double bl = std::max(fp.roadbed_left, left), br = std::min(fp.roadbed_right, right);
+    const double pl = proj(left), pr = proj(right), qbl = proj(bl), qbr = proj(br);
+    a.lane_l = std::max(pl, pr); a.lane_r = std::min(pl, pr);
+    a.bed_l = std::max(qbl, qbr); a.bed_r = std::min(qbl, qbr);
+    std::sort(a.bounds.begin(), a.bounds.end());
+    a.bounds.erase(std::unique(a.bounds.begin(), a.bounds.end(), [](double x, double y) { return std::abs(x - y) < 1e-6; }), a.bounds.end());
+    if (a.lanes > 0)
+        for (int k = 0; k <= a.lanes; ++k) a.drawn.push_back(a.lane_r + (a.lane_l - a.lane_r) * k / a.lanes);
+    a.ok = true;
+    return a;
+}
+// Largest distance from an interior value of `x` to the nearest value of `y`, and the other way round.
+double interior_mismatch(const std::vector<double>& x, const std::vector<double>& y, double lo_x, double hi_x, double lo_y, double hi_y) {
+    double worst = 0;
+    const auto one = [&](const std::vector<double>& from, double lo, double hi, const std::vector<double>& to) {
+        for (const double v : from) {
+            if (v <= lo + 1e-6 || v >= hi - 1e-6) continue;   // outer edges are reported separately
+            double best = 1e30;
+            for (const double w : to) best = std::min(best, std::abs(v - w));
+            worst = std::max(worst, best);
+        }
+    };
+    one(x, lo_x, hi_x, y);
+    one(y, lo_y, hi_y, x);
+    return worst;
+}
 
 } // namespace
 
@@ -214,6 +280,62 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                         const auto d = diagnose_merge_node(*builder, node, rules);
                         node_codes[node].insert(std::string("M:") + merge_node_reason_name(d.reason));
                     }
+                }
+            }
+            // E records (ROADS stage 3a): every node the tile owns where a ramp's end carries the Landing join
+            if (builder) {
+                std::map<std::pair<std::int64_t, std::int64_t>, std::pair<std::size_t, bool>> at_node;   // (way, node) -> entry, at_end
+                for (std::size_t i = 0; i < geometry->entries.size(); ++i) {
+                    const auto& en = geometry->entries[i];
+                    if (!en.cross_section || !en.profile) continue;
+                    const auto* way = find_way(G, en.way_id);
+                    if (!way) continue;
+                    for (const bool at_end : {false, true}) {
+                        const std::uint32_t r = at_end ? en.stretch.end_ref : en.stretch.start_ref;
+                        if (r < way->node_ids.size()) at_node[{en.way_id, way->node_ids[r]}] = {i, at_end};
+                    }
+                }
+                for (const auto& [k, v] : at_node) {
+                    const auto& rn = geometry->entries[v.first];
+                    const auto& rj = v.second ? rn.cross_section->end_join : rn.cross_section->start_join;
+                    if (rj.kind != JoinKind::Landing) continue;
+                    const std::int64_t node = k.second;
+                    const auto* n = find_node(G, node);
+                    if (!n) continue;
+                    const double e = static_cast<double>(n->position.x) / 1000.0, nn = static_cast<double>(n->position.y) / 1000.0;
+                    if (!owned(e, nn) || !in_box(e, nn, 0)) continue;
+                    const auto d = diagnose_merge_node(*builder, node, rules);
+                    const std::int64_t S = rj.neighbour_way_id, T = d.through_id, R = rn.way_id;
+                    const auto si = at_node.find({S, node}), ti = at_node.find({T, node});
+                    if (si == at_node.end() || ti == at_node.end()) {
+                        std::printf("E %lld %d %lld %lld %lld missing\n", static_cast<long long>(node), degree[node], static_cast<long long>(S),
+                                    static_cast<long long>(T), static_cast<long long>(R));
+                        continue;
+                    }
+                    const auto& sn = geometry->entries[si->second.first];
+                    const auto& tn = geometry->entries[ti->second.first];
+                    const bool s_end = si->second.second;
+                    const auto sp = sn.profile->reference.at(s_end ? sn.profile->reference.length_m : 0.0);
+                    if (!sp) continue;
+                    const double nx = -std::sin(sp->heading), ny = std::cos(sp->heading);
+                    const auto as = arm_at_node(sn, s_end, sp->x, sp->y, nx, ny), at = arm_at_node(tn, ti->second.second, sp->x, sp->y, nx, ny),
+                               ar = arm_at_node(rn, v.second, sp->x, sp->y, nx, ny);
+                    if (!as.ok || !at.ok || !ar.ok) continue;
+                    const double ul = std::max(at.lane_l, ar.lane_l), ur = std::min(at.lane_r, ar.lane_r);
+                    const double ubl = std::max(at.bed_l, ar.bed_l), ubr = std::min(at.bed_r, ar.bed_r);
+                    std::vector<double> ub = at.bounds, ud = at.drawn;
+                    ub.insert(ub.end(), ar.bounds.begin(), ar.bounds.end());
+                    ud.insert(ud.end(), ar.drawn.begin(), ar.drawn.end());
+                    const bool r_left = (ar.lane_l + ar.lane_r) > (at.lane_l + at.lane_r);
+                    const double gap = r_left ? ar.lane_r - at.lane_l : at.lane_r - ar.lane_l;
+                    const auto& sj = s_end ? sn.cross_section->end_join : sn.cross_section->start_join;
+                    const auto& tj = ti->second.second ? tn.cross_section->end_join : tn.cross_section->start_join;
+                    const auto mm = [](double x) { return static_cast<long long>(std::llround(x * 1000.0)); };
+                    std::printf("E %lld %d %lld %lld %lld %s %s %s %d %d %lld %lld %lld %lld %lld %lld %lld %c\n", static_cast<long long>(node), degree[node],
+                                static_cast<long long>(S), static_cast<long long>(T), static_cast<long long>(R), join_name(sj.kind), join_name(tj.kind),
+                                join_name(rj.kind), as.lanes, at.lanes + ar.lanes, mm(as.lane_l - ul), mm(ur - as.lane_r), mm(as.bed_l - ubl), mm(ubr - as.bed_r),
+                                mm(interior_mismatch(as.bounds, ub, as.lane_r, as.lane_l, ur, ul)), mm(interior_mismatch(as.drawn, ud, as.lane_r, as.lane_l, ur, ul)),
+                                mm(gap), r_left ? 'L' : 'R');
                 }
             }
             // ribbon rows of the selected entries, and the bed overlap raster
