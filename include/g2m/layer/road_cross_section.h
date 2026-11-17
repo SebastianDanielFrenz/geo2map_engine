@@ -200,6 +200,11 @@ struct CrossSectionEndTrace {
     MergeNodeReason merge_reason = MergeNodeReason::Ok;
     JoinKind kind = JoinKind::None;                        // the resolved join's kind (Joined)
     bool tapered = false;                                  // some band of this end got a width ramp (before clipping)
+    bool split = false;                                    // the join's direction groups did not match (section 4.7)
+    std::int32_t delta_mm = 0;                             // the join residual before absorption (A's frame)
+    std::int8_t partner[32]{};                             // per band of A: the matched band of the neighbour in ITS own
+                                                           // band order, -1 unmatched (valid when note == Joined)
+    bool neighbour_same = true;                            // the neighbour runs in A's direction at the node
 };
 struct CrossSectionTrace { CrossSectionEndTrace ends[2]{}; };
 Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& builder, std::int64_t way_id,

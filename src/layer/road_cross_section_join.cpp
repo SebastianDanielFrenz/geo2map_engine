@@ -204,6 +204,7 @@ struct JoinOutcome {
     JoinKind kind = JoinKind::Consistent;
     std::int32_t corr_u = 0, corr_d = 0;
     bool split = false;   // the sides' direction groups do not match (section 4.7)
+    std::vector<int> pu, pd; // diagnostics only (CrossSectionTrace): the plan's band partners
 };
 
 std::int32_t floor_div2(std::int32_t v) { return v >= 0 ? v / 2 : -((-v + 1) / 2); }
@@ -263,6 +264,7 @@ JoinOutcome resolve_join(const Side& U, const Side& D, const RoadRules& rules) {
     if (plan.split) match_outer(U, D, plan);
     evaluate_widths(U, D, plan, out.u, out.d);
     out.split = plan.split;
+    out.pu = plan.pu; out.pd = plan.pd;
     out.delta = residual(U, D, plan, out.u, out.d);
 
     const int prio_u0 = U.xs.anchor.source == PlacementSource::Transition ? 0 : U.xs.anchor.source == PlacementSource::Absent ? 1 : 2;
@@ -566,6 +568,18 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
         r.record = {out.kind, id_b, out.delta};
         tr.ends[e].note = CrossSectionEndNote::Joined;
         tr.ends[e].kind = out.kind;
+        tr.ends[e].split = out.split;
+        tr.ends[e].delta_mm = a_mirrored ? -out.delta : out.delta;
+        tr.ends[e].neighbour_same = same;
+        {
+            const auto& partners = a_is_u ? out.pu : out.pd;
+            const std::size_t nb = other_base->xs->bands.size();
+            for (std::size_t i = 0; i < n && i < 32; ++i) {
+                const std::size_t ci = a_mirrored ? n - 1 - i : i;
+                const int cj = partners[ci];
+                tr.ends[e].partner[i] = static_cast<std::int8_t>(cj < 0 ? -1 : b_mirrored ? static_cast<int>(nb) - 1 - cj : cj);
+            }
+        }
         const SideEval& mine = a_is_u ? out.u : out.d;
         const std::int32_t corr = a_is_u ? out.corr_u : out.corr_d;
         r.correction = a_mirrored ? -corr : corr;
