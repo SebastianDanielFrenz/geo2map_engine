@@ -10,6 +10,8 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <optional>
+#include <span>
 
 namespace g2m {
 namespace {
@@ -500,8 +502,15 @@ MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std:
     return d;
 }
 
-Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& builder, std::int64_t way_id,
-        RoadStretch stretch, double length_m, const RoadRules& rules, CrossSectionTrace* trace) {
+namespace {
+Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::int64_t way_id, RoadStretch stretch, double length_m,
+        const RoadRules& rules, CrossSectionTrace* trace, const ReferenceFitLimits& fit_limits, bool gore);
+void apply_gore_shoulders(const RoadReferenceBuilder& builder, const RoadGraphWay& way, std::int64_t way_id, RoadStretch stretch,
+        const RoadRules& rules, const ReferenceFitLimits& fit_limits, const std::array<std::optional<MergeNode>, 2>& merge_at,
+        RoadCrossSection& xs, CrossSectionTrace& tr);
+
+Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::int64_t way_id, RoadStretch stretch, double length_m,
+        const RoadRules& rules, CrossSectionTrace* trace, const ReferenceFitLimits& fit_limits, bool gore) {
     CrossSectionTrace local_trace;   // diagnostics only: never read back into the result
     CrossSectionTrace& tr = trace ? *trace : local_trace;
     tr = CrossSectionTrace{};
@@ -521,6 +530,7 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
     std::array<std::int32_t, 2> landing{0, 0}, landing_length{0, 0};   // the end of a merge ramp (G2M-028)
     std::array<std::int64_t, 2> landing_single{0, 0};                    // ... and the single arm it lands beside
     std::array<bool, 2> single_at_merge{false, false};                    // this end is the single arm's end at a merge-lane node
+    std::array<std::optional<MergeNode>, 2> merge_at;                    // the merge node classified at this end (gore shoulders)
     for (int e = 0; e < 2; ++e) {
         const bool at_end = e == 1;
         auto join = builder.join(way_id, stretch, at_end);
@@ -530,6 +540,7 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
             const auto node = way->node_ids[at_end ? stretch.end_ref : stretch.start_ref];
             tr.ends[e].merge_ran = true;
             if (const auto merge = classify_merge_node(builder, node, rules, &tr.ends[e].merge_reason)) {
+                merge_at[static_cast<std::size_t>(e)] = *merge;
                 if (merge->through_id == way_id) join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->single_id, 0, merge->single_leaves}};
                 else if (merge->single_id == way_id) {
                     join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->through_id, 0, merge->through_leaves}};
@@ -653,9 +664,158 @@ Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& build
         xs.offset.end_length_mm = scaled(xs.offset.end_length_mm, length_mm, a_end);
         xs.flags |= kXsTaperShortenedEnd;
     }
+    if (gore && rules.merge_lane.enabled && (merge_at[0] || merge_at[1]))
+        apply_gore_shoulders(builder, *way, way_id, stretch, rules, fit_limits, merge_at, xs, tr);
     CrossSectionBase result;
     result.xs = std::move(xs);
     return result;
+}
+
+// Gore shoulders (ROADS stage 1). One way of a landed merge node: its stretch at the node, reference and section.
+struct GoreArm {
+    RoadReferenceLine ref;
+    RoadCrossSection xs;
+    bool at_end = false;              // the node is the stretch's end
+    std::size_t first = 0, last = 0;  // counted bands
+    double length = 0;
+    double station(double d) const { return at_end ? length - d : d; }   // d = distance from the node
+    std::optional<double> boundary(double d, std::size_t i) const {
+        std::array<double, 33> b{};
+        if (!xs.boundaries_at(station(d), std::span<double>(b.data(), xs.bands.size() + 1))) return std::nullopt;
+        return b[i];
+    }
+    // Lateral t of the left (true) or right edge of the counted lanes at distance d from the node.
+    std::optional<double> lane_edge(double d, bool left) const { return boundary(d, left ? first : last + 1); }
+};
+bool counted_range(const RoadCrossSection& xs, std::size_t& first, std::size_t& last) {
+    bool any = false;
+    for (std::size_t i = 0; i < xs.bands.size(); ++i) if (xs.bands[i].counted) { if (!any) first = i; last = i; any = true; }
+    return any && xs.bands.size() <= 32;
+}
+// Lateral t of point (x, y) in the frame of `pose` (positive left).
+double lateral_of(const geom::CurvePose& pose, double x, double y) {
+    double sn, cs; det::sincos(pose.heading, sn, cs);
+    return -(x - pose.x) * sn + (y - pose.y) * cs;
+}
+// On which side of `self` the other way lies: the centre of its counted lanes 10 m from the node, seen in self's frame.
+std::optional<bool> other_on_left(const GoreArm& self, const GoreArm& other) {
+    const double d_self = std::min(10.0, self.length), d_other = std::min(10.0, other.length);
+    const auto l = other.lane_edge(d_other, true), r = other.lane_edge(d_other, false); if (!l || !r) return std::nullopt;
+    const auto q = lateral_point(other.ref, other.station(d_other), (*l + *r) / 2); if (!q) return std::nullopt;
+    const auto ps = self.ref.at(self.station(d_self)); if (!ps) return std::nullopt;
+    const double t = lateral_of(*ps, q->x, q->y);
+    if (t == 0) return std::nullopt;
+    return t > 0;
+}
+
+void apply_gore_shoulders(const RoadReferenceBuilder& builder, const RoadGraphWay& way, std::int64_t way_id, RoadStretch stretch,
+        const RoadRules& rules, const ReferenceFitLimits& fit_limits, const std::array<std::optional<MergeNode>, 2>& merge_at,
+        RoadCrossSection& xs, CrossSectionTrace& tr) {
+    const MergeLaneRules& ml = rules.merge_lane;
+    const auto length_mm = static_cast<std::int64_t>(std::floor(xs.length_m * 1000.0));
+    for (int e = 0; e < 2; ++e) {
+        const auto& m = merge_at[static_cast<std::size_t>(e)];
+        if (!m || (way_id != m->ramp_id && way_id != m->through_id)) continue;   // the single arm is untouched
+        const bool at_end = e == 1;
+        const std::int64_t node = way.node_ids[at_end ? stretch.end_ref : stretch.start_ref];
+        const std::int64_t other_id = way_id == m->ramp_id ? m->through_id : m->ramp_id;
+        // The other way's stretch at the node, its reference and its section before this rule.
+        const auto* other_way = find_way(builder.graph(), other_id); if (!other_way) continue;
+        const auto stretches = builder.stretches(other_id); if (!stretches) continue;
+        std::optional<RoadStretch> ost; bool o_end = false;
+        for (const auto& st : *stretches) {
+            if (other_way->node_ids[st.start_ref] == node) { ost = st; o_end = false; break; }
+            if (other_way->node_ids[st.end_ref] == node) { ost = st; o_end = true; break; }
+        }
+        if (!ost) continue;
+        GoreArm self, other;
+        { auto f = builder.fit_stretch(way_id, stretch, fit_limits); if (!f) continue; self.ref = std::move(*f); }
+        { auto f = builder.fit_stretch(other_id, *ost, fit_limits); if (!f) continue; other.ref = std::move(*f); }
+        auto other_xs = resolve_impl(builder, other_id, *ost, other.ref.length_m, rules, nullptr, fit_limits, false);
+        if (!other_xs || !other_xs->xs) continue;
+        self.xs = xs; other.xs = std::move(*other_xs->xs);
+        self.at_end = at_end; other.at_end = o_end;
+        self.length = xs.length_m; other.length = other.ref.length_m;
+        if (!counted_range(self.xs, self.first, self.last) || !counted_range(other.xs, other.first, other.last)) continue;
+        // Only where the landing applies: the ramp's end at this node carries the Landing record.
+        const bool self_is_ramp = way_id == m->ramp_id;
+        const RoadCrossSection& ramp_xs = self_is_ramp ? self.xs : other.xs;
+        if (((self_is_ramp ? at_end : o_end) ? ramp_xs.end_join : ramp_xs.start_join).kind != JoinKind::Landing) continue;
+        const auto self_left = other_on_left(self, other), other_left = other_on_left(other, self);
+        if (!self_left || !other_left) continue;
+        // The facing shoulders: the shoulder band right outside the counted lanes toward the other way (none: width 0).
+        const auto facing_shoulder = [](const GoreArm& a, bool left) -> std::optional<std::size_t> {
+            if (left) { if (a.first > 0 && a.xs.bands[a.first - 1].kind == LaneKind::Shoulder) return a.first - 1; }
+            else if (a.last + 1 < a.xs.bands.size() && a.xs.bands[a.last + 1].kind == LaneKind::Shoulder) return a.last + 1;
+            return std::nullopt;
+        };
+        const auto sb = facing_shoulder(self, *self_left), ob = facing_shoulder(other, *other_left);
+        const std::int32_t sh_self = sb ? self.xs.bands[*sb].width_mm : 0, sh_other = ob ? other.xs.bands[*ob].width_mm : 0;
+        auto& t = tr.ends[e];
+        t.gore = true; t.gore_shoulder_mm = sh_self;
+        const double need = static_cast<double>(sh_self + sh_other) / 1000.0;
+        if (need <= 0) continue;
+        // gap(d): self's facing lane edge at distance d from the node against the other's facing lane edge abreast of it,
+        // positive when they are apart.
+        const auto gap_at = [&](double d) -> std::optional<double> {
+            const auto es = self.lane_edge(d, *self_left); if (!es) return std::nullopt;
+            const auto p = lateral_point(self.ref, self.station(d), *es); if (!p) return std::nullopt;
+            double u = std::min(d, other.length);
+            for (int it = 0; it < 8; ++it) {   // the foot of the perpendicular on the other reference
+                const auto po = other.ref.at(other.station(u)); if (!po) return std::nullopt;
+                double sn, cs; det::sincos(po->heading, sn, cs);
+                const double along = (p->x - po->x) * cs + (p->y - po->y) * sn;   // along increasing station
+                const double nu = std::clamp(u + (other.at_end ? -along : along), 0.0, other.length);
+                if (std::fabs(nu - u) < 1e-6) { u = nu; break; }
+                u = nu;
+            }
+            const auto po = other.ref.at(other.station(u)); if (!po) return std::nullopt;
+            double sn, cs; det::sincos(po->heading, sn, cs);
+            // Beyond the other stretch's far end: no gap. Beyond its node end (u = 0) the point lies past the node, where the other
+            // way continues as the single arm; its tangent at the node stands in.
+            if (u > 0 && std::fabs((p->x - po->x) * cs + (p->y - po->y) * sn) > 0.5) return std::nullopt;
+            const auto eo = other.lane_edge(u, *other_left); if (!eo) return std::nullopt;
+            const double tp = lateral_of(*po, p->x, p->y);
+            return *other_left ? tp - *eo : *eo - tp;   // self lies on the other's left: apart when further left than its edge
+        };
+        const double step = static_cast<double>(ml.gore_step_m), cap = std::min(static_cast<double>(ml.gore_max_m), self.length);
+        double nose = 0, prev_d = 0, prev_g = 0, min_g = 0, min_at = 0; bool reached = false, first = true;
+        for (int k = 0;; ++k) {
+            const double d = std::min(cap, step * k);
+            const auto g = gap_at(d);
+            if (!g) break;
+            if (*g >= need) {
+                nose = first ? 0.0 : prev_d + (need - prev_g) / (*g - prev_g) * (d - prev_d);
+                reached = true; break;
+            }
+            if (first || *g < min_g) { min_g = *g; min_at = d; }
+            prev_d = d; prev_g = *g; nose = d; first = false;
+            if (d >= cap) break;
+        }
+        t.gore_nose_mm = static_cast<std::int32_t>(std::round(nose * 1000.0));
+        t.gore_nose_reached = reached;
+        t.gore_min_gap_mm = static_cast<std::int32_t>(std::round(min_g * 1000.0));
+        t.gore_min_gap_at_mm = static_cast<std::int32_t>(std::round(min_at * 1000.0));
+        if (!sb || t.gore_nose_mm <= 0) continue;
+        auto& band = xs.bands[*sb];
+        // The section format bounds the longest ramp at one end plus the longest at the other (every band and the offset) by the
+        // stretch length: the gore ramp yields to whatever already reaches in from the far end.
+        std::int64_t far_max = at_end ? xs.offset.start_length_mm : xs.offset.end_length_mm;
+        for (const auto& b : xs.bands) far_max = std::max<std::int64_t>(far_max, (at_end ? b.start : b.end).length_mm);
+        const std::int64_t len = std::min<std::int64_t>(t.gore_nose_mm, length_mm - far_max);
+        if (len <= 0) continue;
+        (at_end ? band.end : band.start) = WidthRamp{static_cast<std::int32_t>(len), 0};
+    }
+}
+} // namespace
+
+Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& builder, std::int64_t way_id,
+        RoadStretch stretch, double length_m, const RoadRules& rules, CrossSectionTrace* trace, const ReferenceFitLimits* fit_limits) {
+    ReferenceFitLimits served;
+    served.allow_curvature_exceptions = true;
+    served.chord_half_width_factor = static_cast<double>(rules.reference.chord_half_width_percent) / 100.0;
+    served.chord_margin_m = static_cast<double>(rules.reference.chord_margin_mm) / 1000.0;
+    return resolve_impl(builder, way_id, stretch, length_m, rules, trace, fit_limits ? *fit_limits : served, true);
 }
 
 Result<LateralPoint> lateral_point(const RoadReferenceLine& reference, double s, double t) {

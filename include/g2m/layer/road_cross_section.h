@@ -205,10 +205,20 @@ struct CrossSectionEndTrace {
     std::int8_t partner[32]{};                             // per band of A: the matched band of the neighbour in ITS own
                                                            // band order, -1 unmatched (valid when note == Joined)
     bool neighbour_same = true;                            // the neighbour runs in A's direction at the node
+    // Gore shoulders (ROADS stage 1): this end is the ramp or the through arm of a landed merge node.
+    bool gore = false;                                     // the rule ran at this end (a landing applies at the node)
+    std::int32_t gore_nose_mm = 0;                         // the nose station from the node (the cap when not reached)
+    bool gore_nose_reached = false;                        // the gap reached both full shoulders within the cap
+    std::int32_t gore_min_gap_mm = 0;                      // the smallest sampled lane-edge gap before the nose (negative: lanes cross)
+    std::int32_t gore_min_gap_at_mm = 0;                   // ... and its station from the node
+    std::int32_t gore_shoulder_mm = 0;                     // this way's full facing shoulder (0: none, nothing ramped)
 };
 struct CrossSectionTrace { CrossSectionEndTrace ends[2]{}; };
+// `fit_limits`: the planar reference fit of the served profiles (the gore-shoulder rule measures the ramp and the through
+// carriageway on it); nullptr = curvature exceptions on and the rules' chord bound, as the served tiles fit.
 Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& builder, std::int64_t way_id,
-    RoadStretch stretch, double length_m, const RoadRules& rules, CrossSectionTrace* trace = nullptr);
+    RoadStretch stretch, double length_m, const RoadRules& rules, CrossSectionTrace* trace = nullptr,
+    const ReferenceFitLimits* fit_limits = nullptr);
 
 // World-space point at station s and lateral offset t (metres, positive left of the reference direction), in the
 // same UTM frame as RoadReferenceLine::at.

@@ -158,6 +158,9 @@ struct MergeLaneRules {
     std::int32_t landing_m_per_m = 0;             // lateral landing shift length per metre of landing offset
     std::int32_t landing_min_m = 0, landing_max_m = 0;
     std::int32_t max_landing_offset_mm = 0;       // a landing farther off the link's own line is not made
+    // Gore shoulders (ROADS stage 1): from a landed node to the gore nose the facing shoulders of the ramp and the through
+    // carriageway beside it ramp in from 0, so the two never overlap; the nose is sampled every gore_step_m, at most gore_max_m.
+    std::int32_t gore_max_m = 0, gore_step_m = 0;
     friend bool operator==(const MergeLaneRules&, const MergeLaneRules&) = default;
 };
 

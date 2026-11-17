@@ -5,6 +5,9 @@
 //   X   way start_ref end_ref len_m hw counted   one served entry (stretch) with a cross-section in the box
 //   B   way start_ref i kind dir counted width_mm start_len start_from end_len end_from   its bands
 //   O   way start_ref mode start_mm start_len end_mm end_len   its offset correction
+//   G   way start_ref at_end node nose_mm reached min_gap_mm min_gap_at_mm shoulder_mm   the gore-shoulder rule ran at this end
+//       (ROADS stage 1, resolve_cross_section's trace: the nose station from the node, whether the lane-edge gap reached both
+//       facing shoulders within gore_max_m, the smallest gap before the nose and its station, this way's facing shoulder)
 //   END way start_ref at_end node deg E N kind neighbour raw_delta_mm      a stretch end in the box with its served join
 //   R   way start_ref v ref_E ref_N lat_lo lat_hi l_E l_N r_E r_N w lanes flags   one ribbon row of the entry's road bed
 //       (strip 1, from build_road_ribbons on a flat ground, PointSampled): lat_lo/lat_hi = lateral extent from the
@@ -27,6 +30,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iostream>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -108,7 +112,10 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
             auto ticket = svc.road_geom(key, Priority::Render);
             ticket.wait_for(std::chrono::minutes(30));
             const auto geometry = ticket.value();
-            if (!geometry) continue;
+            if (!geometry) {   // a failed tile must not vanish from the counts unnoticed
+                if (ticket.state() == TileState::Failed) std::cerr << "tile " << tx << ' ' << ty << " failed: " << ticket.message() << '\n';
+                continue;
+            }
             const RoadGraph& G = geometry->source.graph;
             const auto builder = RoadReferenceBuilder::make(G);
             std::map<std::int64_t, int> degree;
@@ -165,6 +172,17 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                 }
                 std::printf("O %lld %u %s %d %d %d %d\n", static_cast<long long>(en.way_id), en.stretch.start_ref, offset_name(xs.offset.mode), xs.offset.start_mm,
                             xs.offset.start_length_mm, xs.offset.end_mm, xs.offset.end_length_mm);
+                // gore shoulders (ROADS stage 1): the trace of the served resolve, per end where the rule ran
+                CrossSectionTrace gtr;
+                if (builder && resolve_cross_section(*builder, en.way_id, en.stretch, en.profile->reference.length_m, rules, &gtr))
+                    for (int ge = 0; ge < 2; ++ge) {
+                        const auto& t = gtr.ends[ge];
+                        if (!t.gore) continue;
+                        const std::uint32_t gr = ge ? en.stretch.end_ref : en.stretch.start_ref;
+                        std::printf("G %lld %u %d %lld %d %d %d %d %d\n", static_cast<long long>(en.way_id), en.stretch.start_ref, ge,
+                                    static_cast<long long>(gr < way->node_ids.size() ? way->node_ids[gr] : -1), t.gore_nose_mm, t.gore_nose_reached ? 1 : 0,
+                                    t.gore_min_gap_mm, t.gore_min_gap_at_mm, t.gore_shoulder_mm);
+                    }
                 for (const bool at_end : {false, true}) {
                     const std::uint32_t r = at_end ? en.stretch.end_ref : en.stretch.start_ref;
                     if (r >= way->node_ids.size()) continue;

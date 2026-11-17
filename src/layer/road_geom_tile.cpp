@@ -342,7 +342,7 @@ Result<RoadGeomTile> build_road_geom_tile(const RoadGraphTile& graph, const Road
     for (std::size_t index = 0; index < result.entries.size(); ++index) {
         auto& entry = result.entries[index];
         if (entry.profile) {
-            auto xs = resolve_cross_section(*builder, entry.way_id, entry.stretch, entry.profile->reference.length_m, rules);
+            auto xs = resolve_cross_section(*builder, entry.way_id, entry.stretch, entry.profile->reference.length_m, rules, nullptr, &profile_limits.reference);
             if (!xs) return xs.error();
             entry.cross_section = std::move(xs->xs); entry.cross_section_decline = xs->decline;
         }
