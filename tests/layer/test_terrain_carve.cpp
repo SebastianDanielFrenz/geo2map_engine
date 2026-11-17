@@ -546,6 +546,99 @@ TEST_CASE("carve T15: the deck clamp keeps terrain 0.55 m below a bridge, leaves
     CHECK(stats.bridge_entries == 1);
 }
 
+// ---- Bridge ends of an unpaved path (owner report 2026-11-06, way 27014103 at 50.21268 8.66165) ----
+//
+// A 12 m track bridge over a ravine; the bare DEM on both approaches sags 0.9 m below the deck plane at the abutments (DGM1 is
+// bare earth and interpolated under the deck) and falls 3.8 m under the deck. A consumer that leaves an unpaved way uncarved
+// (the game's RoadSurfacePatch skips every land class but PavedRoad) shows the deck standing 0.9 m above the path at each end; the
+// served terrain.carved must instead meet the deck end within 1 cm and without a grade jump.
+namespace {
+RoadGraph track_bridge_world(bool unpaved = true) {
+    RoadGraph w;
+    const auto node = [&](std::int64_t id, std::int64_t x, std::int64_t y) { w.nodes.push_back({id, {x * 1000, y * 1000}}); };
+    node(1, 100, 400); node(2, 250, 400); node(3, 444, 400); node(4, 456, 400); node(5, 650, 400); node(6, 800, 400);
+    const std::vector<std::pair<std::string, std::string>> track = unpaved
+        ? std::vector<std::pair<std::string, std::string>>{{"highway", "track"}, {"surface", "compacted"}, {"tracktype", "grade2"}}
+        : std::vector<std::pair<std::string, std::string>>{{"highway", "tertiary"}};
+    auto bridge = track; bridge.insert(bridge.end(), {{"bridge", "yes"}, {"layer", "1"}}); std::sort(bridge.begin(), bridge.end());
+    w.ways = {{10, 3, {1, 2, 3}, track}, {12, 3, {4, 5, 6}, track}, {20, 3, {3, 4}, bridge}};
+    for (const auto& way : w.ways) for (std::size_t i = 1; i < way.node_ids.size(); ++i)
+        w.edges.push_back({way.osm_id, static_cast<std::uint32_t>(i - 1), way.node_ids[i - 1], way.node_ids[i]});
+    return w;
+}
+// Level at 100 m, 0.9 m low at the abutments rising to 0 at 30 m out, 3.8 m low under the deck.
+double sag_dem(double e, double) {
+    const double a = std::fabs(e - 450.0);
+    if (a <= 6.0) return 100.0 - 3.8;
+    return 100.0 - 0.9 * std::clamp((36.0 - a) / 30.0, 0.0, 1.0);
+}
+struct EndStep { double carved_dz = 0, dem_dz = 0, grade_jump = 0; bool ok = false; };
+EndStep measure_end(g2m_test::CarveFixture& fx, const TileKey& key, bool start_side, const CarveOptions& options) {
+    EndStep r;
+    const auto m = fx.model(key, options);
+    const auto tile = fx.carve(key, options); if (!tile) return r;
+    const RoadGeomTile& core = m.model->core_tile();
+    const RoadProfile* deck = nullptr; const RoadProfile* ground = nullptr;
+    for (const auto& e : core.entries) {
+        if (!e.profile) continue;
+        if (e.way_id == 20) deck = &*e.profile;
+        if (e.way_id == (start_side ? 10 : 12)) ground = &*e.profile;
+    }
+    if (!deck || !ground) return r;
+    const double deck_z = start_side ? deck->at(0)->height_m : deck->at(deck->reference.length_m)->height_m;
+    const double deck_g = start_side ? deck->at(0)->grade : -deck->at(deck->reference.length_m)->grade;   // rising away from the end
+    const double dir = start_side ? -1.0 : 1.0;
+    const double node_e = start_side ? 444.0 : 456.0;
+    const auto carved_at = [&](double d) {
+        const double x = node_e + dir * d, y = 400.5;
+        const int i = static_cast<int>(std::floor(x - key.min_easting())), j = static_cast<int>(std::floor(y - key.min_northing()));
+        return tile->h[static_cast<std::size_t>(j * 256 + i)] / 256.0;
+    };
+    // The cell centre one metre out (cells are 1 m, centres at .5); the deck plane is carried along its own end grade to it.
+    const double dc = std::floor(node_e + dir * 1.0) + 0.5 - node_e;   // signed distance of the cell centre 1 m out
+    const double d = std::fabs(dc);
+    r.carved_dz = std::fabs(carved_at(d) - (deck_z + (-deck_g) * d));
+    r.dem_dz = std::fabs(sag_dem(node_e + dc, 0) - (deck_z + (-deck_g) * d));
+    // Grade jump: the carved slope over the 1.5 .. 4.5 m span against the deck's end grade.
+    const double zs = (carved_at(4.5) - carved_at(1.5)) / 3.0;
+    r.grade_jump = std::fabs(zs - (-deck_g));
+    r.ok = true;
+    return r;
+}
+} // namespace
+
+TEST_CASE("carve bridge end: an unpaved path meets the deck end within 1 cm and without a grade jump; the bare DEM stands 0.9 m below it", "[layer][carve][bridge_end]") {
+    const RoadGraph w = track_bridge_world();
+    g2m_test::CarveFixture fx(w, sag_dem);
+    const TileKey key = l0(1, 1);
+    const CarveOptions on;
+    for (const bool start_side : {true, false}) {
+        const auto r = measure_end(fx, key, start_side, on);
+        REQUIRE(r.ok);
+        std::printf("[bridge end %s] carved - deck %.4f m, bare DEM - deck %.4f m, grade jump %.4f\n", start_side ? "start" : "end", r.carved_dz, r.dem_dz, r.grade_jump);
+        CHECK(r.carved_dz <= 0.01);
+        CHECK(r.grade_jump <= 0.03);
+        // Control: what a consumer that does not carve the unpaved approach shows.
+        CHECK(r.dem_dz > 0.5);
+    }
+    // Sabotage (recorded): unpaved ways left uncarved, as the game's own surface patch does - the deck end stands about 0.8 m above the path.
+    CarveOptions skip; skip.carve_unpaved = false;
+    for (const bool start_side : {true, false}) {
+        const auto r = measure_end(fx, key, start_side, skip);
+        REQUIRE(r.ok);
+        std::printf("[bridge end sabotage %s] carved - deck %.4f m\n", start_side ? "start" : "end", r.carved_dz);
+        CHECK(r.carved_dz > 0.5);
+    }
+    // A paved approach on the same DEM is carved flush too (class control).
+    const RoadGraph paved = track_bridge_world(false);
+    g2m_test::CarveFixture fxp(paved, sag_dem);
+    for (const bool start_side : {true, false}) {
+        const auto r = measure_end(fxp, key, start_side, on);
+        REQUIRE(r.ok);
+        CHECK(r.carved_dz <= 0.01);
+    }
+}
+
 // ---- G2M-032: a carriageway beats the verge of a lower road beside it ----
 
 namespace {
