@@ -12,6 +12,7 @@
 //   S5 road_junction.cpp build_from: no MergeLane decline at a landed ramp (2026-10-20, with MK4)                          -> MK4 fails
 //   S6 road_ribbons.cpp: the zone is the landing length even where a gore ramp exists (pre-4a) (2026-11-17)           -> MK2, MK2b fail
 //   S7 road_ribbons.cpp: only a LaneChange through arm is marked (pre-4a) (2026-11-17)                                 -> MK1b fails
+//   S10 (ROADS stage 8a-2, 2026-11-18) road_ribbons.cpp span_at: a zero-width counted section falls back to the attribute width -> MK9 fails
 //   S8 (ROADS stage 6, 2026-11-18): see MK5. (S9 tested the stage 6 fallback marker, removed in stage 6r with its test.)
 #include "road_fixture.h"
 
@@ -200,7 +201,7 @@ TEST_CASE("MK4 a node where a merge ramp lands has no junction patch (decline Me
 // way passing through the node (its through end found by direction). Sabotage S8 (2026-11-18): the zone is the gore ramp / landing
 // length as before stage 6, not the taper's width ramp -> MK5 fails.
 namespace {
-RoadGraph taper_scene(bool passing, bool short_link = false) {
+RoadGraph taper_scene(bool passing, bool short_link = false, bool link_shoulder = true) {
     RoadGraph g;
     const auto node = [&](std::int64_t id, double x, double y) { g.nodes.push_back({id, {std::llround((kE0 + x) * 1000.0), std::llround((kN0 + y) * 1000.0)}, {}}); };
     node(1, -400, 0); node(2, 0, 0); node(3, 200, 0);
@@ -208,7 +209,9 @@ RoadGraph taper_scene(bool passing, bool short_link = false) {
     const Tags t2 = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}};
     if (passing) g.ways.push_back(way(10, {1, 2, 3}, t2));
     else { g.ways.push_back(way(10, {1, 2}, t2)); g.ways.push_back(way(11, {2, 3}, t2)); }
-    g.ways.push_back(way(12, {4, 2}, {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", "1"}}));
+    Tags link = {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", "1"}};
+    if (!link_shoulder) link.push_back({"shoulder", "no"});
+    g.ways.push_back(way(12, {4, 2}, link));
     if (short_link) g.ways.push_back(way(13, {5, 4, 6}, {{"highway", "residential"}}));
     for (const auto& w : g.ways) for (std::size_t i = 1; i < w.node_ids.size(); ++i)
         g.edges.push_back({w.osm_id, static_cast<std::uint32_t>(i - 1), w.node_ids[i - 1], w.node_ids[i]});
@@ -346,4 +349,54 @@ TEST_CASE("MK8 an accepted taper never has a junction patch at its node, a refus
     std::printf("[MK8] landed %zu, refused %zu\n", landed, refused);
     CHECK(landed > 0);
     CHECK(refused > 0);
+}
+
+// ROADS stage 8a-2: the link's tip at a taper node. Its counted lanes ramp to zero width there; the ribbon used to fall back to the
+// attribute width for that last section and drew a full-width metre of bed and edge line beside the through carriageway (the notch of
+// view 13). Now the section collapses at the node, and no row of the link's bed is narrower than 0.05 m: its outer shoulder runs on to
+// the node at the single arm's shoulder width (also with shoulder=no, whose shoulder ramps up from 0 there). Sabotage S10.
+TEST_CASE("MK9 a taper link's tip: no full-width end row, no bed row narrower than 0.05 m", "[world][road_ribbons][merge_markings]") {
+    const auto& rules = builtin_road_rules_de();
+    for (const bool passing : {false, true}) for (const bool shoulder : {true, false}) {
+        INFO("passing " << passing << " link shoulder " << shoulder);
+        const auto g = taper_scene(passing, false, shoulder);
+        REQUIRE(taper_m(g, rules) > 0);
+        g2m_test::GeomOptions o;
+        o.height_m = [](double, double) { return 100.0; };
+        o.completion = served_road_completion_options();
+        o.rules = &rules;
+        auto built = g2m_test::geometry_in_tile_with(g, kKey, o);
+        REQUIRE(built);
+        // As served: through the tile encoding (the section's widths and lengths exactly as the game reads them).
+        const auto body = encode_road_geom(*built);
+        REQUIRE(body);
+        const auto tile = decode_road_geom(*body);
+        REQUIRE(tile);
+        world::RoadRibbonOptions options;
+        options.drape = world::RibbonDrape::PointSampled;
+        const auto ribbon = world::build_road_ribbons(*tile, kKey, [](double, double) -> std::optional<double> { return 100.0; }, 0.018, {}, options);
+        // The link's quads in its landing zone carry the dropped facing edge (512); group its road-bed vertices by station.
+        std::vector<std::pair<long long, std::pair<float, float>>> rows;   // station (mm) -> (min u, max u)
+        double nearest = 1e9;
+        float last = -1e9f;
+        for (const auto& v : ribbon.vertices) {
+            const int f = static_cast<int>(v.flags);
+            if ((f & kOverlay) || !(f & kLeftHidden) || v.verge != 0) continue;
+            nearest = std::min(nearest, std::hypot(v.x - node_x(), v.y - node_y()));
+            last = std::max(last, v.v);
+        }
+        for (const auto& v : ribbon.vertices) {
+            const int f = static_cast<int>(v.flags);
+            if ((f & kOverlay) || !(f & kLeftHidden) || v.verge != 0) continue;
+            // the counted width over the link's last metre is (near) zero, not the attribute width
+            if (v.v > last - 1.01f) { INFO("station " << v.v << " of " << last); CHECK(v.width < 0.1f); }
+            const long long st = std::llround(static_cast<double>(v.v) * 1000.0);
+            auto it = std::find_if(rows.begin(), rows.end(), [&](const auto& r) { return r.first == st; });
+            if (it == rows.end()) rows.push_back({st, {v.u, v.u}});
+            else { it->second.first = std::min(it->second.first, v.u); it->second.second = std::max(it->second.second, v.u); }
+        }
+        REQUIRE_FALSE(rows.empty());
+        for (const auto& r : rows) { INFO("station " << r.first << " mm"); CHECK(r.second.second - r.second.first >= 0.05f - 1e-4f); }
+        CHECK(nearest < 15.0);   // the link still reaches the node region
+    }
 }

@@ -206,7 +206,17 @@ Span span_at(const g2m::RoadGeomEntry& entry,const LaneLayout& layout,double sta
  double left=-1e9,right=1e9;
  for(std::size_t i=0;i<xs.bands.size();++i)if(xs.bands[i].counted){left=std::max(left,edges[i]);right=std::min(right,edges[i+1]);}
  if(left<=right){left=fp.carriageway_left;right=fp.carriageway_right;}
- if(!(fp.roadbed_left>fp.roadbed_right)||!(left>right))return fallback;
+ // ROADS stage 8a-2: a served section whose counted lanes have ramped to zero width (the node end of a taper ramp)
+ // collapses there; the attribute width is only for a stretch without a usable section. The fallback drew a full-width
+ // last metre at the taper node - a stub of bed and edge line beside the through carriageway.
+ if(!(left>right)) {
+  double c=0;bool found=false;
+  for(std::size_t i=0;i<xs.bands.size()&&!found;++i)if(xs.bands[i].counted){c=edges[i];found=true;}
+  if(!found)return fallback;
+  const double bl=fp.roadbed_left>fp.roadbed_right?std::max(fp.roadbed_left,c):c,br=fp.roadbed_left>fp.roadbed_right?std::min(fp.roadbed_right,c):c;
+  return {bl,br,c,c};
+ }
+ if(!(fp.roadbed_left>fp.roadbed_right))return fallback;
  (void)layout;return {std::max(fp.roadbed_left,left),std::min(fp.roadbed_right,right),left,right};
 }
 // One approach of a served junction, seen from the junction: where its trim line cuts the road and how it is laid out.
