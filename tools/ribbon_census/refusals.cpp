@@ -23,6 +23,12 @@
 //      not within the chain; it assumes each way line is its counted-lane centre. served_*: the served resolve's trace of the
 //      ramp entry at the node (landing_clear_reached, landing_clear_mm; -1 when not run), the served stretch length and the
 //      end note of that trace (cross_section_end_note_name, - when no served entry ends there).
+//   LC node S T R kind worst_mm at_mm raw_mm where   (ROADS stage 9) every landed node whose landing's worst lane-edge gap to
+//      the through lanes (the served trace's landing_min_gap_mm, after the clearance loop) is below -merge_lane.accept_min_gap_mm:
+//      kind lane-add or taper, the station of the worst gap from the node, the gap there with the landing offset 0 (the ramp's
+//      unshifted line; NA when no through way is abreast), where = at-node (station 0) or in-zone. Diagnostics only.
+//   HG node checked gap_known gap_mm dropped        (ROADS stage 9) every node whose ramp-side hint changed the through join
+//   LCSUM count_lane_add count_taper
 //   RFSUM reason count landed_count
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/road_cross_section.h"
@@ -37,6 +43,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -170,6 +177,7 @@ int run_refusals(TerrainService& svc, const geo::UtmZone& zone, const double box
     const auto k0 = tile_key_at(zone, 2, box[0], box[1]), k1 = tile_key_at(zone, 2, box[2], box[3]);
     if (!k0 || !k1) return 1;
     std::map<std::string, std::pair<int, int>> sum;
+    std::pair<int, int> lc_sum{0, 0};   // LC records: lane-add, taper
     for (std::int32_t ty = k0->y; ty <= k1->y; ++ty)
         for (std::int32_t tx = k0->x; tx <= k1->x; ++tx) {
             TileKey key = *k0; key.x = tx; key.y = ty;
@@ -201,6 +209,7 @@ int run_refusals(TerrainService& svc, const geo::UtmZone& zone, const double box
                 // landed: the ramp's resolved cross-section (the served entry's stretch and length when this tile holds it, else
                 // the stretch fitted with the served limits) reports Landed at this node
                 bool landed = false, via_fit = false;
+                bool lc = false; std::int32_t lc_worst = 0, lc_at = 0, lc_raw = 0;
                 int reached = -1, clear_mm = -1;
                 std::string note = "-";
                 double stretch_len = -1;
@@ -229,6 +238,9 @@ int run_refusals(TerrainService& svc, const geo::UtmZone& zone, const double box
                         note = cross_section_end_note_name(t.note);
                         landed = t.note == CrossSectionEndNote::Landed;
                         if (t.landing_clear) { reached = t.landing_clear_reached ? 1 : 0; clear_mm = t.landing_clear_mm; }
+                        if (landed && t.landing_clear && t.landing_min_gap_mm < -ml.accept_min_gap_mm) {
+                            lc = true; lc_worst = t.landing_min_gap_mm; lc_at = t.landing_min_gap_at_mm; lc_raw = t.landing_raw_gap_at_worst_mm;
+                        }
                     }
                 }
                 std::string reason = merge_node_reason_name(d.reason);
@@ -261,6 +273,17 @@ int run_refusals(TerrainService& svc, const geo::UtmZone& zone, const double box
                     std::printf("TR %lld %s %.2f %d %lld %lld %lld %lld %d %d %.2f\n", static_cast<long long>(node.osm_id), reason.c_str(),
                                 d.ramp_angle_deg, d.room_known ? 1 : 0, static_cast<long long>(d.stretch_mm), static_cast<long long>(d.far_clear_mm),
                                 static_cast<long long>(d.claim_mm), static_cast<long long>(d.avail_mm), d.two_tapers ? 1 : 0, d.offset_held ? 1 : 0, d.ramp_fit_angle_deg);
+                if (d.hint_checked)
+                    std::printf("HG %lld %d %d %d %d\n", static_cast<long long>(node.osm_id), 1, d.hint_gap_known ? 1 : 0, d.hint_gap_mm, d.hint_dropped ? 1 : 0);
+                if (lc) {
+                    (d.taper ? lc_sum.second : lc_sum.first) += 1;
+                    char raw_s[32];
+                    if (lc_raw == std::numeric_limits<std::int32_t>::min()) std::snprintf(raw_s, sizeof raw_s, "NA");
+                    else std::snprintf(raw_s, sizeof raw_s, "%d", lc_raw);
+                    std::printf("LC %lld %lld %lld %lld %s %d %d %s %s\n", static_cast<long long>(node.osm_id), static_cast<long long>(d.single_id),
+                                static_cast<long long>(d.through_id), static_cast<long long>(d.ramp_id), d.taper ? "taper" : "lane-add",
+                                lc_worst, lc_at, raw_s, lc_at == 0 ? "at-node" : "in-zone");
+                }
                 if (!d.roles) continue;
                 const RoadNodeArm* ra = nullptr;
                 const RoadNodeArm* ta = nullptr;
@@ -277,6 +300,7 @@ int run_refusals(TerrainService& svc, const geo::UtmZone& zone, const double box
                             ch.stretches, cl, reached, clear_mm, stretch_len, note.c_str(), via_fit ? "/fit" : "");
             }
         }
+    std::printf("LCSUM %d %d\n", lc_sum.first, lc_sum.second);
     for (const auto& [r, c] : sum) std::printf("RFSUM %s %d %d\n", r.c_str(), c.first, c.second);
     return 0;
 }

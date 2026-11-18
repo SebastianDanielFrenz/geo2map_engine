@@ -259,6 +259,9 @@ struct CrossSectionEndTrace {
     std::int32_t landing_final_mm = 0;                     // the landing length served
     std::int32_t landing_min_gap_mm = 0;                   // the smallest sampled lane-edge gap over the served landing
     std::int32_t landing_min_gap_at_mm = 0;                // ... and its station from the node
+    // ROADS stage 9 (diagnostics only): the same gap at that station with the landing offset 0 (the ramp's unshifted line;
+    // INT32_MIN when no through way is abreast there)
+    std::int32_t landing_raw_gap_at_worst_mm = 0;
     bool landing_no_outer_shoulder = false;                 // ROADS 3b: a landed end with no outer shoulder band to widen
     bool landing_shoulder_added = false;                    // ROADS 3c-2: ... and one was added there (the single arm has a shoulder)
     std::int32_t landing_centre_mm = 0;                     // ROADS 3b: counted-lane centre at the node before the landing (subtracted)

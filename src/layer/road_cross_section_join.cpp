@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <span>
 
@@ -1441,6 +1442,9 @@ void apply_clearance_landing(const RoadReferenceBuilder& builder, const RoadGrap
         t.landing_final_mm = static_cast<std::int32_t>(len);
         t.landing_min_gap_mm = static_cast<std::int32_t>(std::round(worst * 1000.0));
         t.landing_min_gap_at_mm = static_cast<std::int32_t>(at);
+        set_landing(0, len);   // diagnostics only: r is the gore pair's copy, never read back into xs
+        const auto raw = gap(static_cast<double>(at) / 1000.0);
+        t.landing_raw_gap_at_worst_mm = raw ? static_cast<std::int32_t>(std::round(*raw * 1000.0)) : std::numeric_limits<std::int32_t>::min();
     }
 }
 
