@@ -761,6 +761,48 @@ TEST_CASE("N5 the through pair joins with the ramp's side: the added lanes lie w
     }
 }
 
+// ROADS stage 9: the ramp-side hint (N5) is kept only if the landed lanes then keep a gap of at least -accept_min_gap_mm to the
+// through lanes over the landing. N5's merge (link 12 m left at 150 m out) keeps it. With the link's line 2 m left of A's way line it
+// runs inside A's lanes for the whole stretch: the hinted landing crosses A's lanes, the node is classified without the hint and is
+// refused added_not_on_ramp_side, as before 8a-4, and every arm is served that way. Sabotage S25 (the hint always kept: the fallback
+// skipped) -> N6 fails (hint gap -3345 mm; not dropped, reason ok, the link lands).
+TEST_CASE("N6 the ramp-side hint is dropped where the landed lanes would cross the through lanes (hint gap)", "[layer][road_merge_lane][roads]") {
+    const auto& rules = builtin_road_rules_de();
+    REQUIRE(rules.merge_lane.accept_min_gap_mm == 250);
+    const auto scene = [](int ramp_y) {
+        const Tags ta = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}}, tb = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "3"}},
+                   tr = {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", "1"}};
+        return graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {200, 0}}, {4, {-150, ramp_y}}}, {way(10, {1, 2}, ta), way(11, {2, 3}, tb), way(12, {4, 2}, tr)});
+    };
+    {   // N5's link: the hint is checked and kept
+        const auto g = scene(12);
+        const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+        const auto d = diagnose_merge_node(*builder, 2, rules);
+        CHECK(d.reason == MergeNodeReason::Ok);
+        CHECK(d.hint_checked); CHECK(d.hint_gap_known); CHECK_FALSE(d.hint_dropped);
+        CHECK(d.hint_gap_mm >= -rules.merge_lane.accept_min_gap_mm);
+        CHECK(resolve_in(*builder, 12, rules).xs.end_join.kind == JoinKind::Landing);
+    }
+    const auto g = scene(2);
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    INFO("hint gap " << d.hint_gap_mm << " mm");
+    CHECK(d.hint_checked); CHECK(d.hint_gap_known); CHECK(d.hint_dropped);
+    CHECK(d.hint_gap_mm < -rules.merge_lane.accept_min_gap_mm);
+    CHECK(d.reason == MergeNodeReason::AddedNotOnRampSide);
+    // Served as without the hint: the link does not land and the through pair is a junction (as before 8a-4).
+    CHECK(resolve_in(*builder, 12, rules).xs.end_join.kind == JoinKind::None);
+    check_junction(*builder, rules, 10, 11, 12);
+    // The check off (rules built in code) or a tolerance above the crossing: the hint is kept and the link lands.
+    for (const std::int32_t tol : {0, 5000}) {
+        INFO("accept_min_gap_mm " << tol);
+        auto r2 = rules; r2.merge_lane.accept_min_gap_mm = tol;
+        const auto d2 = diagnose_merge_node(*builder, 2, r2);
+        CHECK(d2.reason == MergeNodeReason::Ok); CHECK_FALSE(d2.hint_dropped);
+        CHECK(resolve_in(*builder, 12, r2).xs.end_join.kind == JoinKind::Landing);
+    }
+}
+
 TEST_CASE("N2 a non-link arm where the lanes do not balance stays a junction (ramp_not_link)", "[layer][road_merge_lane][roads]") {
     const auto& rules = builtin_road_rules_de();
     for (const int b_lanes : {2, 4}) {   // 2 = 2 + 0 would be a taper shape, 4 != 2 + 1

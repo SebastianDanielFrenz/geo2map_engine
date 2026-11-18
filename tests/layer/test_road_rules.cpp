@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "6d3ad8a811e4a21c80fee54bd3bdf74e60bdeef21a24445e31158bf5bdde6c32");
+    CHECK(to_hex(digest) == "3b9816ee78a31cd3d9a4d230ad8853ecc8f582b070f69c8e820d9e4a8f1dbc41");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -309,6 +309,12 @@ TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add
     CHECK(load_text(mutated(cls, "\"non_link_arm_classes\": []")));
     CHECK_FALSE(load_text(mutated(", \"fork_tie_deg\": 2", "")));
     CHECK_FALSE(load_text(mutated("\"fork_tie_deg\": 2", "\"fork_tie_deg\": 31")));
+    // ROADS stage 9: the hint gap tolerance
+    CHECK(ml.accept_min_gap_mm == 250);
+    CHECK_FALSE(load_text(mutated(", \"accept_min_gap_mm\": 250", "")));
+    CHECK_FALSE(load_text(mutated("\"accept_min_gap_mm\": 250", "\"accept_min_gap_mm\": 0")));
+    CHECK_FALSE(load_text(mutated("\"accept_min_gap_mm\": 250", "\"accept_min_gap_mm\": 5001")));
+    CHECK(load_text(mutated("\"accept_min_gap_mm\": 250", "\"accept_min_gap_mm\": 1000")));
     // The landing S-ramp must not be sharper than min_edge_radius_m of the link classes: 4 W / a^2 <= 1 / R.
     CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1")));          // 8 m over 30 m: radius far under 60 m
     const auto off = load_text(mutated(from, "\"merge_lane\": { \"enabled\": false,"));

@@ -202,6 +202,11 @@ struct MergeNodeDiagnosis {
     // the angle of the link's fitted reference at the node against the single arm (deg; -1 = not fitted); the angle gate
     // takes the larger of this and ramp_angle_deg (a chord over direction_probe_m misses a kink in the last metres)
     double ramp_fit_angle_deg = -1;
+    // ROADS stage 9: the ramp-side hint changed the through join and its landing gap was checked (known: the end landed on a Ramps
+    // offset); dropped: the gap was below -accept_min_gap_mm and the node was classified without the hint (the fields above are
+    // that classification's).
+    bool hint_checked = false, hint_gap_known = false, hint_dropped = false;
+    std::int32_t hint_gap_mm = 0;
 };
 MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules);
 // What resolve_cross_section did at each end of the stretch (0 = start, 1 = end).

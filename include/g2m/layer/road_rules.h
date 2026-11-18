@@ -189,6 +189,10 @@ struct MergeLaneRules {
     // with more counted lanes, then the left one.
     std::vector<std::string> non_link_arm_classes;
     std::int32_t fork_tie_deg = 0;
+    // ROADS stage 9: the ramp-side join hint of stage 8a-4 is kept at a node only if the ramp's landed lanes then keep a lane-edge
+    // gap of at least -accept_min_gap_mm to the through lanes over the whole landing (the clearance landing's worst gap); else the
+    // node is classified without the hint (0 = no check, only in rules built in code: the loader requires 1..5000).
+    std::int32_t accept_min_gap_mm = 0;
     friend bool operator==(const MergeLaneRules&, const MergeLaneRules&) = default;
 };
 
@@ -248,7 +252,8 @@ struct RoadRules {
 // curvature bound 4 W / a^2 <= 1 / min_edge_radius_m of every link class at the largest offset;
 // gore_max_m 1..1000, gore_step_m 1..50 <= gore_max_m, landing_clear_max_m landing_max_m..2000, gore_overlap_tol_mm 0..2000,
 // landing_width_far_margin_m 0..100, landing_width_far_max_m margin..500, taper_length_m 1..landing_clear_max_m with the same
-// S-ramp curvature bound at the largest landing offset, taper_max_angle_deg 1..89, taper_min_length_m 1..landing_clear_max_m).
+// S-ramp curvature bound at the largest landing offset, taper_max_angle_deg 1..89, taper_min_length_m 1..landing_clear_max_m,
+// accept_min_gap_mm 1..5000).
 Result<RoadRules> load_road_rules(std::span<const std::byte> json);
 // The embedded data/road_rules/de.json, parsed once. A corrupt build aborts.
 const RoadRules& builtin_road_rules_de();

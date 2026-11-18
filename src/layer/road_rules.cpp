@@ -180,7 +180,7 @@ bool read_merge_lane_rules(Reader& rd, const json& root, MergeLaneRules& out) {
     if (!m || !rd.keys(*m, kPath, {"enabled", "max_through_deflection_deg", "max_ramp_angle_deg", "direction_probe_m", "landing_m_per_m",
             "landing_min_m", "landing_max_m", "max_landing_offset_mm", "gore_max_m", "gore_step_m", "landing_clear_max_m", "gore_overlap_tol_mm",
             "landing_width_far_margin_m", "landing_width_far_max_m", "taper_length_m",
-            "taper_max_angle_deg", "taper_min_length_m", "non_link_arm_classes", "fork_tie_deg"}) ||
+            "taper_max_angle_deg", "taper_min_length_m", "non_link_arm_classes", "fork_tie_deg", "accept_min_gap_mm"}) ||
         !rd.boolean(*m, kPath, "enabled", out.enabled) ||
         !rd.integer(*m, kPath, "max_through_deflection_deg", 1, 89, out.max_through_deflection_deg) ||
         !rd.integer(*m, kPath, "max_ramp_angle_deg", 1, 89, out.max_ramp_angle_deg) ||
@@ -198,7 +198,8 @@ bool read_merge_lane_rules(Reader& rd, const json& root, MergeLaneRules& out) {
         !rd.integer(*m, kPath, "taper_length_m", 1, 2000, out.taper_length_m) ||
         !rd.integer(*m, kPath, "taper_max_angle_deg", 1, 89, out.taper_max_angle_deg) ||
         !rd.integer(*m, kPath, "taper_min_length_m", 1, 2000, out.taper_min_length_m) ||
-        !rd.integer(*m, kPath, "fork_tie_deg", 0, 30, out.fork_tie_deg)) return false;
+        !rd.integer(*m, kPath, "fork_tie_deg", 0, 30, out.fork_tie_deg) ||
+        !rd.integer(*m, kPath, "accept_min_gap_mm", 1, 5000, out.accept_min_gap_mm)) return false;
     {   // ROADS stage 7b: the classes a non-link merge/diverge node's arms may have (each arm a link or one of these; [] = off)
         const auto* c = rd.field(*m, kPath, "non_link_arm_classes");
         if (!c) return false;
