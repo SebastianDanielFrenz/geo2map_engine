@@ -31,6 +31,7 @@
 #include <array>
 #include <cstdlib>
 #include <sstream>
+#include <string>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -45,18 +46,16 @@ using namespace g2m;
 using namespace g2m::world;
 
 namespace {
+// getenv is deprecated under the MSVC CRT (C4996, warnings are errors); same pattern as test_junction_dump.cpp's env().
+std::string g2m_getenv(const char* k) {
+    std::string v;
 #ifdef _MSC_VER
-#pragma warning(suppress : 4996)
+    char* p = nullptr; std::size_t n = 0;
+    if (_dupenv_s(&p, &n, k) == 0 && p) { v = p; std::free(p); }
+#else
+    if (const char* p = std::getenv(k)) v = p;
 #endif
-const char* g2m_getenv(const char* k) {
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-    return std::getenv(k);
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#endif
+    return v;
 }
 struct Step { std::size_t switches = 0; double max = 0, x = 0, y = 0; };
 using Key = std::tuple<std::int64_t, std::int64_t, int>;   // junction node, way, approach at_end
@@ -106,7 +105,7 @@ int run_trimsteps(TerrainService& svc, const geo::UtmZone& zone, const double bo
     auto flat = std::make_unique<std::array<HeightTile, 9>>();
     std::map<Key, Step> steps, neighbour;
     std::int64_t dump_node = 0, dump_way = 0;
-    if (const char* env = g2m_getenv("G2M_TRIMDUMP")) { std::istringstream is(env); is >> dump_node >> dump_way; }
+    if (const std::string env = g2m_getenv("G2M_TRIMDUMP"); !env.empty()) { std::istringstream is(env); is >> dump_node >> dump_way; }
     for (const TileKey& key0 : targets) {
         std::array<const HeightTile*, 9> window{};
         for (int dy = -1; dy <= 1; ++dy)

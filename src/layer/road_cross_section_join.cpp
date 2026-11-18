@@ -1148,11 +1148,11 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
         (at_end ? probe.offset.end_mm : probe.offset.start_mm) = 0;
         std::array<double, 33> t{};
         if (probe.bands.size() <= 32 && probe.boundaries_at(at_end ? xs.length_m : 0.0, std::span<double>(t.data(), probe.bands.size() + 1))) {
-            const auto c0 = static_cast<std::int32_t>(std::lround((t[static_cast<std::size_t>(first)] + t[static_cast<std::size_t>(last) + 1]) / 2 * 1000.0));
+            const auto centre_mm = static_cast<std::int32_t>(std::lround((t[static_cast<std::size_t>(first)] + t[static_cast<std::size_t>(last) + 1]) / 2 * 1000.0));
             auto& off = at_end ? xs.offset.end_mm : xs.offset.start_mm;
-            off -= c0;
+            off -= centre_mm;
             ends[k].record.raw_delta_mm = off;
-            tr.ends[e].landing_centre_mm = c0;
+            tr.ends[e].landing_centre_mm = centre_mm;
         }
     }
     xs.start_join = ends[0].present ? ends[0].record : JoinRecord{};

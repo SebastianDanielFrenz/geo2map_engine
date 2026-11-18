@@ -441,8 +441,8 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                     }
                     long long r_ctr = -999999;
                     if (as.bounds.size() == static_cast<std::size_t>(as.lanes) + 1 && ar.lanes <= as.lanes) {
-                        const std::size_t n = as.bounds.size() - 1, k = static_cast<std::size_t>(ar.lanes);
-                        const double sc = r_left ? 0.5 * (as.bounds[n] + as.bounds[n - k]) : 0.5 * (as.bounds[0] + as.bounds[k]);
+                        const std::size_t nb = as.bounds.size() - 1, kr = static_cast<std::size_t>(ar.lanes);
+                        const double sc = r_left ? 0.5 * (as.bounds[nb] + as.bounds[nb - kr]) : 0.5 * (as.bounds[0] + as.bounds[kr]);
                         r_ctr = mm(side * (0.5 * (ar.lane_l + ar.lane_r) - sc));
                     }
                     int skip = 0;
@@ -548,20 +548,20 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                         const int bin = static_cast<int>(std::floor(cell_station[ci]));
                         ++ov.cells[bin];
                         ov.at[bin] = {px, py};
-                        auto& xb = ov.x[bin];
+                        auto& ovx = ov.x[bin];
                         const double sa = cell_station[ci];
-                        if (in_lanes(A, sa, cell_lat[ci]) && in_lanes(Bn, st, lt)) ++xb.lane;
+                        if (in_lanes(A, sa, cell_lat[ci]) && in_lanes(Bn, st, lt)) ++ovx.lane;
                         const double ca = std::clamp(sa, 0.0, A.profile->reference.length_m), cb = std::clamp(st, 0.0, Bn.profile->reference.length_m);
                         const auto za = A.profile->at(ca), zb = Bn.profile->at(cb);
-                        if (za && zb) xb.dz = std::max(xb.dz, std::abs(za->height_m - zb->height_m));
+                        if (za && zb) ovx.dz = std::max(ovx.dz, std::abs(za->height_m - zb->height_m));
                         const auto ha = A.profile->reference.at(ca), hb = Bn.profile->reference.at(cb);
                         if (ha && hb) {
                             constexpr double kPi = 3.14159265358979323846;
                             double dh = std::fmod(std::abs(ha->heading - hb->heading), 2 * kPi); if (dh > kPi) dh = 2 * kPi - dh;
-                            xb.same = dh <= kPi / 2; xb.hd = std::max(xb.hd, (xb.same ? dh : kPi - dh) * 180.0 / kPi);
+                            ovx.same = dh <= kPi / 2; ovx.hd = std::max(ovx.hd, (ovx.same ? dh : kPi - dh) * 180.0 / kPi);
                         }
                         if (const auto ba = bed_at(A, sa), bb = bed_at(Bn, st); ba && bb) {
-                            xb.cdist = std::hypot(ba->cx - bb->cx, ba->cy - bb->cy); xb.halfs = ba->half + bb->half;
+                            ovx.cdist = std::hypot(ba->cx - bb->cx, ba->cy - bb->cy); ovx.halfs = ba->half + bb->half;
                         }
                     }
             }
