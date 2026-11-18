@@ -546,6 +546,7 @@ Result<CarveModel> CarveModel::build(std::span<const CarveGeomInput> inputs_in, 
             continue;
         }
         const bool bridge = p.attributes.bridge;
+        if (!options.carve_unpaved && !bridge && p.attributes.land_class != LandClass::PavedRoad) continue;
         if (stats) ++(bridge ? stats->bridge_entries : stats->ground_entries);
         const RoadReferenceLine& ref = p.reference;
         const double L = ref.length_m;

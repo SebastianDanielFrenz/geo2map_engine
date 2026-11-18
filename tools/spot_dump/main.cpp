@@ -5,6 +5,10 @@
 // --portals FILE (with --census): phase 7a-1 portal census, one CSV row per node a tunnel entry ends at: the tunnel floor end
 // height and grade, the profiled non-tunnel entries ending there (height, grade) and the declined ground stretches ending
 // there; a summary line counts the portals, the steps above 0.01 m / 0.5 m and the declined ground stretches at portals.
+// --bridge-ends FILE (with --census): bridge-end census, one CSV row per node a non-tunnel bridge stretch ends at: the deck
+// end against the profiled ground stretches ending there (|dz|, grade jump), the declined ground/bridge stretches there, and
+// the deck end against the bare DEM 1.5 m along each ground approach, split paved/unpaved (the step a consumer sees where it
+// leaves that approach uncarved).
 // --baseline: run with D64 (hump mask under upper bridges) and D65 (short-tunnel cut) switched off, for before/after.
 //
 // --census: every level-2 roads.geom tile within HALF_M of the point is derived and tallied: entries by
@@ -102,10 +106,10 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::int64_t way_filter = 0;
-    double step = 2, census_half = 0, cross_s = -1;
+    double step = 2, census_half = 0, cross_s = -1, grid_half = 0, grid_ref = 0;
     std::string csv_path;
     bool baseline = false;
-    std::string portals_path;
+    std::string portals_path, bridge_ends_path;
     for (int i = 8; i < argc; ++i) {
         const std::string_view a = argv[i];
         if (a == "--way" && i + 1 < argc) way_filter = std::atoll(argv[++i]);
@@ -113,8 +117,10 @@ int main(int argc, char** argv) {
         else if (a == "--cross" && i + 1 < argc) cross_s = std::atof(argv[++i]);
         else if (a == "--census" && i + 1 < argc) census_half = std::atof(argv[++i]);
         else if (a == "--csv" && i + 1 < argc) csv_path = argv[++i];
+        else if (a == "--grid" && i + 2 < argc) { grid_half = std::atof(argv[++i]); grid_ref = std::atof(argv[++i]); }
         else if (a == "--baseline") baseline = true;
         else if (a == "--portals" && i + 1 < argc) portals_path = argv[++i];
+        else if (a == "--bridge-ends" && i + 1 < argc) bridge_ends_path = argv[++i];
         else { std::cerr << "unknown option\n"; return 1; }
     }
     if (baseline) {   // diagnostic only: the rules as they were before D64/D65 (separate SCRATCH_DIR: other derived keys)
@@ -157,11 +163,14 @@ int main(int argc, char** argv) {
         if (!k0 || !k1) return 1;
         static const char* kProvN[] = {"strict", "retry", "bridge-completed", "ground-completed", "tunnel-floor"};
         // 7a-1: what ends at each node, across the census tiles (a node is listed once per entry end).
-        struct EndAt { std::int64_t way; int prov; bool tunnel, bridge; double z, grade, length, max_grade; };
-        struct NodeEnds { double east = 0, north = 0; std::vector<EndAt> ends; int declined_ground = 0; std::vector<std::string> declined_msgs; };
+        // Bridge-end census: paved = LandClass::PavedRoad; near_dem / near_z = the bare DEM and the profile 1.5 m along a ground
+        // stretch from the node (what a consumer that does not carve that stretch shows next to the deck end).
+        struct EndAt { std::int64_t way; int prov; bool tunnel, bridge; double z, grade, length, max_grade; bool paved = true; double near_dem = NAN, near_z = NAN, near_carved = NAN; };
+        struct NodeEnds { double east = 0, north = 0; std::vector<EndAt> ends; int declined_ground = 0, declined_bridge = 0; std::vector<std::string> declined_msgs; };
         std::map<std::int64_t, NodeEnds> node_ends;
         // 7a-2: the carve opens a short straight floor only under a hump of ground (D65); the base DEM is read as the carve reads it.
         Sampler hump_dem{server, manifest->rid, std::string(kTerrainHeightLayer), zone, {}, {}};
+        Sampler carved_s{server, manifest->rid, std::string(kTerrainCarvedLayer), zone, {}, {}};
         const CutGroundAt hump_ground = [&](double x, double y) { return hump_dem.at(x, y); };
         std::set<std::tuple<std::int64_t, std::uint32_t, int>> seen_ends, seen_declined;
         for (std::int32_t ty = k0->y; ty <= k1->y; ++ty) for (std::int32_t tx = k0->x; tx <= k1->x; ++tx) {
@@ -181,7 +190,7 @@ int main(int argc, char** argv) {
                 if (way == graph.ways.end() || way->osm_id != e.way_id || e.stretch.end_ref >= way->node_ids.size()) continue;
                 profiled_ends.insert(way->node_ids[e.stretch.start_ref]); profiled_ends.insert(way->node_ids[e.stretch.end_ref]);
             }
-            if (!portals_path.empty()) {
+            if (!portals_path.empty() || !bridge_ends_path.empty()) {
                 const auto position_of = [&](std::int64_t id) {
                     const auto n = std::lower_bound(graph.nodes.begin(), graph.nodes.end(), id, [](const auto& a, auto v) { return a.osm_id < v; });
                     return n->position;
@@ -201,12 +210,26 @@ int main(int argc, char** argv) {
                             // The grade is reported rising away from the node (the end grade at side 1, the negated start grade at side 0).
                             auto& n = node_ends[ends[side]]; const auto pos = position_of(ends[side]);
                             n.east = pos.x / 1000.0; n.north = pos.y / 1000.0;
-                            n.ends.push_back({e.way_id, prov, p.attributes.tunnel, p.attributes.bridge, z->height_m, side ? -z->grade : z->grade, p.reference.length_m, p.attributes.max_grade_per_mille / 1000.0});
+                            EndAt end{e.way_id, prov, p.attributes.tunnel, p.attributes.bridge, z->height_m, side ? -z->grade : z->grade, p.reference.length_m, p.attributes.max_grade_per_mille / 1000.0};
+                            end.paved = p.attributes.land_class == LandClass::PavedRoad;
+                            if (!bridge_ends_path.empty() && !p.attributes.bridge && !p.attributes.tunnel) {
+                                const double sn = side ? std::max(0.0, p.reference.length_m - 1.5) : std::min(1.5, p.reference.length_m);
+                                const auto pn = p.reference.at(sn); const auto zn = p.at(sn);
+                                if (pn && zn) { end.near_dem = hump_dem.at(pn->x, pn->y); end.near_z = zn->height_m; end.near_carved = carved_s.at(pn->x, pn->y); }
+                            }
+                            n.ends.push_back(end);
                         }
                     } else {
                         bool tunnel = false, bridge = false;
                         for (const auto& [k, v] : way->tags) { if (k == "tunnel" && v != "no") tunnel = true; if (k == "bridge" && v != "no") bridge = true; }
-                        if (tunnel || bridge) continue;
+                        if (tunnel) continue;
+                        if (bridge) {
+                            for (int side = 0; side < 2; ++side) if (seen_declined.insert({e.way_id, e.stretch.start_ref, side}).second) {
+                                auto& nd = node_ends[ends[side]]; ++nd.declined_bridge;
+                                const auto pos = position_of(ends[side]); nd.east = pos.x / 1000.0; nd.north = pos.y / 1000.0;
+                            }
+                            continue;
+                        }
                         for (int side = 0; side < 2; ++side) if (seen_declined.insert({e.way_id, e.stretch.start_ref, side}).second) {
                             auto& nd = node_ends[ends[side]]; ++nd.declined_ground;
                             const auto pos = position_of(ends[side]); nd.east = pos.x / 1000.0; nd.north = pos.y / 1000.0;
@@ -310,6 +333,64 @@ int main(int argc, char** argv) {
                       << ") step>0.01m " << step_001 << " step>0.5m " << step_05 << " grade>0.02 " << grade_bad << " worst_dz " << worst << " worst_dgrade " << worst_grade
                       << " declined_ground_at_portals " << declined_at_portal << " unreachable(dz>0.01, one tunnel) " << unreachable << " of which strict/retry ground " << unreachable_strict << '\n';
         }
+        if (!bridge_ends_path.empty()) {
+            // Every node a non-tunnel bridge stretch ends at: the deck end against each profiled ground stretch ending there
+            // (|dz|, grade jump; grades rise away from the node), declined ground/bridge stretches there, and deck - bare DEM
+            // 1.5 m along each ground approach (the step a consumer sees where it leaves that approach uncarved).
+            std::ofstream out(bridge_ends_path);
+            out << "node,east,north,bridge_ways,deck_z,deck_grade,ground_ways,ground_z,ground_prov,ground_paved,dz,dgrade,declined_ground,declined_bridge,unpaved_deck_minus_dem,paved_deck_minus_dem,decline\n";
+            std::size_t ends_n = 0, with_ground = 0, step_001 = 0, step_01 = 0, step_05 = 0, grade_bad = 0, declined_at = 0, nodes_declined = 0, deck_declined = 0;
+            std::size_t unpaved_ends = 0, unpaved_01 = 0, unpaved_05 = 0, paved_ends = 0, paved_01 = 0, paved_05 = 0;
+            std::size_t profile_dem_01 = 0, carved_ends = 0, carved_01 = 0, carved_05 = 0, carved_unp_ends = 0, carved_unp_01 = 0; double worst_carved = 0;
+            double worst = 0, worst_grade = 0, worst_unpaved = 0, worst_paved = 0;
+            for (const auto& [id, n] : node_ends) {
+                std::vector<const EndAt*> deck, gro;
+                for (const auto& e : n.ends) { if (e.tunnel) continue; if (e.bridge) deck.push_back(&e); else gro.push_back(&e); }
+                if (deck.empty() && n.declined_bridge == 0) continue;
+                ++ends_n; declined_at += static_cast<std::size_t>(n.declined_ground); if (n.declined_ground) ++nodes_declined;
+                if (deck.empty()) ++deck_declined;
+                double dz = 0, dg = 0, unpaved_step = -1, paved_step = -1;
+                for (const auto* d : deck) for (const auto* g : gro) { dz = std::max(dz, std::fabs(d->z - g->z)); dg = std::max(dg, std::fabs(d->grade + g->grade)); }
+                if (!deck.empty()) for (const auto* g : gro) {
+                    if (!std::isfinite(g->near_dem)) continue;
+                    const double s = std::fabs(deck[0]->z - g->near_dem);
+                    if (g->paved) paved_step = std::max(paved_step, s); else unpaved_step = std::max(unpaved_step, s);
+                    if (std::fabs(g->near_z - g->near_dem) > 0.1) ++profile_dem_01;
+                    if (std::isfinite(g->near_carved)) {   // the served terrain.carved at the same point
+                        const double c = std::fabs(deck[0]->z - g->near_carved);
+                        ++carved_ends; if (c > 0.1) ++carved_01; if (c > 0.5) ++carved_05; worst_carved = std::max(worst_carved, c);
+                        if (!g->paved) { ++carved_unp_ends; if (c > 0.1) ++carved_unp_01; }
+                    }
+                }
+                if (!gro.empty() && !deck.empty()) {
+                    ++with_ground;
+                    if (dz > 0.01) ++step_001;
+                    if (dz > 0.1) ++step_01;
+                    if (dz > 0.5) ++step_05;
+                    if (dg > 0.02) ++grade_bad;
+                    if (dz > 0.1) std::cout << "  bridge-end step node " << id << " at " << n.east << ' ' << n.north << ": dz " << dz << " dgrade " << dg << " deck " << deck[0]->way << " z " << deck[0]->z << '\n';
+                    worst = std::max(worst, dz); worst_grade = std::max(worst_grade, dg);
+                }
+                if (unpaved_step >= 0) { ++unpaved_ends; if (unpaved_step > 0.1) ++unpaved_01; if (unpaved_step > 0.5) ++unpaved_05; worst_unpaved = std::max(worst_unpaved, unpaved_step); }
+                if (paved_step >= 0) { ++paved_ends; if (paved_step > 0.1) ++paved_01; if (paved_step > 0.5) ++paved_05; worst_paved = std::max(worst_paved, paved_step); }
+                std::string bw, gw;
+                for (const auto* d : deck) bw += (bw.empty() ? "" : " ") + std::to_string(d->way);
+                for (const auto* g : gro) gw += (gw.empty() ? "" : " ") + std::to_string(g->way);
+                out << id << ',' << n.east << ',' << n.north << ',' << bw << ',' << (deck.empty() ? NAN : deck[0]->z) << ',' << (deck.empty() ? 0.0 : deck[0]->grade) << ',' << gw << ','
+                    << (gro.empty() ? 0.0 : gro[0]->z) << ',' << (gro.empty() ? "-" : kProvN[gro[0]->prov]) << ',' << (gro.empty() ? -1 : gro[0]->paved ? 1 : 0) << ','
+                    << dz << ',' << dg << ',' << n.declined_ground << ',' << n.declined_bridge << ',' << unpaved_step << ',' << paved_step << ',';
+                for (std::size_t k = 0; k < n.declined_msgs.size(); ++k) out << (k ? " | " : "") << n.declined_msgs[k];
+                out << '\n';
+            }
+            std::cout << "bridge_ends " << ends_n << " with_ground_profile " << with_ground << " step>0.01m " << step_001 << " step>0.1m " << step_01
+                      << " step>0.5m " << step_05 << " grade>0.02 " << grade_bad << " worst_dz " << worst << " worst_dgrade " << worst_grade
+                      << " declined_ground_at_bridge_ends " << declined_at << " (nodes " << nodes_declined << ") deck_declined " << deck_declined << '\n';
+            std::cout << "  deck end vs bare DEM 1.5 m along the approach: unpaved ends " << unpaved_ends << " >0.1m " << unpaved_01 << " >0.5m " << unpaved_05 << " worst " << worst_unpaved
+                      << "; paved ends " << paved_ends << " >0.1m " << paved_01 << " >0.5m " << paved_05 << " worst " << worst_paved
+                      << "; approaches whose profile leaves the DEM by >0.1m there " << profile_dem_01 << '\n';
+            std::cout << "  deck end vs terrain.carved 1.5 m along the approach: approaches " << carved_ends << " >0.1m " << carved_01 << " >0.5m " << carved_05 << " worst " << worst_carved
+                      << "; unpaved approaches " << carved_unp_ends << " >0.1m " << carved_unp_01 << '\n';
+        }
         return 0;
     }
     const auto l2 = tile_key_at(zone, 2, e0, n0);
@@ -331,6 +412,14 @@ int main(int argc, char** argv) {
     static const char* kProv[] = {"strict", "retry", "bridge-completed", "ground-completed", "tunnel-floor"};
     Sampler dem{server, manifest->rid, std::string(kTerrainHeightLayer), zone, {}, {}};
     Sampler carved{server, manifest->rid, std::string(kTerrainCarvedLayer), zone, {}, {}};
+    if (grid_half > 0) {   // --grid HALF REF_Z: carved terrain minus REF_Z in cm on a 1 m grid around the point (north up)
+        for (double n = n0 + grid_half; n >= n0 - grid_half - 1e-9; n -= 1) {
+            std::printf("%9.0f", n);
+            for (double e = e0 - grid_half; e <= e0 + grid_half + 1e-9; e += 1) std::printf(" %4.0f", (carved.at(e, n) - grid_ref) * 100);
+            std::printf("\n");
+        }
+        return 0;
+    }
     for (std::size_t ei = 0; ei < tile->entries.size(); ++ei) {
         const auto& e = tile->entries[ei];
         if (way_filter && e.way_id != way_filter) continue;
