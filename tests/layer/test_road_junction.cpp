@@ -651,8 +651,12 @@ TEST_CASE("D17: corner caps close an obtuse pair whose edges meet behind the nod
         return *k;
     };
     {
-        auto g = g2m_test::geometry_in_tile(*world, home_of(507567)); REQUIRE(g);
-        const auto capped = build_node_junction(*g, *builder, 507567); REQUIRE(capped);
+        // ROADS stage 6 made node 507567 a taper node (no junction patch); the corner caps are tested with the taper
+        // rule off.
+        auto rules = builtin_road_rules_de(); rules.merge_lane.taper_length_m = 0;
+        g2m_test::GeomOptions go; go.rules = &rules;
+        auto g = g2m_test::geometry_in_tile_with(*world, home_of(507567), go); REQUIRE(g);
+        const auto capped = build_node_junction(*g, *builder, 507567, rules); REQUIRE(capped);
         REQUIRE(capped->decline == JunctionDecline::None);
         CHECK_FALSE(has(*capped, JunctionFlags::HullFallback));
         for (const auto& ring : capped->rings) CHECK(junction_ring_valid(ring));
@@ -660,12 +664,12 @@ TEST_CASE("D17: corner caps close an obtuse pair whose edges meet behind the nod
         // Sabotage in the test: without the caps the same junction does not nest (D34's hull rescue off, it would
         // otherwise send the junction to the hull, which nests).
         JunctionBuildOptions no_caps; no_caps.corner_caps = false; no_caps.hull_when_not_nested = false;
-        const auto open = build_node_junction(*g, *builder, 507567, builtin_road_rules_de(), nullptr, no_caps); REQUIRE(open);
+        const auto open = build_node_junction(*g, *builder, 507567, rules, nullptr, no_caps); REQUIRE(open);
         double worst = 0;
         CHECK(nested_violations(*open, &worst) > 0);
         CHECK(worst > 100.0);
         JunctionBuildOptions rescued_options; rescued_options.corner_caps = false;
-        const auto rescued = build_node_junction(*g, *builder, 507567, builtin_road_rules_de(), nullptr, rescued_options); REQUIRE(rescued);
+        const auto rescued = build_node_junction(*g, *builder, 507567, rules, nullptr, rescued_options); REQUIRE(rescued);
         CHECK(has(*rescued, JunctionFlags::HullFallback));
         CHECK(nested_violations(*rescued) == 0);
         CHECK(junction_rings_nested(*rescued));

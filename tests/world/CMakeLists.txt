@@ -17,6 +17,7 @@ add_executable(g2m_world_tests
   test_road_paint.cpp
   test_ribbon_drape.cpp
   test_merge_markings.cpp
+  test_gore_ribbons.cpp
   test_road_tier_ribbons.cpp
   test_buildings.cpp
   test_building_mesh.cpp

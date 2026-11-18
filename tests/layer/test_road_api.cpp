@@ -313,14 +313,22 @@ TEST_CASE("Hoechst A 66 tile: painted envelope equals the carve footprint along 
         }
         for (double s = 2.0; s <= ref.length_m - 2.0; s += 0.61) {
             const auto f = carve_footprint(xs, s);
+            // The envelope's documented edge error (road_envelope.h): omega * spacing / 4 + omega^2 * h / 2 for an edge widening at
+            // rate omega; a gore shoulder (ROADS stage 1) widens as fast as the lanes part. 0.06 floor: a landed merge ramp (G2M-028)
+            // puts a probe 0.0500 m off an edge.
+            const auto fa = carve_footprint(xs, std::max(0.0, s - 1.0)), fb = carve_footprint(xs, std::min(ref.length_m, s + 1.0));
+            const double h = (f.roadbed_left - f.roadbed_right) / 2.0;
+            // One capsule chain carries the whole bed (centre and half-width), so either edge's rate moves both edges.
+            const double w = std::max(std::abs(fb.paved_left - fa.paved_left), std::abs(fb.paved_right - fa.paved_right)) / 2.0;
+            const double tol_l = std::max(0.06, w / 4.0 + w * w * h / 2.0 + 0.01), tol_r = tol_l;
             for (double t = f.outer_right - 1.5; t <= f.outer_left + 1.5; t += 0.23) {
-                if (std::abs(t - f.paved_left) < 0.06 || std::abs(t - f.paved_right) < 0.06) continue;   // 0.06: a landed merge ramp (G2M-028) puts a probe 0.0500 m off an edge
+                if (std::abs(t - f.paved_left) < tol_l || std::abs(t - f.paved_right) < tol_r) continue;
                 const auto p = lateral_point(ref, s, t); REQUIRE(p);
                 const geom::PointMm pm{static_cast<std::int64_t>(std::llround(p->x * 1000.0)), static_cast<std::int64_t>(std::llround(p->y * 1000.0))};
                 std::uint8_t land = 0, surface = 0;
                 const bool is_painted = covered(segs, pm, land, surface);
                 const bool expect = t > f.paved_right && t < f.paved_left;
-                INFO("way " << entry.way_id << " s " << s << " t " << t << " paved [" << f.paved_right << ", " << f.paved_left << "]");
+                INFO("way " << entry.way_id << " s " << s << " t " << t << " paved [" << f.paved_right << ", " << f.paved_left << "] tol " << tol_l);
                 REQUIRE(is_painted == expect);
                 ++probes;
                 if (expect && f.has_kerb_left && t > f.kerb_left + 0.05) CHECK(surface == static_cast<std::uint8_t>(SurfaceKind::PavingStones));

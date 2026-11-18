@@ -37,7 +37,7 @@ add_executable(g2m_rail_census ../../tools/rail_census/main.cpp)
 target_link_libraries(g2m_rail_census PRIVATE g2m_server g2m_warnings g2m_options)
 
 # Terrain-above-ribbon census (vault G2M-025): drapes the tile ribbons both ways and probes them against the terrain mesh.
-add_executable(g2m_ribbon_census ../../tools/ribbon_census/main.cpp)
+add_executable(g2m_ribbon_census ../../tools/ribbon_census/main.cpp ../../tools/ribbon_census/spots.cpp ../../tools/ribbon_census/trimsteps.cpp ../../tools/ribbon_census/refusals.cpp)
 target_link_libraries(g2m_ribbon_census PRIVATE g2m_server g2m_world g2m_warnings g2m_options)
 # Cross-section dump of OSM ways and a lane-change census (vault G2M-025).
 add_executable(g2m_xs_probe ../../tools/xs_probe/main.cpp)

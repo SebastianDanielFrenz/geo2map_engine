@@ -11,6 +11,10 @@
 // classified by their vertex attributes: bed (the asphalt strip, verge 0), verge (gravel strips, verge 1), patch (junction
 // asphalt), paint (marking triangles, which sit a few mm above the road on purpose). With --site only probes within
 // RADIUS_M of the point count. Reports probe counts above 1 cm / 10 cm, the maximum, vertices, triangles and build time.
+// --spots (with --box): instead, the served road data at every stretch end in the box tied to the ribbon rows drawn there
+// (record format in spots.cpp).
+// --trimsteps (with --box): instead, the junction trim steps at the far ends of landed ramp stretches (ROADS 3c-3, trimsteps.cpp).
+// --refusals (with --box): instead, the merge classification of every degree-3 node of one-way major/link arms (ROADS 5a, refusals.cpp).
 #include "g2m/core/geo/utm.h"
 #include "g2m/core/tile_key.h"
 #include "g2m/layer/road_geom_tile.h"
@@ -112,6 +116,10 @@ const char* kind_of(const RoadRibbonVertex& v) {
 
 } // namespace
 
+int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]);
+int run_trimsteps(TerrainService& svc, const geo::UtmZone& zone, const double box[4]);
+int run_refusals(TerrainService& svc, const geo::UtmZone& zone, const double box[4]);
+
 int main(int argc, char** argv) {
     if (argc < 7) {
         std::cerr << "usage: see the header comment of tools/ribbon_census/main.cpp\n";
@@ -126,6 +134,7 @@ int main(int argc, char** argv) {
     std::size_t worst_n = 0;
     double tol = 0.005;
     double dump_e = 0, dump_n = 0, dump_r = -1;
+    bool spots = false, trimsteps = false, refusals = false;
     for (int i = 5; i < argc; ++i) {
         const std::string_view a = argv[i];
         if (a == "--site" && i + 3 < argc) {
@@ -143,6 +152,9 @@ int main(int argc, char** argv) {
         else if (a == "--step" && i + 1 < argc) step = std::atof(argv[++i]);
         else if (a == "--worst" && i + 1 < argc) worst_n = static_cast<std::size_t>(std::atoi(argv[++i]));
         else if (a == "--dump" && i + 3 < argc) { dump_e = std::atof(argv[++i]); dump_n = std::atof(argv[++i]); dump_r = std::atof(argv[++i]); }
+        else if (a == "--spots") spots = true;
+        else if (a == "--trimsteps") trimsteps = true;
+        else if (a == "--refusals") refusals = true;
         else if (a == "--tol" && i + 1 < argc) tol = std::atof(argv[++i]);
         else if (a == "--carved" && i + 1 < argc) carved = std::atoi(argv[++i]) != 0;
         else if (a == "--tiles-csv" && i + 1 < argc) csv_path = argv[++i];
@@ -159,6 +171,18 @@ int main(int argc, char** argv) {
     auto opened = TerrainService::open(cfg);
     if (!opened) { std::cerr << opened.error().message << '\n'; return 1; }
     TerrainService& svc = **opened;
+    if (spots) {
+        if (!have_box) { std::cerr << "--spots needs --box\n"; return 2; }
+        return run_spots(svc, zone, box);
+    }
+    if (trimsteps) {
+        if (!have_box) { std::cerr << "--trimsteps needs --box\n"; return 2; }
+        return run_trimsteps(svc, zone, box);
+    }
+    if (refusals) {
+        if (!have_box) { std::cerr << "--refusals needs --box\n"; return 2; }
+        return run_refusals(svc, zone, box);
+    }
     Heights heights{svc, {}, {}};
     const L0TileLookupFn lookup = [&](const TileKey& k) { return heights.get(k); };
     const RoadRibbonGround bilinear = [&](double e, double n) { return sample_height_bilinear(lookup, zone, 0, 0, e, n); };

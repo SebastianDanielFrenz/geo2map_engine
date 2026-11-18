@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "4db794471a35aa96650c058a78d7e8de7ecab724fc34215a878886ea6d10bc54");
+    CHECK(to_hex(digest) == "3b9816ee78a31cd3d9a4d230ad8853ecc8f582b070f69c8e820d9e4a8f1dbc41");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -257,6 +257,8 @@ TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add
     CHECK(ml.enabled);
     CHECK(ml.max_through_deflection_deg == 35); CHECK(ml.max_ramp_angle_deg == 60); CHECK(ml.direction_probe_m == 10);
     CHECK(ml.landing_m_per_m == 12); CHECK(ml.landing_min_m == 30); CHECK(ml.landing_max_m == 80); CHECK(ml.max_landing_offset_mm == 8000);
+    CHECK(ml.gore_max_m == 150); CHECK(ml.gore_step_m == 5); CHECK(ml.landing_clear_max_m == 250); CHECK(ml.gore_overlap_tol_mm == 250);
+    CHECK(ml.landing_width_far_margin_m == 10); CHECK(ml.landing_width_far_max_m == 60); CHECK(ml.taper_length_m == 60);
     const std::string from = "\"merge_lane\": { \"enabled\": true,";
     CHECK_FALSE(load_text(mutated(from, "\"merge_lanex\": { \"enabled\": true,")));        // the block is required
     CHECK_FALSE(load_text(mutated(from, "\"merge_lane\": { \"enabled\": 1,")));            // a boolean
@@ -268,7 +270,51 @@ TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add
     CHECK_FALSE(load_text(mutated("\"direction_probe_m\": 10", "\"direction_probe_m\": 0")));
     CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1001")));
     CHECK_FALSE(load_text(mutated("\"landing_min_m\": 30", "\"landing_min_m\": 81")));             // above landing_max_m
+    CHECK_FALSE(load_text(mutated("\"gore_max_m\": 150, \"gore_step_m\": 5", "\"gore_max_m\": 4, \"gore_step_m\": 5")));   // step over the cap
+    CHECK_FALSE(load_text(mutated("\"landing_clear_max_m\": 250", "\"landing_clear_max_m\": 79")));   // below landing_max_m
+    CHECK_FALSE(load_text(mutated(", \"landing_clear_max_m\": 250", "")));   // the key is required
+    CHECK_FALSE(load_text(mutated("\"gore_overlap_tol_mm\": 250", "\"gore_overlap_tol_mm\": -1")));   // negative tolerance
+    CHECK_FALSE(load_text(mutated("\"landing_width_far_margin_m\": 10", "\"landing_width_far_margin_m\": -1")));   // negative margin
+    CHECK_FALSE(load_text(mutated("\"landing_width_far_margin_m\": 10", "\"landing_width_far_margin_m\": 101")));  // above the range
+    CHECK_FALSE(load_text(mutated("\"landing_width_far_max_m\": 60", "\"landing_width_far_max_m\": 501")));   // above the range
+    CHECK_FALSE(load_text(mutated("\"landing_width_far_max_m\": 60", "\"landing_width_far_max_m\": 0")));     // below the margin
+    CHECK_FALSE(load_text(mutated(", \"landing_width_far_max_m\": 60", "")));   // the key is required
+    CHECK_FALSE(load_text(mutated("\"landing_width_far_margin_m\": 10, ", "")));   // the key is required
+    CHECK(load_text(mutated("\"landing_width_far_margin_m\": 10, \"landing_width_far_max_m\": 60",
+                            "\"landing_width_far_margin_m\": 0, \"landing_width_far_max_m\": 0")));   // 0 and 0: no clearance
     CHECK_FALSE(load_text(mutated("\"max_landing_offset_mm\": 8000", "\"max_landing_offset_mm\": 20001")));
+    // ROADS stage 6: the taper length is required, 1..landing_clear_max_m, and its S-ramp at the largest offset obeys the radius.
+    CHECK_FALSE(load_text(mutated(", \"taper_length_m\": 60", "")));
+    CHECK_FALSE(load_text(mutated("\"taper_length_m\": 60", "\"taper_length_m\": 0")));
+    CHECK_FALSE(load_text(mutated("\"taper_length_m\": 60", "\"taper_length_m\": 251")));   // above landing_clear_max_m
+    CHECK_FALSE(load_text(mutated("\"taper_length_m\": 60", "\"taper_length_m\": 5")));     // 8 m over 5 m: far too sharp
+    CHECK(load_text(mutated("\"taper_length_m\": 60", "\"taper_length_m\": 120")));
+    // ROADS stage 6r: the taper gates
+    CHECK(ml.taper_max_angle_deg == 20); CHECK(ml.taper_min_length_m == 20);
+    CHECK_FALSE(load_text(mutated("\"taper_max_angle_deg\": 20, ", "")));
+    CHECK_FALSE(load_text(mutated("\"taper_max_angle_deg\": 20", "\"taper_max_angle_deg\": 0")));
+    CHECK_FALSE(load_text(mutated("\"taper_max_angle_deg\": 20", "\"taper_max_angle_deg\": 90")));
+    CHECK_FALSE(load_text(mutated(", \"taper_min_length_m\": 20", "")));
+    CHECK_FALSE(load_text(mutated("\"taper_min_length_m\": 20", "\"taper_min_length_m\": 0")));
+    CHECK_FALSE(load_text(mutated("\"taper_min_length_m\": 20", "\"taper_min_length_m\": 251")));   // above landing_clear_max_m
+    CHECK(load_text(mutated("\"taper_min_length_m\": 20", "\"taper_min_length_m\": 30")));
+    // ROADS stage 7b: non-link merge/diverge arms and the fork tie
+    CHECK(ml.fork_tie_deg == 2);
+    CHECK(ml.non_link_arm_classes == std::vector<std::string>{"motorway", "trunk", "primary", "secondary", "tertiary"});
+    const std::string cls = "\"non_link_arm_classes\": [\"motorway\", \"trunk\", \"primary\", \"secondary\", \"tertiary\"]";
+    CHECK_FALSE(load_text(mutated(",\n                  " + cls, "")));
+    CHECK_FALSE(load_text(mutated(cls, "\"non_link_arm_classes\": \"motorway\"")));
+    CHECK_FALSE(load_text(mutated(cls, "\"non_link_arm_classes\": [\"motorway_link\"]")));
+    CHECK_FALSE(load_text(mutated(cls, "\"non_link_arm_classes\": [\"trunk\", \"trunk\"]")));
+    CHECK(load_text(mutated(cls, "\"non_link_arm_classes\": []")));
+    CHECK_FALSE(load_text(mutated(", \"fork_tie_deg\": 2", "")));
+    CHECK_FALSE(load_text(mutated("\"fork_tie_deg\": 2", "\"fork_tie_deg\": 31")));
+    // ROADS stage 9: the hint gap tolerance
+    CHECK(ml.accept_min_gap_mm == 250);
+    CHECK_FALSE(load_text(mutated(", \"accept_min_gap_mm\": 250", "")));
+    CHECK_FALSE(load_text(mutated("\"accept_min_gap_mm\": 250", "\"accept_min_gap_mm\": 0")));
+    CHECK_FALSE(load_text(mutated("\"accept_min_gap_mm\": 250", "\"accept_min_gap_mm\": 5001")));
+    CHECK(load_text(mutated("\"accept_min_gap_mm\": 250", "\"accept_min_gap_mm\": 1000")));
     // The landing S-ramp must not be sharper than min_edge_radius_m of the link classes: 4 W / a^2 <= 1 / R.
     CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1")));          // 8 m over 30 m: radius far under 60 m
     const auto off = load_text(mutated(from, "\"merge_lane\": { \"enabled\": false,"));

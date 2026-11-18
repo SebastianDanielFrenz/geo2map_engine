@@ -158,6 +158,41 @@ struct MergeLaneRules {
     std::int32_t landing_m_per_m = 0;             // lateral landing shift length per metre of landing offset
     std::int32_t landing_min_m = 0, landing_max_m = 0;
     std::int32_t max_landing_offset_mm = 0;       // a landing farther off the link's own line is not made
+    // Gore shoulders (ROADS stage 1): from a landed node to the gore nose the facing shoulders of the ramp and the through
+    // carriageway beside it ramp in from 0, so the two never overlap; the nose is sampled every gore_step_m, at most gore_max_m.
+    std::int32_t gore_max_m = 0, gore_step_m = 0;
+    // Clearance landing (ROADS stage 2a): the landing lasts at least until the ramp's own (unshifted) line has cleared the through
+    // carriageway's lanes, and is lengthened in gore_step_m steps while the shifted lanes still cross; at most landing_clear_max_m
+    // (0 = off, only in rules built in code: the loader requires at least landing_max_m).
+    std::int32_t landing_clear_max_m = 0;
+    // Overlap-free gore ramp (ROADS stage 2b): the facing shoulders' smoothstep may run ahead of the lane-edge gap by this much.
+    std::int32_t gore_overlap_tol_mm = 0;
+    // Landing widths (ROADS stage 3b): the landed lane and outer shoulder widths ramp back to the ramp's own over the landing
+    // length, but end before the stretch's other end when that end is a junction, so the junction sees the ramp's own widths at
+    // its trim; a remaining ramp shorter than gore_step_m makes no landing widths. ROADS stage 3c-3: the clearance is the
+    // resolve-time estimate of that junction's trim (from the node's arms) plus landing_width_far_margin_m, at most
+    // landing_width_far_max_m (which also stands in when no estimate can be made; 0 and 0 = no clearance).
+    std::int32_t landing_width_far_margin_m = 0;
+    std::int32_t landing_width_far_max_m = 0;
+    // Taper nodes (ROADS stage 6): a one-lane link meeting a carriageway whose lanes do not change (S == T) lands with its counted
+    // width 0 at the node on the through arm's ramp-side lane edge and widens to its own over at least this length (0 = off,
+    // only in rules built in code: the loader requires 1..2000).
+    std::int32_t taper_length_m = 0;
+    // ROADS stage 6r: a taper only where the link meets the single arm at no more than taper_max_angle_deg and the link's stretch
+    // leaves at least taper_min_length_m for the taper (the stretch less the far-end clearance and what the other end claims);
+    // else the node stays a junction (0 and 0 only in rules built in code: the loader requires both).
+    std::int32_t taper_max_angle_deg = 0;
+    std::int32_t taper_min_length_m = 0;
+    // ROADS stage 7b: a non-link arm R is a merge/diverge arm where the lanes balance (S = T + R) and every arm of the node is a link or
+    // of one of non_link_arm_classes (empty = only _link arms, as before); it gets the lane-add landing, gore and markings of a link and
+    // never a taper. At a fork of two non-link arms whose deflections from S differ by at most fork_tie_deg the through arm is the one
+    // with more counted lanes, then the left one.
+    std::vector<std::string> non_link_arm_classes;
+    std::int32_t fork_tie_deg = 0;
+    // ROADS stage 9: the ramp-side join hint of stage 8a-4 is kept at a node only if the ramp's landed lanes then keep a lane-edge
+    // gap of at least -accept_min_gap_mm to the through lanes over the whole landing (the clearance landing's worst gap); else the
+    // node is classified without the hint (0 = no check, only in rules built in code: the loader requires 1..5000).
+    std::int32_t accept_min_gap_mm = 0;
     friend bool operator==(const MergeLaneRules&, const MergeLaneRules&) = default;
 };
 
@@ -214,7 +249,11 @@ struct RoadRules {
 // threshold 0..100000 m, 0 = never), the reference block (chord_half_width_percent 0..1000, chord_margin_mm 0..100000)
 // and the merge_lane block (G2M-028; angles 1..89 degrees, landing shift length
 // per metre 1..1000 with min <= max in 1..2000 m, maximum landing offset 1..20000 mm, and the landing S-ramp
-// curvature bound 4 W / a^2 <= 1 / min_edge_radius_m of every link class at the largest offset).
+// curvature bound 4 W / a^2 <= 1 / min_edge_radius_m of every link class at the largest offset;
+// gore_max_m 1..1000, gore_step_m 1..50 <= gore_max_m, landing_clear_max_m landing_max_m..2000, gore_overlap_tol_mm 0..2000,
+// landing_width_far_margin_m 0..100, landing_width_far_max_m margin..500, taper_length_m 1..landing_clear_max_m with the same
+// S-ramp curvature bound at the largest landing offset, taper_max_angle_deg 1..89, taper_min_length_m 1..landing_clear_max_m,
+// accept_min_gap_mm 1..5000).
 Result<RoadRules> load_road_rules(std::span<const std::byte> json);
 // The embedded data/road_rules/de.json, parsed once. A corrupt build aborts.
 const RoadRules& builtin_road_rules_de();

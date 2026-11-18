@@ -162,8 +162,120 @@ Result<CrossSectionBase> resolve_cross_section_base(const RoadGraphWay& way, con
 // and the result is tile invariant. `length_m` is the stretch's reference length; the result's length_m is set.
 // A way whose base declines (or has no rules) yields the decline; a neighbour whose base declines is treated as
 // "no join" because it has no section to meet.
+//
+// Diagnostics (g2m_xs_probe --merge-census only; never read by the product): why a node of degree three is or is not a
+// merge-lane / lane-drop node (G2M-028), one code per refusal in the classification, in its order.
+enum class MergeNodeReason : std::uint8_t {
+    Ok = 0, Disabled, ArmsNot3, WayPassesThrough, NodeMissing,
+    ArmWayMissing, ArmNoClass, ArmNoSection, ArmNotOneway, ArmNoCountedLane, ArmNoDirection,
+    AllSameDirection, ThroughDeflection, RampAngle, RampNotLink, LaneSum, JoinSplit,
+    AddedCountMismatch, AddedNotContiguous, AddedNotOnRampSide, Boundaries, RampBackward, LandingTooFar,
+    TaperRampLanes,   // ROADS stage 6: S == T, but the link has more than one counted lane
+    TaperAngle,       // ROADS stage 6r: S == T, but the link meets the single arm steeper than taper_max_angle_deg
+    TaperNoRoom,      // ... its stretch leaves less than taper_min_length_m for the taper
+    TaperOffsetHeld,  // ... its stretch is shifted whole (a hold or transition offset): its end cannot land
+    TaperSide,        // ... the link lies on one side of the through arm and on the other of the single arm (the carriageway bends
+                      // at the node with the link between its two lines): a taper would land it across the through lanes
+    LandingCurvature, // ROADS stage 8a-3: a non-link ramp's landing S-ramp (4 W / a^2) is sharper than its own class's min_edge_radius_m
+};
+const char* merge_node_reason_name(MergeNodeReason reason);
+// The classification of one node with its refusal reason and, when Ok, the roles and the landing offset.
+struct MergeNodeDiagnosis {
+    MergeNodeReason reason = MergeNodeReason::Ok;
+    bool merge = true;
+    std::int64_t through_id = 0, single_id = 0, ramp_id = 0;
+    std::int32_t landing_mm = 0, landing_length_mm = 0;
+    // ROADS stage 5a: what the classification measured before it refused or accepted (filled as far as it got; roles valid
+    // when `roles`): the arms' counted lanes, the through arm's deflection and the ramp's angle against the single arm (deg),
+    // the added lanes found and the landing offset needed (mm, valid when `landing_known`, also when it is too far).
+    bool roles = false, landing_known = false;
+    int single_counted = 0, through_counted = 0, ramp_counted = 0, added_count = -1;
+    double through_deflection_deg = 0, ramp_angle_deg = 0;
+    std::int32_t landing_needed_mm = 0;
+    bool taper = false;   // ROADS stage 6: accepted as a taper node (no added lane)
+    // ROADS stage 6r: the room of a taper candidate (S == T, one-lane link), measured whenever the classification got that far
+    // (also when the angle gate refuses it): the link's stretch length, the far-end clearance (3c-3; 0 unless that end is a
+    // junction), the length the other end claims (its longest ramp: a lane-add landing, a join's ramps; half the stretch when
+    // the other end is a taper of the same link) and what is left for the taper, all mm; held: the stretch is shifted whole.
+    bool taper_candidate = false, room_known = false, two_tapers = false, offset_held = false;
+    std::int64_t stretch_mm = 0, far_clear_mm = 0, claim_mm = 0, avail_mm = 0;
+    // the angle of the link's fitted reference at the node against the single arm (deg; -1 = not fitted); the angle gate
+    // takes the larger of this and ramp_angle_deg (a chord over direction_probe_m misses a kink in the last metres)
+    double ramp_fit_angle_deg = -1;
+    // ROADS stage 9: the ramp-side hint changed the through join and its landing gap was checked (known: the end landed on a Ramps
+    // offset); dropped: the gap was below -accept_min_gap_mm and the node was classified without the hint (the fields above are
+    // that classification's).
+    bool hint_checked = false, hint_gap_known = false, hint_dropped = false;
+    std::int32_t hint_gap_mm = 0;
+};
+MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules);
+// What resolve_cross_section did at each end of the stretch (0 = start, 1 = end).
+enum class CrossSectionEndNote : std::uint8_t {
+    NoJoin = 0,             // no degree-two join and no merge-node role (the merge reason says why)
+    Joined,                 // a join was resolved (kind in `kind`)
+    NeighbourMissing,       // the joined way is not in the graph
+    NeighbourNoSection,     // the joined way has no section (unsupported or declined)
+    NeighbourNoClass,       // the joined way's highway has no rules
+    Landed,                 // this way is the ramp of a merge node and its end landed
+    LandingZero,            // ... the landing offset (or its length) is 0: nothing to land
+    LandingOffsetHold,      // ... the stretch's offset is a Hold (a whole-stretch shift) and keeps it
+    LandingOffsetTransition,// ... the stretch's offset is a Transition and keeps it
+    LandingEndTaken,        // ... this end already carries a join correction
+};
+const char* cross_section_end_note_name(CrossSectionEndNote note);
+struct CrossSectionEndTrace {
+    CrossSectionEndNote note = CrossSectionEndNote::NoJoin;
+    bool merge_ran = false;                                // the degree-three classification ran at this end
+    MergeNodeReason merge_reason = MergeNodeReason::Ok;
+    JoinKind kind = JoinKind::None;                        // the resolved join's kind (Joined)
+    bool tapered = false;                                  // some band of this end got a width ramp (before clipping)
+    bool split = false;                                    // the join's direction groups did not match (section 4.7)
+    std::int32_t delta_mm = 0;                             // the join residual before absorption (A's frame)
+    std::int8_t partner[32]{};                             // per band of A: the matched band of the neighbour in ITS own
+                                                           // band order, -1 unmatched (valid when note == Joined)
+    bool neighbour_same = true;                            // the neighbour runs in A's direction at the node
+    // Gore shoulders (ROADS stage 1): this end is the ramp or the through arm of a landed merge node.
+    bool gore = false;                                     // the rule ran at this end (a landing applies at the node)
+    std::int32_t gore_nose_mm = 0;                         // the nose station from the node (the cap when not reached)
+    bool gore_nose_reached = false;                        // the gap reached both full shoulders within the cap
+    std::int32_t gore_min_gap_mm = 0;                      // the smallest sampled lane-edge gap before the nose (negative: lanes cross)
+    std::int32_t gore_min_gap_at_mm = 0;                   // ... and its station from the node
+    // ROADS stage 2b: the facing shoulder's ramp length, shared by both ways of the node (from the link's gap profile).
+    std::int32_t gore_link_nose_mm = 0;                    // the link's nose (both ways use it)
+    bool gore_link_nose_reached = false;
+    std::int32_t gore_ramp_mm = 0;                         // L_g before the served-section trim
+    std::int32_t gore_overlap_mm = 0;                      // the worst shoulder overlap with L_g (<= gore_overlap_tol_mm unless capped)
+    std::int32_t gore_overlap_at_mm = 0;                   // ... and its station from the node
+    bool gore_capped = false;                              // no length within the cap met the condition
+    bool gore_stretch_bound = false;                       // ... and a stretch (not gore_max_m) set the cap
+    bool gore_other_shorter = false;                       // the other way's stretch allows less than this one's (and binds the cap)
+    bool gore_ramp_trimmed = false;                        // the served section's far-end ramps cut L_g further
+    std::int32_t gore_shoulder_mm = 0;                     // this way's full facing shoulder (0: none, nothing ramped)
+    // Clearance landing (ROADS stage 2a): this end is the ramp's landed end.
+    bool landing_clear = false;                            // the rule ran at this end
+    std::int32_t landing_base_mm = 0;                      // the slope-derived landing length (after the stretch fit)
+    std::int32_t landing_clear_mm = 0;                     // the first station where the unshifted lanes are clear (the cap when never)
+    bool landing_clear_reached = false;                    // ... found within the cap
+    std::int32_t landing_final_mm = 0;                     // the landing length served
+    std::int32_t landing_min_gap_mm = 0;                   // the smallest sampled lane-edge gap over the served landing
+    std::int32_t landing_min_gap_at_mm = 0;                // ... and its station from the node
+    // ROADS stage 9 (diagnostics only): the same gap at that station with the landing offset 0 (the ramp's unshifted line;
+    // INT32_MIN when no through way is abreast there)
+    std::int32_t landing_raw_gap_at_worst_mm = 0;
+    bool landing_no_outer_shoulder = false;                 // ROADS 3b: a landed end with no outer shoulder band to widen
+    bool landing_shoulder_added = false;                    // ROADS 3c-2: ... and one was added there (the single arm has a shoulder)
+    std::int32_t landing_centre_mm = 0;                     // ROADS 3b: counted-lane centre at the node before the landing (subtracted)
+    std::int32_t landing_width_mm = 0;                      // ROADS 3b: the landed width ramps' length (min of L and the far-end cap)
+    bool landing_widths_skipped = false;                    // ROADS 3b: that length is below gore_step_m: no landing widths at this end
+    std::int32_t far_trim_estimate_mm = 0;                  // ROADS 3c-3: the trim estimate at the stretch's far junction (0: none)
+    std::int32_t far_clear_mm = 0;                          // ROADS 3c-3: the landing widths' far-end clearance (0: no far junction)
+};
+struct CrossSectionTrace { CrossSectionEndTrace ends[2]{}; };
+// `fit_limits`: the planar reference fit of the served profiles (the gore-shoulder rule measures the ramp and the through
+// carriageway on it); nullptr = curvature exceptions on and the rules' chord bound, as the served tiles fit.
 Result<CrossSectionBase> resolve_cross_section(const RoadReferenceBuilder& builder, std::int64_t way_id,
-    RoadStretch stretch, double length_m, const RoadRules& rules);
+    RoadStretch stretch, double length_m, const RoadRules& rules, CrossSectionTrace* trace = nullptr,
+    const ReferenceFitLimits* fit_limits = nullptr);
 
 // World-space point at station s and lateral offset t (metres, positive left of the reference direction), in the
 // same UTM frame as RoadReferenceLine::at.
