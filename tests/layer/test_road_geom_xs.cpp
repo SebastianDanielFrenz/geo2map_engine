@@ -381,8 +381,10 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
     const std::string g34 = g33 + " ramp-side-join=ROADS-8a4";
     CHECK(road_geom_config_text() != g34);   // ROADS 9 is served on top of it
     const std::string g35 = g34 + " hint-gap=ROADS-9";
-    CHECK(road_geom_config_text() == g35);
-    CHECK(deriver.config_hash() == Sha256::of(g35));
+    CHECK(road_geom_config_text() != g35);   // ROADS 10 is served on top of it
+    const std::string g36 = g35 + " fork-role=ROADS-10r";
+    CHECK(road_geom_config_text() == g36);
+    CHECK(deriver.config_hash() == Sha256::of(g36));
     CHECK(road_geom_desc().encoding == 10);
     // The text is built from served_road_completion_options(): pin those values, so a changed default fails here and
     // in the literal text above together.

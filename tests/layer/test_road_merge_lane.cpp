@@ -277,6 +277,12 @@ TEST_CASE("M7 the B 8 exit at Hoechst: the exit lane is whole at the diverge nod
 //   S23 (ROADS stage 8a-1, 2026-11-18) apply_gore_shoulders: at a taper only the facing shoulder takes the gore, not the verge   -> T13 fails
 //   S24 (ROADS stage 8a-4, 2026-11-18) resolve_join: the ramp-side hint ignored (added lanes on the default side)              -> N5 fails
 //   S22 (ROADS stage 8a-3, 2026-11-18) classify_merge_node: no per-node landing_curvature check of a non-link ramp       -> N4 fails
+//   S26 (ROADS stage 10, 2026-11-18) classify_merge_node: the fork-role rule never applies (geometry only)          -> F1, F2, F4, F7 fail
+//   S27 (ROADS stage 10, 2026-11-18) classify_merge_node: no contradiction check (tokens win over ref)              -> F3 fails
+//   S28 (ROADS stage 10, 2026-11-18) classify_merge_node: no deflection window (the rule applies at any deflection) -> F4 fails
+//   S29 (ROADS stage 10r, 2026-11-18) classify_merge_node: ref continuity used at merges too                 -> F5 fails
+//   S30 (ROADS stage 10r, 2026-11-18) classify_merge_node: ref may make a _link arm the through arm          -> F6m fails
+//   S31 (ROADS stage 10r, 2026-11-18) classify_merge_node: no gap guard (a tag role kept whenever it lands)  -> F7 fails
 namespace {
 // The taper scene: A and B both 2 lanes (S == T), or one 2-lane way 10 passing through node 2 (`passing`); the link R as in
 // merge_scene with `ramp_lanes` lanes; `ramp_x` its distance along x from the node (merge: west of it; diverge: east).
@@ -847,4 +853,126 @@ TEST_CASE("N3 a fork of two non-link carriageways: the through arm bends less; a
     const auto g = fork_scene(4, 2, 30, 2, -30);
     const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
     CHECK(resolve_in(*builder, 22, rules).xs.start_join.kind == JoinKind::Landing);
+}
+
+// ROADS stage 10: at a fork whose two candidate arms both deflect at most merge_lane.role_tag_max_deflection_deg from S, the roles
+// follow S's turn:lanes where they decide, else ref continuity, else the geometry; tokens and ref naming different arms, or an arm
+// beyond the window, leave the geometry. S (3 lanes) forks at node 2 into X (1 lane, right, 2.9 deg: the geometric through arm) and
+// Y (2 lanes, left, 11.3 deg or 24.9 deg). Sabotages S26 (rule off: F1, F2, F4, F7 fail), S27 (no contradiction check: F3 fails), S28 (no
+// deflection window: F4 fails).
+namespace {
+RoadGraph role_fork(const std::string& s_turn, const std::string& s_ref, const std::string& x_ref, const std::string& y_ref, double y_north) {
+    const auto tags = [](int lanes, const std::string& turn, const std::string& ref) {
+        Tags t = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", std::to_string(lanes)}};
+        if (!turn.empty()) t.emplace_back("turn:lanes", turn);
+        if (!ref.empty()) t.emplace_back("ref", ref);
+        return t;
+    };
+    return graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {200, -10}}, {4, {200, y_north}}},
+                    {way(30, {1, 2}, tags(3, s_turn, s_ref)), way(31, {2, 3}, tags(1, "", x_ref)), way(32, {2, 4}, tags(2, "", y_ref))});
+}
+RoadRules role_rules() { auto r = builtin_road_rules_de(); r.merge_lane.role_tag_max_deflection_deg = 20; return r; }
+}
+
+TEST_CASE("F1 fork roles: S's turn tokens name the through arm", "[layer][road_merge_lane][roads]") {
+    const auto rules = role_rules();
+    const auto g = role_fork("through|through|slight_right", "", "", "", 40);
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    CHECK(d.role_geom_through_id == 31); CHECK(d.role_turn_through_id == 32); CHECK(d.role_rule_applied); CHECK_FALSE(d.role_conflict);
+    CHECK(d.through_id == 32); CHECK(d.ramp_id == 31); CHECK(d.reason == MergeNodeReason::Ok);
+    CHECK(resolve_in(*builder, 31, rules).xs.start_join.kind == JoinKind::Landing);
+    auto off = rules; off.merge_lane.role_tag_max_deflection_deg = 0;   // rule off: geometry
+    CHECK(diagnose_merge_node(*builder, 2, off).through_id == 31);
+}
+
+TEST_CASE("F2 fork roles: without deciding tokens ref continuity names the through arm", "[layer][road_merge_lane][roads]") {
+    const auto rules = role_rules();
+    const auto g = role_fork("", "B 8", "L 3005", "B 8", 40);
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    CHECK(d.role_turn_through_id == 0); CHECK(d.role_ref_through_id == 32); CHECK(d.role_rule_applied);
+    CHECK(d.through_id == 32); CHECK(d.ramp_id == 31); CHECK(d.reason == MergeNodeReason::Ok);
+}
+
+TEST_CASE("F3 fork roles: tokens and ref naming different arms leave the geometry", "[layer][road_merge_lane][roads]") {
+    const auto rules = role_rules();
+    const auto g = role_fork("through|through|slight_right", "B 8", "B 8", "L 3005", 40);
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    CHECK(d.role_turn_through_id == 32); CHECK(d.role_ref_through_id == 31); CHECK(d.role_conflict); CHECK_FALSE(d.role_rule_applied);
+    CHECK(d.through_id == 31);
+}
+
+TEST_CASE("F4 fork roles: an arm beyond role_tag_max_deflection_deg leaves the geometry", "[layer][road_merge_lane][roads]") {
+    const auto rules = role_rules();
+    const auto g = role_fork("through|through|slight_right", "B 8", "L 3005", "B 8", 93);
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    CHECK(d.role_y_defl_deg > 20); CHECK(d.role_turn_through_id == 32); CHECK(d.role_ref_through_id == 32);
+    CHECK_FALSE(d.role_rule_applied); CHECK_FALSE(d.role_checked); CHECK(d.through_id == 31);
+    auto wide = rules; wide.merge_lane.role_tag_max_deflection_deg = 30;   // inside a wider window the rule applies (F7: checked)
+    CHECK(diagnose_merge_node(*builder, 2, wide).role_checked);
+}
+
+// ROADS stage 10r: ref continuity decides only at forks and never makes a _link arm the through arm when the other arm is no link;
+// a tag role that differs from geometry's is kept only if the node, resolved with it, lands with a landing gap of at least
+// -accept_min_gap_mm, else the node is the geometric roles' result. Sabotages S29 (ref used at merges: F5 fails), S30 (ref may pick a
+// link as the through arm: F6m fails), S31 (no gap guard: the tag role kept whenever it lands: F7 fails).
+namespace {
+// The merge mirror of role_fork: X (1 lane, from the south-west, 2.9 deg: the geometric through arm) and Y (2 lanes) arrive at node
+// 2, S (3 lanes) leaves east.
+RoadGraph role_merge(const std::string& s_ref, const std::string& x_ref, const std::string& y_ref, double y_north) {
+    const auto tags = [](int lanes, const std::string& ref) {
+        Tags t = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", std::to_string(lanes)}};
+        if (!ref.empty()) t.emplace_back("ref", ref);
+        return t;
+    };
+    return graph_of({{1, {400, 0}}, {2, {0, 0}}, {3, {-200, -10}}, {4, {-200, y_north}}},
+                    {way(30, {2, 1}, tags(3, s_ref)), way(31, {3, 2}, tags(1, x_ref)), way(32, {4, 2}, tags(2, y_ref))});
+}
+}
+
+TEST_CASE("F5 merge roles: ref continuity decides nothing at a merge", "[layer][road_merge_lane][roads]") {
+    const auto rules = role_rules();
+    const auto g = role_merge("B 8", "L 3005", "B 8", 40);
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    CHECK(d.merge); CHECK(d.role_geom_through_id == 31); CHECK(d.role_ref_through_id == 32);
+    CHECK_FALSE(d.role_rule_applied); CHECK_FALSE(d.role_checked); CHECK(d.through_id == 31);
+    auto off = rules; off.merge_lane.role_tag_max_deflection_deg = 0;
+    const auto d0 = diagnose_merge_node(*builder, 2, off);
+    CHECK(d.reason == d0.reason); CHECK(d.landing_mm == d0.landing_mm);
+}
+
+TEST_CASE("F6m fork roles: ref never makes a link the through arm when the other arm is no link", "[layer][road_merge_lane][roads]") {
+    const auto rules = role_rules();
+    const Tags ts = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "3"}, {"ref", "B 8"}},
+               tx = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}, {"ref", "L 3005"}},
+               ty = {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", "1"}, {"ref", "B 8"}};
+    const auto g = graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {200, -10}}, {4, {200, 40}}}, {way(30, {1, 2}, ts), way(31, {2, 3}, tx), way(32, {2, 4}, ty)});
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    CHECK(d.role_geom_through_id == 31); CHECK(d.role_ref_through_id == 32);
+    CHECK_FALSE(d.role_rule_applied); CHECK_FALSE(d.role_checked); CHECK(d.through_id == 31); CHECK(d.ramp_id == 32);
+}
+
+TEST_CASE("F7 fork roles: a tag role whose landing would cross the through lanes leaves the geometric result", "[layer][road_merge_lane][roads]") {
+    auto rules = role_rules(); rules.merge_lane.role_tag_max_deflection_deg = 30;
+    REQUIRE(rules.merge_lane.accept_min_gap_mm == 250);
+    // F4's fork inside a 30 deg window: with Y (24.9 deg) as the tag-chosen through arm X's landed lane crosses the through lanes.
+    const auto g = role_fork("through|through|slight_right", "B 8", "L 3005", "B 8", 93);
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    INFO("role gap " << d.role_gap_mm << " mm, reason " << merge_node_reason_name(d.reason));
+    CHECK(d.role_checked); CHECK(d.role_dropped); CHECK(d.role_gap_known);
+    CHECK(d.role_gap_mm < -rules.merge_lane.accept_min_gap_mm);
+    auto off = rules; off.merge_lane.role_tag_max_deflection_deg = 0;   // the geometric roles' result, exactly
+    const auto d0 = diagnose_merge_node(*builder, 2, off);
+    CHECK(d.through_id == d0.through_id); CHECK(d.through_id == 31); CHECK(d.reason == d0.reason); CHECK(d.landing_mm == d0.landing_mm);
+    CHECK(resolve_in(*builder, 31, rules).xs.start_join.kind == resolve_in(*builder, 31, off).xs.start_join.kind);
+    // A tolerance above the crossing keeps the tag role.
+    auto loose = rules; loose.merge_lane.accept_min_gap_mm = 5000;
+    const auto d2 = diagnose_merge_node(*builder, 2, loose);
+    CHECK(d2.role_checked); CHECK_FALSE(d2.role_dropped); CHECK(d2.through_id == 32); CHECK(d2.reason == MergeNodeReason::Ok);
 }

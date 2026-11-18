@@ -49,7 +49,7 @@ g3j.hoechst_a66.tile.456.5420.provenance 105 99ee30adf17b81a9
 g3j.hoechst_a66.tile.454.5421.junctions 20 71aba579d5401e56
 g3j.hoechst_a66.tile.454.5421.furniture 36 84d93109c34d6f7a
 g3j.hoechst_a66.tile.454.5421.provenance 174 6aa5463ba4cdd1bc
-g3j.hoechst_a66.tile.455.5421.junctions 112 d946a9152f426152
+g3j.hoechst_a66.tile.455.5421.junctions 112 060273edb1437f95
 g3j.hoechst_a66.tile.455.5421.furniture 130 ba878c32adcf88c4
 g3j.hoechst_a66.tile.455.5421.provenance 497 8c87b3392edd5b8e
 g3j.hoechst_a66.tile.456.5421.junctions 36 3befbc52ff157c31
@@ -67,7 +67,7 @@ g3j.hoechst_a66.tile.455.5422.provenance 148 062baae80dc6af1d
 g3j.hoechst_a66.tile.456.5422.junctions 2 200d170b9ed72b67
 g3j.hoechst_a66.tile.456.5422.furniture 0 af63bd4c8601b7df
 g3j.hoechst_a66.tile.456.5422.provenance 15 9f6095ce4f72ac9a
-g3j.hoechst_a66.junctions 259 290a1ec76306ccd8
+g3j.hoechst_a66.junctions 259 981546af131fe1d5
 g3j.hoechst_a66.furniture 500 1b1c4ae60211e094
 g3j.hoechst_a66.completed_entries 71 00000000000005ef
-all 7036 9354778c434d56eb
+all 7036 7ca8529db411d3b9

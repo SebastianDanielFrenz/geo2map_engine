@@ -207,6 +207,18 @@ struct MergeNodeDiagnosis {
     // that classification's).
     bool hint_checked = false, hint_gap_known = false, hint_dropped = false;
     std::int32_t hint_gap_mm = 0;
+    // ROADS stage 10 (valid when `roles`): the two candidate arms X/Y (way ids, their deflections from S in deg), the arm geometry
+    // makes the through arm, and the arm each role signal names the through arm (0 = the signal does not decide): S's turn:lanes
+    // (at a merge the arms' merge_to tokens), ref continuity, name continuity; rule_applied: the role-tag rule chose the roles
+    // (they may equal geometry's), conflict: turn tokens and ref named different arms inside the rule's window.
+    std::int64_t role_x_id = 0, role_y_id = 0, role_geom_through_id = 0, role_turn_through_id = 0, role_ref_through_id = 0,
+                 role_name_through_id = 0;
+    double role_x_defl_deg = 0, role_y_defl_deg = 0;
+    bool role_rule_applied = false, role_conflict = false;
+    // ROADS stage 10r: role_checked: the tag-chosen roles differed from geometry's and were checked (resolved with them: landed,
+    // worst landing gap role_gap_mm when role_gap_known); role_dropped: the check failed and the node is the geometric roles' result.
+    bool role_checked = false, role_gap_known = false, role_dropped = false;
+    std::int32_t role_gap_mm = 0;
 };
 MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules);
 // What resolve_cross_section did at each end of the stretch (0 = start, 1 = end).

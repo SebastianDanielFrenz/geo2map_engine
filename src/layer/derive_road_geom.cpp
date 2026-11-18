@@ -192,7 +192,7 @@ std::string road_geom_config_text() {
         // stage-3 set walks the component to its closure; replaces the D47 chord and D65 cut floors above when on.
         + (c.tunnel_design_floor ? " tunnel-design-floor=7a2/" + option_value(c.structure_clearance_m) + "/" + option_value(c.structure_roof_m) + "/" + option_value(c.structure_max_grade) + "/reach:0.9 component-walk=1" : std::string())
         // G2M-032: the added lane of a merge/exit node is full width at the node (no taper to zero under the link's landing).
-        + " merge-lane-full=G2M-032 landing-widths=ROADS-3c merge-taper=ROADS-6r non-link-arms=ROADS-7b taper-bed=ROADS-8a landing-curv=ROADS-8a3 ramp-side-join=ROADS-8a4 hint-gap=ROADS-9";
+        + " merge-lane-full=G2M-032 landing-widths=ROADS-3c merge-taper=ROADS-6r non-link-arms=ROADS-7b taper-bed=ROADS-8a landing-curv=ROADS-8a3 ramp-side-join=ROADS-8a4 hint-gap=ROADS-9 fork-role=ROADS-10r";
 }
 ContentHash RoadGeomDeriver::config_hash() const { return Sha256::of(road_geom_config_text()); }
 std::vector<InputTileRef> RoadGeomDeriver::inputs_for(const TileKey& target) const {

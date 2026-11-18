@@ -193,6 +193,10 @@ struct MergeLaneRules {
     // gap of at least -accept_min_gap_mm to the through lanes over the whole landing (the clearance landing's worst gap); else the
     // node is classified without the hint (0 = no check, only in rules built in code: the loader requires 1..5000).
     std::int32_t accept_min_gap_mm = 0;
+    // ROADS stage 10: where both candidate arms deflect at most role_tag_max_deflection_deg from S, the through/ramp roles follow S's
+    // turn:lanes (at a merge the arms' merge_to tokens) where they decide, else ref continuity where it decides, else the geometry
+    // above; turn tokens and ref naming different arms leave the geometry (0 = off, only in rules built in code or set so).
+    std::int32_t role_tag_max_deflection_deg = 0;
     friend bool operator==(const MergeLaneRules&, const MergeLaneRules&) = default;
 };
 
