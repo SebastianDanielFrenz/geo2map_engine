@@ -410,7 +410,7 @@ std::optional<geom::CurvePose> arm_pose(const RoadReferenceBuilder& builder, con
 }
 
 std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules,
-        const ReferenceFitLimits& fit_limits, MergeNodeReason* why = nullptr) {
+        const ReferenceFitLimits& fit_limits, MergeNodeReason* why = nullptr, MergeNodeDiagnosis* detail = nullptr) {
     // Every refusal names its reason (diagnostics only, g2m_xs_probe --merge-census).
     const auto refuse = [why](MergeNodeReason r) -> std::optional<MergeNode> { if (why) *why = r; return std::nullopt; };
     if (why) *why = MergeNodeReason::Ok;
@@ -438,6 +438,13 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     const bool x_through = cos_x > cos_y || (cos_x == cos_y && a[xi].arm.way_id < a[yi].arm.way_id);
     const NodeArm& T = x_through ? a[xi] : a[yi];
     const NodeArm& R = x_through ? a[yi] : a[xi];
+    if (detail) {   // diagnostics only (ROADS stage 5a)
+        detail->roles = true; detail->merge = out.merge;
+        detail->through_id = T.arm.way_id; detail->single_id = S.arm.way_id; detail->ramp_id = R.arm.way_id;
+        detail->single_counted = S.counted; detail->through_counted = T.counted; detail->ramp_counted = R.counted;
+        detail->through_deflection_deg = angle_deg(x_through ? cos_x : cos_y);
+        detail->ramp_angle_deg = angle_deg(R.dx * S.dx + R.dy * S.dy);
+    }
     if (angle_deg(x_through ? cos_x : cos_y) > static_cast<double>(ml.max_through_deflection_deg)) return refuse(MergeNodeReason::ThroughDeflection);
     if (angle_deg(R.dx * S.dx + R.dy * S.dy) > static_cast<double>(ml.max_ramp_angle_deg)) return refuse(MergeNodeReason::RampAngle);
     const auto hw = highway_of(*R.way);
@@ -461,6 +468,7 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
         last_added = i;
         ++added;
     }
+    if (detail) detail->added_count = added;
     if (added != R.counted) return refuse(MergeNodeReason::AddedCountMismatch);
     if (last_added - first_added + 1 != added) return refuse(MergeNodeReason::AddedNotContiguous);   // one contiguous group, the ramp's lanes
     // ... on the ramp's side: no matched counted band beyond it.
@@ -493,6 +501,7 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     }
     if (!(cos_phi > 0)) return refuse(MergeNodeReason::RampBackward);
     const double landing = std::round((target_mm - lat_mm) / cos_phi);
+    if (detail && std::fabs(landing) < 2.0e9) { detail->landing_known = true; detail->landing_needed_mm = static_cast<std::int32_t>(landing); }
     if (std::fabs(landing) > static_cast<double>(ml.max_landing_offset_mm)) return refuse(MergeNodeReason::LandingTooFar);
     out.through_id = T.arm.way_id; out.single_id = S.arm.way_id; out.ramp_id = R.arm.way_id;
     out.through_leaves = T.arm.leaves_node; out.single_leaves = S.arm.leaves_node;
@@ -541,7 +550,7 @@ const char* cross_section_end_note_name(CrossSectionEndNote note) {
 
 MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules) {
     MergeNodeDiagnosis d;
-    if (const auto m = classify_merge_node(builder, node_id, rules, served_fit_limits(rules), &d.reason)) {
+    if (const auto m = classify_merge_node(builder, node_id, rules, served_fit_limits(rules), &d.reason, &d)) {
         d.merge = m->merge; d.through_id = m->through_id; d.single_id = m->single_id; d.ramp_id = m->ramp_id;
         d.landing_mm = m->landing_mm; d.landing_length_mm = m->landing_length_mm;
     }

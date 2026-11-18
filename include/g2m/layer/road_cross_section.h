@@ -178,6 +178,13 @@ struct MergeNodeDiagnosis {
     bool merge = true;
     std::int64_t through_id = 0, single_id = 0, ramp_id = 0;
     std::int32_t landing_mm = 0, landing_length_mm = 0;
+    // ROADS stage 5a: what the classification measured before it refused or accepted (filled as far as it got; roles valid
+    // when `roles`): the arms' counted lanes, the through arm's deflection and the ramp's angle against the single arm (deg),
+    // the added lanes found and the landing offset needed (mm, valid when `landing_known`, also when it is too far).
+    bool roles = false, landing_known = false;
+    int single_counted = 0, through_counted = 0, ramp_counted = 0, added_count = -1;
+    double through_deflection_deg = 0, ramp_angle_deg = 0;
+    std::int32_t landing_needed_mm = 0;
 };
 MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules);
 // What resolve_cross_section did at each end of the stretch (0 = start, 1 = end).
