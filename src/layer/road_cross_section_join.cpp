@@ -622,6 +622,15 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
         static_cast<std::int64_t>(ml.landing_min_m) * 1000, static_cast<std::int64_t>(ml.landing_max_m) * 1000);
     // A taper always ramps its lane width from 0, so it has a length even with no lateral offset to land.
     out.landing_length_mm = static_cast<std::int32_t>(taper ? static_cast<std::int64_t>(ml.taper_length_m) * 1000 : out.landing_mm == 0 ? 0 : length);
+    // ROADS stage 8a-3: a link class's landing S-ramp is checked against its min_edge_radius_m once, by the loader; a non-link ramp
+    // (stage 7b) is checked here, per node, with its own class radius: 4 W / a^2 <= 1 / R, W the landing offset, a the slope-derived
+    // landing length (in mm: 4 * W_mm * R_m * 1000 <= a_mm^2).
+    if (!ramp_link && out.landing_mm != 0) {
+        const auto* cls = rules.find_class(highway_of(*R.way));
+        const std::int64_t radius_m = cls ? cls->min_edge_radius_m : 0;
+        if (4 * static_cast<std::int64_t>(std::abs(out.landing_mm)) * radius_m * 1000 > length * length)
+            return refuse(MergeNodeReason::LandingCurvature);
+    }
     if (taper && room) {
         if (!room_done) measure_room();
         if (!room_at.fitted || (ml.taper_min_length_m > 0 && room_at.avail_mm < static_cast<std::int64_t>(ml.taper_min_length_m) * 1000))
@@ -651,7 +660,7 @@ const char* merge_node_reason_name(MergeNodeReason reason) {
         "arm_way_missing", "arm_no_class", "arm_no_section", "arm_not_oneway", "arm_no_counted_lane", "arm_no_direction",
         "all_same_direction", "through_deflection", "ramp_angle", "ramp_not_link", "lane_sum", "join_split",
         "added_count_mismatch", "added_not_contiguous", "added_not_on_ramp_side", "boundaries", "ramp_backward", "landing_too_far", "taper_ramp_lanes",
-        "taper_angle", "taper_no_room", "taper_offset_held", "taper_side"};
+        "taper_angle", "taper_no_room", "taper_offset_held", "taper_side", "landing_curvature"};
     const auto i = static_cast<std::size_t>(reason);
     return i < sizeof(n) / sizeof(n[0]) ? n[i] : "?";
 }

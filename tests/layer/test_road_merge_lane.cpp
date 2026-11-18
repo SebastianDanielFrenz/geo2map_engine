@@ -275,6 +275,7 @@ TEST_CASE("M7 the B 8 exit at Hoechst: the exit lane is whole at the diverge nod
 //   S20 classify_merge_node: a non-link R accepted without the lane sum (S = T + R)                            -> N2 fails
 //   S21 classify_merge_node: no fork tie rule (the way-id tie of before)                                         -> N3 fails
 //   S23 (ROADS stage 8a-1, 2026-11-18) apply_gore_shoulders: at a taper only the facing shoulder takes the gore, not the verge   -> T13 fails
+//   S22 (ROADS stage 8a-3, 2026-11-18) classify_merge_node: no per-node landing_curvature check of a non-link ramp       -> N4 fails
 namespace {
 // The taper scene: A and B both 2 lanes (S == T), or one 2-lane way 10 passing through node 2 (`passing`); the link R as in
 // merge_scene with `ramp_lanes` lanes; `ramp_x` its distance along x from the node (merge: west of it; diverge: east).
@@ -692,6 +693,34 @@ TEST_CASE("N1 a non-link carriageway joining where the lanes balance lands like 
 // ROADS stage 8a-3: a non-link ramp's landing S-ramp is checked per node with its own class's min_edge_radius_m (a link class is
 // checked once by the loader). N1's trunk ramp lands at the shipped 60 m; with the trunk radius at the bound 4 W R <= a^2 it still
 // lands, one metre above it is refused landing_curvature and served as a junction. Sabotage S22 (no per-node check) -> N4 fails.
+TEST_CASE("N4 a non-link ramp's landing S-ramp is checked against its own class radius (landing_curvature)", "[layer][road_merge_lane][roads]") {
+    const auto& rules = builtin_road_rules_de();
+    const auto s = merge_scene({10, 11, 12}, "trunk");
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    REQUIRE(d.reason == MergeNodeReason::Ok);
+    const std::int64_t w = std::abs(d.landing_mm), a = d.landing_length_mm;
+    REQUIRE(w > 0); REQUIRE(a > 0);
+    const std::int64_t bound_m = a * a / (4 * w * 1000);   // the largest whole-metre radius the landing satisfies
+    INFO("W " << w << " mm, a " << a << " mm, bound " << bound_m << " m");
+    REQUIRE(bound_m >= 60);
+    const auto with_trunk_radius = [&](std::int32_t r) {
+        auto out = rules;
+        for (auto& c : out.classes) if (c.highway == "trunk") c.min_edge_radius_m = r;
+        return out;
+    };
+    const auto at = with_trunk_radius(static_cast<std::int32_t>(bound_m)), over = with_trunk_radius(static_cast<std::int32_t>(bound_m + 1));
+    CHECK(diagnose_merge_node(*builder, 2, at).reason == MergeNodeReason::Ok);
+    CHECK(diagnose_merge_node(*builder, 2, over).reason == MergeNodeReason::LandingCurvature);
+    CHECK(resolve_in(*builder, s.r, over).xs.end_join.kind == JoinKind::None);
+    check_junction(*builder, over, s.a, s.b, s.r);
+    // A link ramp is not checked per node (the loader bounds its class): the same radius on trunk_link changes nothing.
+    const auto ls = merge_scene({10, 11, 12}, "trunk_link");
+    const auto lb = RoadReferenceBuilder::make(ls.graph); REQUIRE(lb);
+    auto big = rules; for (auto& c : big.classes) if (c.highway == "trunk_link") c.min_edge_radius_m = 100000;
+    CHECK(diagnose_merge_node(*lb, 2, big).reason == diagnose_merge_node(*lb, 2, rules).reason);
+}
+
 TEST_CASE("N2 a non-link arm where the lanes do not balance stays a junction (ramp_not_link)", "[layer][road_merge_lane][roads]") {
     const auto& rules = builtin_road_rules_de();
     for (const int b_lanes : {2, 4}) {   // 2 = 2 + 0 would be a taper shape, 4 != 2 + 1
@@ -716,11 +745,16 @@ RoadGraph fork_scene(int s_lanes, int l_lanes, int yl, int r_lanes, int yr, cons
 } // namespace
 
 TEST_CASE("N3 a fork of two non-link carriageways: the through arm bends less; alike, it has more lanes, then it is the left one", "[layer][road_merge_lane][roads]") {
-    const auto& rules = builtin_road_rules_de();
+    // The forks' motorway ramps land a few metres over a short landing, sharper than the motorway's 200 m edge radius: the shipped
+    // rules refuse them landing_curvature (ROADS 8a-3, N4). The fork tie rule is checked with that radius off.
+    auto rules = builtin_road_rules_de();
+    for (auto& c : rules.classes) if (c.highway == "motorway") c.min_edge_radius_m = 0;
     const auto through = [&](const RoadGraph& g) {
         const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
         const auto d = diagnose_merge_node(*builder, 2, rules);
         CHECK(d.reason == MergeNodeReason::Ok); CHECK_FALSE(d.taper);
+        const auto shipped = diagnose_merge_node(*builder, 2, builtin_road_rules_de());
+        CHECK((shipped.reason == MergeNodeReason::Ok || shipped.reason == MergeNodeReason::LandingCurvature));
         return d.through_id;
     };
     CHECK(through(fork_scene(4, 2, 30, 2, -30)) == 21);    // 5.7 deg each, two lanes each: the left one

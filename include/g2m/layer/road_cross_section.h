@@ -176,6 +176,7 @@ enum class MergeNodeReason : std::uint8_t {
     TaperOffsetHeld,  // ... its stretch is shifted whole (a hold or transition offset): its end cannot land
     TaperSide,        // ... the link lies on one side of the through arm and on the other of the single arm (the carriageway bends
                       // at the node with the link between its two lines): a taper would land it across the through lanes
+    LandingCurvature, // ROADS stage 8a-3: a non-link ramp's landing S-ramp (4 W / a^2) is sharper than its own class's min_edge_radius_m
 };
 const char* merge_node_reason_name(MergeNodeReason reason);
 // The classification of one node with its refusal reason and, when Ok, the roles and the landing offset.

@@ -375,8 +375,10 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
     const std::string g31 = g30 + " non-link-arms=ROADS-7b";
     CHECK(road_geom_config_text() != g31);   // ROADS 8a is served on top of it
     const std::string g32 = g31 + " taper-bed=ROADS-8a";
-    CHECK(road_geom_config_text() == g32);
-    CHECK(deriver.config_hash() == Sha256::of(g32));
+    CHECK(road_geom_config_text() != g32);   // ROADS 8a-3 is served on top of it
+    const std::string g33 = g32 + " landing-curv=ROADS-8a3";
+    CHECK(road_geom_config_text() == g33);
+    CHECK(deriver.config_hash() == Sha256::of(g33));
     CHECK(road_geom_desc().encoding == 10);
     // The text is built from served_road_completion_options(): pin those values, so a changed default fails here and
     // in the literal text above together.
