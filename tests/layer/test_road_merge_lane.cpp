@@ -275,6 +275,7 @@ TEST_CASE("M7 the B 8 exit at Hoechst: the exit lane is whole at the diverge nod
 //   S20 classify_merge_node: a non-link R accepted without the lane sum (S = T + R)                            -> N2 fails
 //   S21 classify_merge_node: no fork tie rule (the way-id tie of before)                                         -> N3 fails
 //   S23 (ROADS stage 8a-1, 2026-11-18) apply_gore_shoulders: at a taper only the facing shoulder takes the gore, not the verge   -> T13 fails
+//   S24 (ROADS stage 8a-4, 2026-11-18) resolve_join: the ramp-side hint ignored (added lanes on the default side)              -> N5 fails
 //   S22 (ROADS stage 8a-3, 2026-11-18) classify_merge_node: no per-node landing_curvature check of a non-link ramp       -> N4 fails
 namespace {
 // The taper scene: A and B both 2 lanes (S == T), or one 2-lane way 10 passing through node 2 (`passing`); the link R as in
@@ -719,6 +720,45 @@ TEST_CASE("N4 a non-link ramp's landing S-ramp is checked against its own class 
     const auto lb = RoadReferenceBuilder::make(ls.graph); REQUIRE(lb);
     auto big = rules; for (auto& c : big.classes) if (c.highway == "trunk_link") c.min_edge_radius_m = 100000;
     CHECK(diagnose_merge_node(*lb, 2, big).reason == diagnose_merge_node(*lb, 2, rules).reason);
+}
+
+TEST_CASE("N5 the through pair joins with the ramp's side: the added lanes lie where the ramp is, unless turn tokens name the other side", "[layer][road_merge_lane][roads]") {
+    // A (2 lanes) and B (3 lanes, no placement) through node 2, the link from the LEFT (merge) or leaving to the left (diverge). The
+    // default added-lane side is the right; before ROADS 8a-4 the join put B's added lane there and the node was refused
+    // added_not_on_ramp_side. Now A's lanes meet B's two right lanes and the link lands on B's left lane.
+    const auto& rules = builtin_road_rules_de();
+    const auto scene = [](bool diverge, const std::string& b_turn) {
+        Tags tb = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "3"}};
+        if (!b_turn.empty()) tb.emplace_back("turn:lanes", b_turn);
+        const Tags ta = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}}, tr = {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", "1"}};
+        if (!diverge) return graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {200, 0}}, {4, {-150, 12}}}, {way(10, {1, 2}, ta), way(11, {2, 3}, tb), way(12, {4, 2}, tr)});
+        return graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {200, 0}}, {4, {150, 12}}}, {way(11, {1, 2}, tb), way(10, {2, 3}, ta), way(12, {2, 4}, tr)});
+    };
+    for (const bool diverge : {false, true}) {
+        INFO((diverge ? "diverge" : "merge"));
+        const auto g = scene(diverge, "");
+        const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+        const auto d = diagnose_merge_node(*builder, 2, rules);
+        REQUIRE(d.reason == MergeNodeReason::Ok);
+        CHECK(d.through_id == 10); CHECK(d.single_id == 11); CHECK(d.ramp_id == 12);
+        const auto a = resolve_in(*builder, 10, rules), b = resolve_in(*builder, 11, rules), r = resolve_in(*builder, 12, rules);
+        CHECK((diverge ? b.xs.end_join : b.xs.start_join).kind != JoinKind::None);
+        // At the node (all three on the x axis there): A's two lanes meet B's two right lanes, B's left lane is the added one.
+        const auto ad = boundaries(a.xs, diverge ? 0.0 : a.length), bd = boundaries(b.xs, diverge ? b.length : 0.0);
+        const auto fa = first_counted(a.xs), fb = first_counted(b.xs);
+        REQUIRE(last_counted(a.xs) == fa + 1); REQUIRE(last_counted(b.xs) == fb + 2);
+        CHECK(std::abs(ad[fa] - bd[fb + 1]) < 1e-3); CHECK(std::abs(ad[fa + 2] - bd[fb + 3]) < 1e-3);
+        // The link lands left of its line, its counted-lane centre on B's left lane's centre (up to the ramp angle's cos).
+        CHECK((diverge ? r.xs.start_join.kind : r.xs.end_join.kind) == JoinKind::Landing);
+        CHECK((diverge ? r.xs.offset.start_mm : r.xs.offset.end_mm) > 0);
+        const auto rd = boundaries(r.xs, diverge ? 0.0 : r.length);
+        const auto fr = first_counted(r.xs);
+        CHECK(std::abs(0.5 * (rd[fr] + rd[fr + 1]) - 0.5 * (bd[fb] + bd[fb + 1])) < 0.05);
+        // Turn tokens that put B's added lane on the right (tagged data) keep the refusal.
+        const auto gt = scene(diverge, diverge ? "none|none|slight_right" : "none|none|merge_to_left");
+        const auto bt = RoadReferenceBuilder::make(gt); REQUIRE(bt);
+        CHECK(diagnose_merge_node(*bt, 2, rules).reason == MergeNodeReason::AddedNotOnRampSide);
+    }
 }
 
 TEST_CASE("N2 a non-link arm where the lanes do not balance stays a junction (ramp_not_link)", "[layer][road_merge_lane][roads]") {

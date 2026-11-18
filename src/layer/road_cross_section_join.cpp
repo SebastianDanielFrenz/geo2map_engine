@@ -211,7 +211,11 @@ struct JoinOutcome {
 
 std::int32_t floor_div2(std::int32_t v) { return v >= 0 ? v / 2 : -((-v + 1) / 2); }
 
-JoinOutcome resolve_join(const Side& U, const Side& D, const RoadRules& rules) {
+// added_right (ROADS stage 8a-4): at a lane-add merge/diverge node the ramp's side in travel order. The through arm's lanes then meet
+// the single arm's lanes on the side away from the ramp, so the added lanes lie on the ramp's side; it decides every group with a
+// lane-count change before the placement residual and the default side, unless its turn tokens name the other side. Absent: the
+// join as before.
+JoinOutcome resolve_join(const Side& U, const Side& D, const RoadRules& rules, std::optional<bool> added_right = std::nullopt) {
     JoinOutcome out;
     Plan plan;
     plan.pu.assign(U.xs.bands.size(), -1); plan.pd.assign(D.xs.bands.size(), -1);
@@ -239,6 +243,8 @@ JoinOutcome resolve_join(const Side& U, const Side& D, const RoadRules& rules) {
             };
             const bool right_tokens = all_ish(tw.size() - k, kRightIsh), left_tokens = all_ish(0, kLeftIsh);
             const bool right_ok = right_tokens && !left_tokens, left_ok = left_tokens && !right_tokens;
+            // The ramp-side hint wins over everything but turn tokens that name the other side (tagged data: the node stays refused).
+            if (added_right && !(*added_right ? left_ok : right_ok)) { choice_right[g] = *added_right; continue; }
             if (right_ok) choice_right[g] = true;
             else if (left_ok) choice_right[g] = false;
             else open[g] = true;
@@ -552,7 +558,7 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     const NodeArm& upstream = out.merge ? T : S;
     const NodeArm& downstream = out.merge ? S : T;
     const Side U = make_side(upstream.xs, upstream.cls, upstream.arm.way_id), D = make_side(downstream.xs, downstream.cls, downstream.arm.way_id);
-    const JoinOutcome join = resolve_join(U, D, rules);
+    const JoinOutcome join = resolve_join(U, D, rules, taper ? std::nullopt : std::optional<bool>(ramp_right));
     if (join.split) return refuse(MergeNodeReason::JoinSplit);
     // The added lanes: the counted bands of the single arm that meet no band of the through arm (join width 0).
     const Side& wide = out.merge ? D : U;
@@ -882,7 +888,10 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
         const bool a_is_u = owner_a ? at_end : (*join)->leaves_node;
         const Side& U = a_is_u ? side_a : side_b;
         const Side& D = a_is_u ? side_b : side_a;
-        const JoinOutcome out = resolve_join(U, D, rules);
+        // The through pair at a lane-add merge node joins with the ramp-side hint the classifier used (ROADS stage 8a-4).
+        const auto& mn = merge_at[static_cast<std::size_t>(e)];
+        const bool hinted = mn && !mn->taper && mn->ramp_id != way_id && (*join)->way_id != mn->ramp_id;
+        const JoinOutcome out = resolve_join(U, D, rules, hinted ? std::optional<bool>(mn->ramp_right) : std::nullopt);
         auto& r = ends[static_cast<std::size_t>(e)];
         r.present = true;
         r.record = {out.kind, id_b, out.delta};

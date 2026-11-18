@@ -395,7 +395,11 @@ TEST_CASE("Kalbach fixture: lane adds, drops, pockets and transitions (design F1
         CHECK(counted_lanes(wider(p)) == 3); CHECK(added_lane(wider(p)) == 2);
         // Hold while the other end is a junction or a dead end; Ramps since the other end joins a merge lane (G2M-028).
         CHECK(wider(p).r.xs.offset.mode != OffsetMode::None); CHECK((std::abs(wider(p).r.xs.offset.start_mm) == 1625 || std::abs(wider(p).r.xs.offset.end_mm) == 1625));
-        CHECK(narrower(p).r.xs.offset.mode == OffsetMode::None);
+        // The narrower way has no offset at this node. Since ROADS stage 8a-4 its other end (node 28202738) is a lane-add merge node
+        // joined with the ramp-side hint, where it is the single arm and holds an offset; before that node was refused.
+        const auto& n = narrower(p);
+        CHECK((n.at_end ? n.r.xs.offset.end_mm : n.r.xs.offset.start_mm) == 0);
+        CHECK(diagnose_merge_node(*w.builder, 28202738, rules()).reason == MergeNodeReason::Ok);
     }
     SECTION("F7 ambiguous left+right tokens: no explicit placement, the lanes are added on the right") {
         const auto p = join_at(w, 4846955, 259399524, 2648065658, JoinKind::InferredAlignment, 1625);
