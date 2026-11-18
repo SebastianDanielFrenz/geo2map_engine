@@ -335,6 +335,9 @@ struct MergeNode {
     bool ramp_right = false;                 // the ramp lies right of the single arm (its outer side)
     std::int32_t added_mm = 0;               // the single arm's added counted lanes, total width
     std::int32_t s_shoulder_mm = 0;          // the single arm's shoulder beyond them at the node (0: none)
+    // ROADS stage 6: a taper node - no added lane (added_mm 0); the ramp's one counted lane lands with width 0 on the single arm's
+    // outermost counted lane edge and widens over landing_length_mm (the taper length before the clearance landing lengthens it).
+    bool taper = false;
 };
 
 const RoadGraphNode* find_node(const RoadGraph& g, std::int64_t id) {
@@ -411,15 +414,23 @@ std::optional<geom::CurvePose> arm_pose(const RoadReferenceBuilder& builder, con
 
 std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules,
         const ReferenceFitLimits& fit_limits, MergeNodeReason* why = nullptr, MergeNodeDiagnosis* detail = nullptr) {
-    // Every refusal names its reason (diagnostics only, g2m_xs_probe --merge-census).
-    const auto refuse = [why](MergeNodeReason r) -> std::optional<MergeNode> { if (why) *why = r; return std::nullopt; };
+    // Every refusal names its reason (diagnostics only, g2m_xs_probe --merge-census). A node a way passes through keeps the reason
+    // way_passes_through for every refusal but taper_ramp_lanes (ROADS stage 6), so the census still tells those nodes apart.
+    bool passing = false;
+    const auto refuse = [why, &passing](MergeNodeReason r) -> std::optional<MergeNode> {
+        if (why) *why = passing && r != MergeNodeReason::TaperRampLanes ? MergeNodeReason::WayPassesThrough : r;
+        return std::nullopt;
+    };
     if (why) *why = MergeNodeReason::Ok;
     const MergeLaneRules& ml = rules.merge_lane;
     if (!ml.enabled) return refuse(MergeNodeReason::Disabled);
     auto arms = builder.arms(node_id);
     if (arms.size() != 3) return refuse(MergeNodeReason::ArmsNot3);
     std::sort(arms.begin(), arms.end(), [](const RoadNodeArm& a, const RoadNodeArm& b) { return a.way_id != b.way_id ? a.way_id < b.way_id : a.ref < b.ref; });
-    if (arms[0].way_id == arms[1].way_id || arms[1].way_id == arms[2].way_id) return refuse(MergeNodeReason::WayPassesThrough);   // a way passing through is no merge lane
+    // A way passing through the node gives two arms (ROADS stage 6): it can only be the single and the through arm of a taper node.
+    if (arms[0].way_id == arms[1].way_id && arms[1].way_id == arms[2].way_id) return refuse(MergeNodeReason::WayPassesThrough);
+    passing = arms[0].way_id == arms[1].way_id || arms[1].way_id == arms[2].way_id;
+    if (passing && ml.taper_length_m <= 0) return refuse(MergeNodeReason::WayPassesThrough);   // no taper rule: as before
     const RoadGraphNode* node = find_node(builder.graph(), node_id);
     if (!node) return refuse(MergeNodeReason::NodeMissing);
     std::array<NodeArm, 3> a;
@@ -435,7 +446,10 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     const std::size_t xi = (si + 1) % 3, yi = (si + 2) % 3;
     const NodeArm& S = a[si];
     const double cos_x = a[xi].dx * S.dx + a[xi].dy * S.dy, cos_y = a[yi].dx * S.dx + a[yi].dy * S.dy;
-    const bool x_through = cos_x > cos_y || (cos_x == cos_y && a[xi].arm.way_id < a[yi].arm.way_id);
+    // Passing through: the single arm is one of the passing way's arms (one leaves, one arrives) and its other arm is the through one.
+    if (passing && a[xi].arm.way_id != S.arm.way_id && a[yi].arm.way_id != S.arm.way_id) return refuse(MergeNodeReason::WayPassesThrough);
+    const bool x_through = passing ? a[xi].arm.way_id == S.arm.way_id
+                                   : cos_x > cos_y || (cos_x == cos_y && a[xi].arm.way_id < a[yi].arm.way_id);
     const NodeArm& T = x_through ? a[xi] : a[yi];
     const NodeArm& R = x_through ? a[yi] : a[xi];
     if (detail) {   // diagnostics only (ROADS stage 5a)
@@ -449,7 +463,10 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     if (angle_deg(R.dx * S.dx + R.dy * S.dy) > static_cast<double>(ml.max_ramp_angle_deg)) return refuse(MergeNodeReason::RampAngle);
     const auto hw = highway_of(*R.way);
     if (hw.size() < 5 || hw.substr(hw.size() - 5) != "_link") return refuse(MergeNodeReason::RampNotLink);
-    if (S.counted != T.counted + R.counted) return refuse(MergeNodeReason::LaneSum);
+    // A taper node (ROADS stage 6): the carriageway keeps its lanes across the node and a one-lane link lands on its outer lane edge.
+    const bool taper = ml.taper_length_m > 0 && S.counted == T.counted;
+    if (taper && R.counted != 1) return refuse(MergeNodeReason::TaperRampLanes);
+    if (!taper && S.counted != T.counted + R.counted) return refuse(MergeNodeReason::LaneSum);
     // The ramp's side of the carriageway: the left normal of S's travel direction against the ramp's far point.
     const bool ramp_right = R.fx * -S.dy + R.fy * S.dx < 0;
     // The through pair as a join in travel order: upstream = the arriving one.
@@ -462,19 +479,23 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     const Side& wide = out.merge ? D : U;
     const SideEval& wide_eval = out.merge ? join.d : join.u;
     int first_added = -1, last_added = -1, added = 0;
-    for (int i = wide.first_counted; i <= wide.last_counted; ++i) {
-        if (!wide.xs.bands[static_cast<std::size_t>(i)].counted || wide_eval.jw[static_cast<std::size_t>(i)] != 0) continue;
-        if (first_added < 0) first_added = i;
-        last_added = i;
-        ++added;
-    }
-    if (detail) detail->added_count = added;
-    if (added != R.counted) return refuse(MergeNodeReason::AddedCountMismatch);
-    if (last_added - first_added + 1 != added) return refuse(MergeNodeReason::AddedNotContiguous);   // one contiguous group, the ramp's lanes
-    // ... on the ramp's side: no matched counted band beyond it.
-    for (int i = wide.first_counted; i <= wide.last_counted; ++i) {
-        if (!wide.xs.bands[static_cast<std::size_t>(i)].counted || (i >= first_added && i <= last_added)) continue;
-        if (ramp_right ? i > first_added : i < last_added) return refuse(MergeNodeReason::AddedNotOnRampSide);
+    if (!taper) {
+        for (int i = wide.first_counted; i <= wide.last_counted; ++i) {
+            if (!wide.xs.bands[static_cast<std::size_t>(i)].counted || wide_eval.jw[static_cast<std::size_t>(i)] != 0) continue;
+            if (first_added < 0) first_added = i;
+            last_added = i;
+            ++added;
+        }
+        if (detail) detail->added_count = added;
+        if (added != R.counted) return refuse(MergeNodeReason::AddedCountMismatch);
+        if (last_added - first_added + 1 != added) return refuse(MergeNodeReason::AddedNotContiguous);   // one contiguous group, the ramp's lanes
+        // ... on the ramp's side: no matched counted band beyond it.
+        for (int i = wide.first_counted; i <= wide.last_counted; ++i) {
+            if (!wide.xs.bands[static_cast<std::size_t>(i)].counted || (i >= first_added && i <= last_added)) continue;
+            if (ramp_right ? i > first_added : i < last_added) return refuse(MergeNodeReason::AddedNotOnRampSide);
+        }
+    } else if (detail) {
+        detail->added_count = 0;
     }
     // The centre line of the added lanes seen from the single arm's way line, with the join's own correction of that arm. The
     // single arm's bands take their widths AT the node (a matched band's join width; the added lanes stay full width, G2M-032), so
@@ -486,7 +507,11 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     }
     std::array<double, 33> edge{};
     if (at_node.bands.size() > 32 || !at_node.boundaries_at(0.0, std::span<double>(edge.data(), at_node.bands.size() + 1))) return refuse(MergeNodeReason::Boundaries);
-    const double centre_m = (edge[static_cast<std::size_t>(first_added)] + edge[static_cast<std::size_t>(last_added) + 1]) / 2;
+    // The target: the added lanes' centre line, or at a taper node the single arm's outermost counted lane edge on the ramp's side
+    // (S and T join at the node, so it is T's edge there too).
+    const int edge_lo = taper ? (ramp_right ? wide.last_counted + 1 : wide.first_counted) : first_added;
+    const int edge_hi = taper ? edge_lo - 1 : last_added;
+    const double centre_m = (edge[static_cast<std::size_t>(edge_lo)] + edge[static_cast<std::size_t>(edge_hi) + 1]) / 2;
     const std::int32_t correction = out.merge ? join.corr_d : join.corr_u;
     const double target_mm = std::round(centre_m * 1000.0) + static_cast<double>(correction);
     // The landing is R's lateral offset in R's own frame that puts its counted-lane centre on the target in S's frame at the node.
@@ -507,14 +532,17 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     out.through_leaves = T.arm.leaves_node; out.single_leaves = S.arm.leaves_node;
     out.landing_mm = static_cast<std::int32_t>(landing);
     out.ramp_right = ramp_right;
-    for (int i = first_added; i <= last_added; ++i) out.added_mm += wide.xs.bands[static_cast<std::size_t>(i)].width_mm;
-    if (const int sh = ramp_right ? last_added + 1 : first_added - 1; sh >= 0 && sh < static_cast<int>(wide.xs.bands.size())) {
+    out.taper = taper;
+    for (int i = first_added; i >= 0 && i <= last_added; ++i) out.added_mm += wide.xs.bands[static_cast<std::size_t>(i)].width_mm;
+    const int outer_lo = taper ? wide.first_counted : first_added, outer_hi = taper ? wide.last_counted : last_added;
+    if (const int sh = ramp_right ? outer_hi + 1 : outer_lo - 1; sh >= 0 && sh < static_cast<int>(wide.xs.bands.size())) {
         const auto k = static_cast<std::size_t>(sh);
         if (wide.xs.bands[k].kind == LaneKind::Shoulder) out.s_shoulder_mm = wide_eval.len[k] > 0 ? wide_eval.jw[k] : wide.xs.bands[k].width_mm;
     }
     const std::int64_t length = std::clamp<std::int64_t>(static_cast<std::int64_t>(ml.landing_m_per_m) * std::abs(out.landing_mm),
         static_cast<std::int64_t>(ml.landing_min_m) * 1000, static_cast<std::int64_t>(ml.landing_max_m) * 1000);
-    out.landing_length_mm = static_cast<std::int32_t>(out.landing_mm == 0 ? 0 : length);
+    // A taper always ramps its lane width from 0, so it has a length even with no lateral offset to land.
+    out.landing_length_mm = static_cast<std::int32_t>(taper ? static_cast<std::int64_t>(ml.taper_length_m) * 1000 : out.landing_mm == 0 ? 0 : length);
     return out;
 }
 
@@ -536,7 +564,7 @@ const char* merge_node_reason_name(MergeNodeReason reason) {
     static const char* const n[] = {"ok", "disabled", "arms_not_3", "way_passes_through", "node_missing",
         "arm_way_missing", "arm_no_class", "arm_no_section", "arm_not_oneway", "arm_no_counted_lane", "arm_no_direction",
         "all_same_direction", "through_deflection", "ramp_angle", "ramp_not_link", "lane_sum", "join_split",
-        "added_count_mismatch", "added_not_contiguous", "added_not_on_ramp_side", "boundaries", "ramp_backward", "landing_too_far"};
+        "added_count_mismatch", "added_not_contiguous", "added_not_on_ramp_side", "boundaries", "ramp_backward", "landing_too_far", "taper_ramp_lanes"};
     const auto i = static_cast<std::size_t>(reason);
     return i < sizeof(n) / sizeof(n[0]) ? n[i] : "?";
 }
@@ -552,7 +580,7 @@ MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std:
     MergeNodeDiagnosis d;
     if (const auto m = classify_merge_node(builder, node_id, rules, served_fit_limits(rules), &d.reason, &d)) {
         d.merge = m->merge; d.through_id = m->through_id; d.single_id = m->single_id; d.ramp_id = m->ramp_id;
-        d.landing_mm = m->landing_mm; d.landing_length_mm = m->landing_length_mm;
+        d.landing_mm = m->landing_mm; d.landing_length_mm = m->landing_length_mm; d.taper = m->taper;
     }
     return d;
 }
@@ -718,7 +746,10 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
             tr.ends[e].merge_ran = true;
             if (const auto merge = classify_merge_node(builder, node, rules, fit_limits, &tr.ends[e].merge_reason)) {
                 merge_at[static_cast<std::size_t>(e)] = *merge;
-                if (merge->through_id == way_id) join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->single_id, 0, merge->single_leaves}};
+                // A way passing through a taper node is the single and the through arm: its stretch leaving the node (this end is
+                // its start) has the direction of the arm it is (ROADS stage 6).
+                const bool is_through = merge->through_id == way_id && (merge->single_id != way_id || merge->through_leaves == !at_end);
+                if (is_through) join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->single_id, 0, merge->single_leaves}};
                 else if (merge->single_id == way_id) {
                     join = std::optional<RoadStretchJoin>{RoadStretchJoin{merge->through_id, 0, merge->through_leaves}};
                     single_at_merge[static_cast<std::size_t>(e)] = true;
@@ -806,7 +837,8 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
     // fills a free end of the ramp offsets; a hold or transition offset (a whole stretch shifted) keeps its own.
     for (int e = 0; e < 2; ++e) {
         const auto k = static_cast<std::size_t>(e);
-        if (landing[k] == 0 || landing_length[k] <= 0) continue;   // trace: LandingZero (set above) or no ramp role
+        const bool taper_end = merge_at[k] && merge_at[k]->taper && merge_at[k]->ramp_id == way_id;
+        if ((landing[k] == 0 && !taper_end) || landing_length[k] <= 0) continue;   // trace: LandingZero (set above) or no ramp role
         if (xs.offset.mode == OffsetMode::None) xs.offset = {OffsetMode::Ramps, 0, 0, 0, 0};
         if (xs.offset.mode != OffsetMode::Ramps) {
             tr.ends[e].note = xs.offset.mode == OffsetMode::Hold ? CrossSectionEndNote::LandingOffsetHold : CrossSectionEndNote::LandingOffsetTransition;
@@ -826,7 +858,9 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
     // line, on the added lanes' centre, so the lane edges meet at the node up to the angle's cos residue.
     for (int e = 0; e < 2; ++e) {
         const auto k = static_cast<std::size_t>(e);
-        if (tr.ends[e].note != CrossSectionEndNote::Landed || !merge_at[k] || merge_at[k]->added_mm <= 0) continue;
+        // A taper node (ROADS stage 6) has no added lane: its counted lane starts at width 0 (added_mm 0 below) and its outer
+        // shoulder at the single arm's; the offset ramps over the same capped length as the widths.
+        if (tr.ends[e].note != CrossSectionEndNote::Landed || !merge_at[k] || (merge_at[k]->added_mm <= 0 && !merge_at[k]->taper)) continue;
         const MergeNode& m = *merge_at[k];
         const bool at_end = e == 1;
         const std::int32_t len_offset = at_end ? xs.offset.end_length_mm : xs.offset.start_length_mm;
@@ -841,6 +875,12 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
         tr.ends[e].landing_width_mm = len;
         const bool widths = len >= static_cast<std::int64_t>(rules.merge_lane.gore_step_m) * 1000;
         if (!widths) tr.ends[e].landing_widths_skipped = true;
+        if (m.taper && widths) (at_end ? xs.offset.end_length_mm : xs.offset.start_length_mm) = len;
+        // A taper end with no room for its width ramp keeps its lane width; a ramp from that same width over the landing length
+        // (widths unchanged) tells the ribbons where its merge zone ends (ROADS stage 6: broken edge over the landing length).
+        if (m.taper && !widths)
+            for (auto& b : xs.bands)
+                if (b.counted) (at_end ? b.end : b.start) = WidthRamp{len_offset, b.width_mm};
         std::int64_t total = 0; int first = -1, last = -1;
         for (std::size_t i = 0; i < xs.bands.size(); ++i)
             if (xs.bands[i].counted) { total += xs.bands[i].width_mm; if (first < 0) first = static_cast<int>(i); last = static_cast<int>(i); }
@@ -884,6 +924,12 @@ Result<CrossSectionBase> resolve_impl(const RoadReferenceBuilder& builder, std::
             const auto c0 = static_cast<std::int32_t>(std::lround((t[static_cast<std::size_t>(first)] + t[static_cast<std::size_t>(last) + 1]) / 2 * 1000.0));
             auto& off = at_end ? xs.offset.end_mm : xs.offset.start_mm;
             off -= c0;
+            // A taper end with no room for its width ramp (the far-end clearance) keeps its lane: its facing lane edge, not its
+            // centre, lands on the single arm's outer lane edge (half its counted span further out, in its own frame like the landing).
+            if (m.taper && !widths) {
+                const double half_mm = (t[static_cast<std::size_t>(first)] - t[static_cast<std::size_t>(last) + 1]) / 2 * 1000.0;
+                off += static_cast<std::int32_t>(std::lround(m.ramp_right ? -half_mm : half_mm));
+            }
             ends[k].record.raw_delta_mm = off;
             tr.ends[e].landing_centre_mm = c0;
         }
@@ -987,15 +1033,20 @@ struct GorePair { GoreArm self, other; bool self_left = false, other_left = fals
 std::optional<GorePair> gore_pair(const RoadReferenceBuilder& builder, const RoadGraphWay& way, std::int64_t way_id, RoadStretch stretch,
         const RoadRules& rules, const ReferenceFitLimits& fit_limits, const MergeNode& m, bool at_end, const RoadCrossSection& xs, int depth) {
     if (way_id != m.ramp_id && way_id != m.through_id) return std::nullopt;   // the single arm is untouched
+    // A way passing through a taper node (ROADS stage 6) is the through arm only on its stretch running the through arm's way.
+    const bool passing = m.through_id == m.single_id;
+    if (passing && way_id == m.through_id && m.through_leaves != !at_end) return std::nullopt;
     const std::int64_t node = way.node_ids[at_end ? stretch.end_ref : stretch.start_ref];
     const std::int64_t other_id = way_id == m.ramp_id ? m.through_id : m.ramp_id;
-    // The other way's stretch at the node, its reference and its section before the gore rule.
+    // The other way's stretch at the node, its reference and its section before the gore rule (the through arm's direction when the
+    // through way passes through).
     const auto* other_way = find_way(builder.graph(), other_id); if (!other_way) return std::nullopt;
     const auto stretches = builder.stretches(other_id); if (!stretches) return std::nullopt;
+    const bool want_dir = passing && other_id == m.through_id;
     std::optional<RoadStretch> ost; bool o_end = false;
     for (const auto& st : *stretches) {
-        if (other_way->node_ids[st.start_ref] == node) { ost = st; o_end = false; break; }
-        if (other_way->node_ids[st.end_ref] == node) { ost = st; o_end = true; break; }
+        if (other_way->node_ids[st.start_ref] == node && (!want_dir || m.through_leaves)) { ost = st; o_end = false; break; }
+        if (other_way->node_ids[st.end_ref] == node && (!want_dir || !m.through_leaves)) { ost = st; o_end = true; break; }
     }
     if (!ost) return std::nullopt;
     GorePair p;
@@ -1056,8 +1107,16 @@ void apply_clearance_landing(const RoadReferenceBuilder& builder, const RoadGrap
                                   builder.degree(way.node_ids[at_end ? stretch.start_ref : stretch.end_ref]) > 2;
         const std::int64_t far_clear = far_clearance_mm(builder, rules, way, way_id, stretch, at_end, far_junction);
         const std::int32_t landing_mm = at_end ? xs.offset.end_mm : xs.offset.start_mm;
-        const std::int32_t base = at_end ? xs.offset.end_length_mm : xs.offset.start_length_mm;
-        if (landing_mm == 0 || base <= 0) continue;
+        std::int32_t base = at_end ? xs.offset.end_length_mm : xs.offset.start_length_mm;
+        if ((landing_mm == 0 && !m->taper) || base <= 0) continue;
+        // A taper (ROADS stage 6): L_t = max(taper_length_m, L_clear), its widths and offset sharing it, so the cap is also the
+        // stretch less the far-end clearance (the widths' own bound) and never the base itself.
+        const std::int64_t taper_cap = std::min<std::int64_t>({static_cast<std::int64_t>(ml.landing_clear_max_m) * 1000,
+            length_mm - far_ramp_max(xs, at_end), landing_width_cap_mm(xs.length_m, far_clear)});
+        if (m->taper) {
+            if (taper_cap <= 0 || tr.ends[e].landing_widths_skipped) continue;   // no width ramp: the lane lands beside the edge (3b)
+            base = static_cast<std::int32_t>(std::min<std::int64_t>(base, taper_cap));
+        }
         auto pair = gore_pair(builder, way, way_id, stretch, rules, fit_limits, *m, at_end, xs, depth);
         if (!pair) continue;
         GoreArm& r = pair->self;
@@ -1066,8 +1125,8 @@ void apply_clearance_landing(const RoadReferenceBuilder& builder, const RoadGrap
             set_landing_length(r.xs, at_end, static_cast<std::int32_t>(len), far_clear);
         };
         const auto gap = [&](double d) { return facing_gap(r, pair->other, pair->self_left, pair->other_left, d); };
-        const std::int64_t cap = std::max<std::int64_t>(base, std::min<std::int64_t>(static_cast<std::int64_t>(ml.landing_clear_max_m) * 1000,
-                                                                                         length_mm - far_ramp_max(xs, at_end)));
+        const std::int64_t cap = m->taper ? taper_cap
+            : std::max<std::int64_t>(base, std::min<std::int64_t>(static_cast<std::int64_t>(ml.landing_clear_max_m) * 1000, length_mm - far_ramp_max(xs, at_end)));
         auto& t = tr.ends[e];
         t.landing_clear = true; t.landing_base_mm = base;
         // L_clear: the unshifted ramp's lanes are out of the through lanes (no through way abreast counts as clear).

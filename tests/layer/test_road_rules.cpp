@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "b347e198abf0b7fe3063dfc6e089b2460b0e319505694cfbf59acbc45a576a39");
+    CHECK(to_hex(digest) == "a1610f43223a9957ddeceba88e798f173a07fbdced30b3236db5922d4ebdb988");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -258,7 +258,7 @@ TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add
     CHECK(ml.max_through_deflection_deg == 35); CHECK(ml.max_ramp_angle_deg == 60); CHECK(ml.direction_probe_m == 10);
     CHECK(ml.landing_m_per_m == 12); CHECK(ml.landing_min_m == 30); CHECK(ml.landing_max_m == 80); CHECK(ml.max_landing_offset_mm == 8000);
     CHECK(ml.gore_max_m == 150); CHECK(ml.gore_step_m == 5); CHECK(ml.landing_clear_max_m == 250); CHECK(ml.gore_overlap_tol_mm == 250);
-    CHECK(ml.landing_width_far_margin_m == 10); CHECK(ml.landing_width_far_max_m == 60);
+    CHECK(ml.landing_width_far_margin_m == 10); CHECK(ml.landing_width_far_max_m == 60); CHECK(ml.taper_length_m == 60);
     const std::string from = "\"merge_lane\": { \"enabled\": true,";
     CHECK_FALSE(load_text(mutated(from, "\"merge_lanex\": { \"enabled\": true,")));        // the block is required
     CHECK_FALSE(load_text(mutated(from, "\"merge_lane\": { \"enabled\": 1,")));            // a boolean
@@ -283,6 +283,12 @@ TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add
     CHECK(load_text(mutated("\"landing_width_far_margin_m\": 10, \"landing_width_far_max_m\": 60",
                             "\"landing_width_far_margin_m\": 0, \"landing_width_far_max_m\": 0")));   // 0 and 0: no clearance
     CHECK_FALSE(load_text(mutated("\"max_landing_offset_mm\": 8000", "\"max_landing_offset_mm\": 20001")));
+    // ROADS stage 6: the taper length is required, 1..landing_clear_max_m, and its S-ramp at the largest offset obeys the radius.
+    CHECK_FALSE(load_text(mutated(", \"taper_length_m\": 60", "")));
+    CHECK_FALSE(load_text(mutated("\"taper_length_m\": 60", "\"taper_length_m\": 0")));
+    CHECK_FALSE(load_text(mutated("\"taper_length_m\": 60", "\"taper_length_m\": 251")));   // above landing_clear_max_m
+    CHECK_FALSE(load_text(mutated("\"taper_length_m\": 60", "\"taper_length_m\": 5")));     // 8 m over 5 m: far too sharp
+    CHECK(load_text(mutated("\"taper_length_m\": 60", "\"taper_length_m\": 120")));
     // The landing S-ramp must not be sharper than min_edge_radius_m of the link classes: 4 W / a^2 <= 1 / R.
     CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1")));          // 8 m over 30 m: radius far under 60 m
     const auto off = load_text(mutated(from, "\"merge_lane\": { \"enabled\": false,"));

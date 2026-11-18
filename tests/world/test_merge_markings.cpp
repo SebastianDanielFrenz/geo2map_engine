@@ -12,6 +12,7 @@
 //   S5 road_junction.cpp build_from: no MergeLane decline at a landed ramp (2026-10-20, with MK4)                          -> MK4 fails
 //   S6 road_ribbons.cpp: the zone is the landing length even where a gore ramp exists (pre-4a) (2026-11-17)           -> MK2, MK2b fail
 //   S7 road_ribbons.cpp: only a LaneChange through arm is marked (pre-4a) (2026-11-17)                                 -> MK1b fails
+//   S8, S9 (ROADS stage 6, 2026-11-18): see MK5 and MK7.
 #include "road_fixture.h"
 
 #include "g2m/layer/road_rules.h"
@@ -185,4 +186,100 @@ TEST_CASE("MK4 a node where a merge ramp lands has no junction patch (decline Me
     const auto off = declines(off_rules);
     REQUIRE(off.size() == 1);
     CHECK(off[0] != JunctionDecline::MergeLane);
+}
+
+// ROADS stage 6: a taper node (S == T, no added lane). Over L_t the through carriageway's edge on the ramp's side is broken, the
+// link's facing edge dropped; beyond L_t both are solid; the single arm gets no broken edge (no lane line is added on S). Also for a
+// way passing through the node (its through end found by direction). Sabotage S8 (2026-11-18): the zone is the gore ramp / landing
+// length as before stage 6, not the taper's width ramp -> MK5 fails.
+namespace {
+RoadGraph taper_scene(bool passing, bool short_link = false) {
+    RoadGraph g;
+    const auto node = [&](std::int64_t id, double x, double y) { g.nodes.push_back({id, {std::llround((kE0 + x) * 1000.0), std::llround((kN0 + y) * 1000.0)}, {}}); };
+    node(1, -400, 0); node(2, 0, 0); node(3, 200, 0);
+    if (short_link) { node(4, -20, -3); node(5, -20, -60); node(6, -20, 60); } else node(4, -150, -12);
+    const Tags t2 = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}};
+    if (passing) g.ways.push_back(way(10, {1, 2, 3}, t2));
+    else { g.ways.push_back(way(10, {1, 2}, t2)); g.ways.push_back(way(11, {2, 3}, t2)); }
+    g.ways.push_back(way(12, {4, 2}, {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", "1"}}));
+    if (short_link) g.ways.push_back(way(13, {5, 4, 6}, {{"highway", "residential"}}));
+    for (const auto& w : g.ways) for (std::size_t i = 1; i < w.node_ids.size(); ++i)
+        g.edges.push_back({w.osm_id, static_cast<std::uint32_t>(i - 1), w.node_ids[i - 1], w.node_ids[i]});
+    return g;
+}
+// The link's taper length at the node: its counted lane's width ramp from 0.
+double taper_m(const RoadGraph& graph, const RoadRules& rules, bool keeps_width = false) {
+    g2m_test::GeomOptions o;
+    o.height_m = [](double, double) { return 100.0; };
+    o.completion = served_road_completion_options();
+    o.rules = &rules;
+    auto tile = g2m_test::geometry_in_tile_with(graph, kKey, o);
+    if (!tile) throw std::runtime_error(tile.error().message);
+    for (const auto& e : tile->entries) if (e.way_id == 12 && e.cross_section)
+        for (const auto& b : e.cross_section->bands) if (b.counted && b.end.length_mm > 0 && b.end.from_width_mm == (keeps_width ? b.width_mm : 0)) return b.end.length_mm / 1000.0;
+    return 0;
+}
+} // namespace
+
+TEST_CASE("MK5 a taper node: the broken line and the dropped edge run over L_t, then both edges are solid", "[world][road_ribbons][merge_markings]") {
+    const auto& rules = builtin_road_rules_de();
+    for (const bool passing : {false, true}) {
+        INFO("passing " << passing);
+        const auto g = taper_scene(passing);
+        const double lt = taper_m(g, rules);
+        INFO("L_t " << lt << " m");
+        REQUIRE(lt >= rules.merge_lane.taper_length_m - 0.001);
+        const auto m = marked(g, rules);
+        REQUIRE_FALSE(m.right_broken.empty());
+        REQUIRE_FALSE(m.left_hidden.empty());
+        CHECK(m.others.empty());
+        double first = 1e9, last = -1e9;
+        for (const auto& v : m.right_broken) {
+            CHECK(std::abs(v.y - node_y()) < 5.0);
+            CHECK(v.x <= node_x() + 0.5);   // only the through arm (west of the node); S east of it has none
+            first = std::min<double>(first, v.x); last = std::max<double>(last, v.x);
+        }
+        CHECK(first > node_x() - lt - 2.5); CHECK(first < node_x() - lt + 2.5);
+        CHECK(last > node_x() - 2.5);
+        for (const auto& v : m.left_hidden) CHECK(v.x >= node_x() - lt - 2.5);
+    }
+}
+
+TEST_CASE("MK6 a taper node has no junction patch (decline MergeLane), also where the way passes through", "[world][road_ribbons][merge_markings]") {
+    for (const bool passing : {false, true}) {
+        INFO("passing " << passing);
+        const auto& rules = builtin_road_rules_de();
+        g2m_test::GeomOptions o;
+        o.height_m = [](double, double) { return 100.0; };
+        o.completion = served_road_completion_options();
+        o.rules = &rules;
+        auto tile = g2m_test::geometry_in_tile_with(taper_scene(passing), kKey, o);
+        REQUIRE(tile);
+        REQUIRE(tile->junctions.size() == 1);
+        CHECK(tile->junctions[0].decline == JunctionDecline::MergeLane);
+    }
+}
+
+// ROADS stage 6 fallback: no room for the width ramp (far-end clearance) - the link keeps its lane width and lands beside the edge;
+// a ramp from that same width over the landing length marks the merge zone. Sabotage S9 (2026-11-18): the ribbons accept only a
+// counted ramp from 0 as the taper zone -> MK7 fails.
+TEST_CASE("MK7 a taper node without room for the width ramp: the broken line runs over the landing length", "[world][road_ribbons][merge_markings]") {
+    // A 1 m gore nose, so the zone is the landing length only through the taper end's own marker, not through the gore ramp.
+    auto rules = builtin_road_rules_de();
+    rules.merge_lane.gore_max_m = 1; rules.merge_lane.gore_step_m = 1;
+    const auto g = taper_scene(false, true);
+    const double lt = taper_m(g, rules, true);
+    INFO("landing " << lt << " m");
+    REQUIRE(lt > 0.5);
+    REQUIRE(taper_m(g, rules) == 0);   // no ramp from 0: the lane keeps its width
+    const auto m = marked(g, rules);
+    REQUIRE_FALSE(m.right_broken.empty());
+    REQUIRE_FALSE(m.left_hidden.empty());
+    double first = 1e9;
+    for (const auto& v : m.right_broken) {
+        CHECK(std::abs(v.y - node_y()) < 5.0);
+        CHECK(v.x <= node_x() + 0.5);
+        first = std::min<double>(first, v.x);
+    }
+    CHECK(first > node_x() - lt * 1.1 - 2.5); CHECK(first < node_x() - lt + 2.5);
 }

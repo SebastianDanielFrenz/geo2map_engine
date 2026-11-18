@@ -191,7 +191,7 @@ TEST_CASE("M5 what is no merge lane gets no landing and no join", "[layer][road_
         CHECK(a.xs.end_join.kind == JoinKind::None);
     };
     none(merge_scene({10, 11, 12}, "tertiary"), "not a link");
-    none(merge_scene({10, 11, 12}, "trunk_link", -12, 2), "the lanes do not add up (2 = 2 + 1 fails)");
+    none(merge_scene({10, 11, 12}, "trunk_link", -12, 4), "the lanes do not add up (4 = 2 + 1 fails)");   // 2 = 2 is a taper (T1)
 }
 
 TEST_CASE("M5b a ramp steeper than max_ramp_angle_deg is a side road, not a merge lane", "[layer][road_merge_lane][roads]") {
@@ -252,4 +252,208 @@ TEST_CASE("M7 the B 8 exit at Hoechst: the exit lane is whole at the diverge nod
     // The link starts on the exit lane's centre line (the real case measured 5637 mm right of its way line; the lane's own centre, the shoulder
     // and the join's width correction of B 8 decide it, M1/M4 pin the exact rule on the synthetic scenes).
     CHECK(link.xs.offset.start_mm <= -5300); CHECK(link.xs.offset.start_mm >= -6000);
+}
+
+// ROADS stage 6: taper nodes. The carriageway keeps its lanes across the node (S == T), so there is no added lane: a one-lane link
+// lands with its counted width 0 on the through arm's outermost lane edge on the ramp's side and widens to its own over
+// L_t = max(taper_length_m, the clearance-landing length), capped by landing_clear_max_m and the stretch less its far-end clearance.
+//
+// Recorded sabotages (2026-11-18; each makes the named tests fail, then reverted):
+//   S9  classify_merge_node: a taper's target is the outer lane's centre, not its edge                    -> T1, T2, T3, T4, T6 fail
+//   S10 resolve_impl (3b block): the taper lane starts at R's own width, not 0 (no width ramp)             -> T1, T2, T3, T4, T6 fail
+//   S11 resolve_impl (3b block): a taper end without room for its width ramp keeps the centre on the edge (no half-width shift)
+//                                                                                                          -> T7 fails
+//   S12 resolve_impl (3b block): a taper end without room for its width ramp gets no same-width merge-zone marker      -> T7, MK7 fail
+//   (the markings-zone sabotage is recorded in tests/world/test_merge_markings.cpp, MK5)
+namespace {
+// The taper scene: A and B both 2 lanes (S == T), or one 2-lane way 10 passing through node 2 (`passing`); the link R as in
+// merge_scene with `ramp_lanes` lanes; `ramp_x` its distance along x from the node (merge: west of it; diverge: east).
+Scene taper_scene(bool diverge = false, int ramp_y = -12, bool passing = false, int ramp_lanes = 1, int ramp_x = 150) {
+    Scene s{{}, 10, passing ? 10 : 11, 12};
+    const Tags t2 = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}};
+    const Tags tr = {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", std::to_string(ramp_lanes)}};
+    std::vector<RoadGraphWay> ways;
+    if (passing) ways.push_back(way(10, {1, 2, 3}, t2));
+    else { ways.push_back(way(10, {1, 2}, t2)); ways.push_back(way(11, {2, 3}, t2)); }
+    if (diverge) { ways.push_back(way(12, {2, 4}, tr)); s.graph = graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {200, 0}}, {4, {ramp_x, ramp_y}}}, ways); }
+    else { ways.push_back(way(12, {4, 2}, tr)); s.graph = graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {200, 0}}, {4, {-ramp_x, ramp_y}}}, ways); }
+    return s;
+}
+// One stretch of a way (a way passing through node 2 has two).
+Resolved resolve_nth(const RoadReferenceBuilder& builder, std::int64_t way_id, const RoadRules& rules, std::size_t n) {
+    const auto stretches = builder.stretches(way_id); REQUIRE(stretches);
+    REQUIRE(stretches->size() > n);
+    ReferenceFitLimits limits; limits.allow_curvature_exceptions = true;
+    auto fit = builder.fit_stretch(way_id, (*stretches)[n], limits); REQUIRE(fit);
+    const auto xs = resolve_cross_section(builder, way_id, (*stretches)[n], fit->length_m, rules);
+    REQUIRE(xs); REQUIRE(xs->xs.has_value());
+    return {(*stretches)[n], *xs->xs, fit->length_m};
+}
+std::size_t first_counted(const RoadCrossSection& xs) {
+    for (std::size_t i = 0; i < xs.bands.size(); ++i) if (xs.bands[i].counted) return i;
+    return 0;
+}
+// The checks every taper shares. `single` is S's stretch with the node at `s_at_end`; the link's landed end is `r_at_end`.
+void check_taper(const Resolved& r, bool r_at_end, const Resolved& single, bool s_at_end, double ramp_cos, bool ramp_right, const RoadRules& rules,
+                 double cap_m = 1e9) {
+    const auto& ml = rules.merge_lane;
+    const auto& join = r_at_end ? r.xs.end_join : r.xs.start_join;
+    REQUIRE(join.kind == JoinKind::Landing);
+    const std::int32_t off = r_at_end ? r.xs.offset.end_mm : r.xs.offset.start_mm;
+    const std::int32_t len = r_at_end ? r.xs.offset.end_length_mm : r.xs.offset.start_length_mm;
+    // L_t: at least the taper length (unless capped), within landing_clear_max_m and the stretch.
+    CHECK(len >= std::min<double>(ml.taper_length_m * 1000.0, cap_m * 1000.0) - 1);
+    CHECK(len <= ml.landing_clear_max_m * 1000); CHECK(len <= r.length * 1000.0);
+    // The link's one counted lane ramps from width 0 over L_t; the offset ramps over the same length.
+    const auto rl = last_counted(r.xs);
+    CHECK(first_counted(r.xs) == rl);
+    CHECK((r_at_end ? r.xs.bands[rl].end : r.xs.bands[rl].start) == WidthRamp{len, 0});
+    // The single arm keeps its lanes: no band of S ramps at the node.
+    for (const auto& b : single.xs.bands) CHECK((s_at_end ? b.end : b.start).length_mm == 0);
+    // Target: S's outermost counted lane edge on the ramp's side at the node, seen from S's way line; the link's (zero-width)
+    // lane sits on it, in R's frame up to cos(phi).
+    const auto sd = boundaries(single.xs, s_at_end ? single.length : 0.0);
+    const double edge_mm = std::round((ramp_right ? sd[last_counted(single.xs) + 1] : sd[first_counted(single.xs)]) * 1000.0);
+    CHECK(std::abs(off - std::round(edge_mm / ramp_cos)) <= 1);
+    const auto rd = boundaries(r.xs, r_at_end ? r.length : 0.0);
+    CHECK(std::abs(std::round(rd[rl] * 1000.0) - off) <= 1);
+    CHECK(std::abs(std::round(rd[rl + 1] * 1000.0) - off) <= 1);   // width 0: both lane edges on the target
+    // The outer shoulder starts at S's shoulder on the ramp's side (the bed edge continues S -> R).
+    const auto sb = ramp_right ? last_counted(single.xs) + 1 : first_counted(single.xs) - 1;
+    const auto rb = ramp_right ? rl + 1 : rl - 1;
+    if (sb < single.xs.bands.size() && single.xs.bands[sb].kind == LaneKind::Shoulder && rb < r.xs.bands.size() && r.xs.bands[rb].kind == LaneKind::Shoulder) {
+        const double s_sh = std::abs(sd[sb] - sd[sb + 1]) * 1000.0, r_sh = std::abs(rd[rb] - rd[rb + 1]) * 1000.0;
+        CHECK(std::abs(r_sh - s_sh) <= 1);
+    }
+    // Beyond L_t the link has its own widths.
+    const double far = r_at_end ? r.length - len / 1000.0 - 1.0 : len / 1000.0 + 1.0;
+    if (far > 0 && far < r.length) {
+        const auto rf = boundaries(r.xs, far);
+        CHECK(std::abs(std::round((rf[rl] - rf[rl + 1]) * 1000.0) - r.xs.bands[rl].width_mm) <= 1);
+    }
+}
+double cos_of(int dx, int dy) { return std::abs(dx) / std::hypot(static_cast<double>(dx), static_cast<double>(dy)); }
+} // namespace
+
+TEST_CASE("T1 a taper merge: S == T, the one-lane link lands with width 0 on the outer lane edge and widens over L_t", "[layer][road_merge_lane][roads]") {
+    const auto s = taper_scene();
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    const auto& rules = builtin_road_rules_de();
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    REQUIRE(d.reason == MergeNodeReason::Ok); CHECK(d.taper);
+    CHECK(d.through_id == s.a); CHECK(d.single_id == s.b); CHECK(d.ramp_id == s.r);
+    const auto a = resolve_in(*builder, s.a, rules), b = resolve_in(*builder, s.b, rules), r = resolve_in(*builder, s.r, rules);
+    CHECK(a.xs.end_join.kind != JoinKind::None); CHECK(b.xs.start_join.kind != JoinKind::None);   // the through pair joins
+    check_taper(r, true, b, false, cos_of(150, 12), true, rules);
+}
+
+TEST_CASE("T2 a taper diverge: the link leaves the outer lane edge with width 0", "[layer][road_merge_lane][roads]") {
+    const auto s = taper_scene(true);
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    const auto& rules = builtin_road_rules_de();
+    REQUIRE(diagnose_merge_node(*builder, 2, rules).taper);
+    // Diverge: S (10, 2 lanes) arrives, T (11) and R leave.
+    const auto a = resolve_in(*builder, s.a, rules), r = resolve_in(*builder, s.r, rules);
+    check_taper(r, false, a, true, cos_of(150, 12), true, rules);
+}
+
+TEST_CASE("T3 a taper on the left (mirrored side): the target is the leftmost lane edge", "[layer][road_merge_lane][roads]") {
+    const auto s = taper_scene(false, 12);
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    const auto& rules = builtin_road_rules_de();
+    REQUIRE(diagnose_merge_node(*builder, 2, rules).taper);
+    const auto b = resolve_in(*builder, s.b, rules), r = resolve_in(*builder, s.r, rules);
+    check_taper(r, true, b, false, cos_of(150, 12), false, rules);
+    CHECK(r.xs.offset.end_mm > 0);   // left of the way line
+}
+
+TEST_CASE("T4 a way passing through the node is the single and the through arm, chosen by direction", "[layer][road_merge_lane][roads]") {
+    for (const bool diverge : {false, true}) {
+        INFO("diverge " << diverge);
+        const auto s = taper_scene(diverge, -12, true);
+        const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+        const auto& rules = builtin_road_rules_de();
+        const auto d = diagnose_merge_node(*builder, 2, rules);
+        REQUIRE(d.reason == MergeNodeReason::Ok); CHECK(d.taper);
+        CHECK(d.through_id == 10); CHECK(d.single_id == 10);
+        // Stretch 0 runs 1 -> 2 (ends at the node), stretch 1 runs 2 -> 3 (starts there).
+        const auto w0 = resolve_nth(*builder, 10, rules, 0), w1 = resolve_nth(*builder, 10, rules, 1);
+        REQUIRE(w0.stretch.start_ref < w1.stretch.start_ref);
+        CHECK(w0.xs.end_join.kind != JoinKind::None); CHECK(w1.xs.start_join.kind != JoinKind::None);
+        CHECK(w0.xs.end_join.neighbour_way_id == 10); CHECK(w1.xs.start_join.neighbour_way_id == 10);
+        const auto r = resolve_in(*builder, s.r, rules);
+        // Merge: S leaves (stretch 1); diverge: S arrives (stretch 0).
+        if (diverge) check_taper(r, false, w0, true, cos_of(150, 12), true, rules);
+        else check_taper(r, true, w1, false, cos_of(150, 12), true, rules);
+    }
+}
+
+TEST_CASE("T5 a link with two lanes at an S == T node is refused (taper_ramp_lanes)", "[layer][road_merge_lane][roads]") {
+    const auto& rules = builtin_road_rules_de();
+    for (const bool passing : {false, true}) {
+        INFO("passing " << passing);
+        const auto s = taper_scene(false, -12, passing, 2);
+        const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+        CHECK(diagnose_merge_node(*builder, 2, rules).reason == MergeNodeReason::TaperRampLanes);
+        const auto r = resolve_in(*builder, s.r, rules);
+        CHECK(r.xs.end_join.kind == JoinKind::None);
+        CHECK(r.xs.offset.mode == OffsetMode::None);
+    }
+    // The taper switch: taper_length_m 0 (rules built in code) keeps the old refusals.
+    auto off = rules; off.merge_lane.taper_length_m = 0;
+    const auto s = taper_scene();
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    CHECK(diagnose_merge_node(*builder, 2, off).reason == MergeNodeReason::LaneSum);
+    const auto p = taper_scene(false, -12, true);
+    const auto pb = RoadReferenceBuilder::make(p.graph); REQUIRE(pb);
+    CHECK(diagnose_merge_node(*pb, 2, off).reason == MergeNodeReason::WayPassesThrough);
+}
+
+TEST_CASE("T6 a short link: L_t is capped by the stretch", "[layer][road_merge_lane][roads]") {
+    // A 40 m link (a dead end at its far node: no far-end clearance) cannot hold a 60 m taper.
+    const auto s = taper_scene(false, -3, false, 1, 40);
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    const auto& rules = builtin_road_rules_de();
+    REQUIRE(diagnose_merge_node(*builder, 2, rules).taper);
+    const auto b = resolve_in(*builder, s.b, rules), r = resolve_in(*builder, s.r, rules);
+    REQUIRE(r.length < rules.merge_lane.taper_length_m);
+    check_taper(r, true, b, false, cos_of(40, 3), true, rules, r.length - 0.01);
+    CHECK(r.xs.offset.end_length_mm <= static_cast<std::int32_t>(std::floor(r.length * 1000.0)));
+}
+
+TEST_CASE("T7 no room for the taper (far-end clearance): the link keeps its lane and its facing edge lands on the outer lane edge", "[layer][road_merge_lane][roads]") {
+    // A 20 m link starting at a junction with a two-way street: the far-end clearance leaves less than gore_step_m for the width
+    // ramp, so the lane cannot start at 0; it keeps its width and lands beside the edge instead of across it.
+    auto s = taper_scene(false, -3, false, 1, 20);
+    const Tags street = {{"highway", "residential"}};
+    s.graph = [&] {
+        std::vector<RoadGraphWay> ways = {way(10, {1, 2}, {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}}),
+                                          way(11, {2, 3}, {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}}),
+                                          way(12, {4, 2}, {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", "1"}}),
+                                          way(13, {5, 4, 6}, street)};
+        return graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {200, 0}}, {4, {-20, -3}}, {5, {-20, -60}}, {6, {-20, 60}}}, ways);
+    }();
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    const auto& rules = builtin_road_rules_de();
+    REQUIRE(diagnose_merge_node(*builder, 2, rules).taper);
+    const auto b = resolve_in(*builder, s.b, rules);
+    const auto stretches = builder->stretches(s.r); REQUIRE(stretches); REQUIRE(stretches->size() == 1);
+    ReferenceFitLimits limits; limits.allow_curvature_exceptions = true;
+    const auto fit = builder->fit_stretch(s.r, (*stretches)[0], limits); REQUIRE(fit);
+    CrossSectionTrace tr;
+    const auto res = resolve_cross_section(*builder, s.r, (*stretches)[0], fit->length_m, rules, &tr);
+    REQUIRE(res); REQUIRE(res->xs.has_value());
+    const auto& xs = *res->xs;
+    REQUIRE(tr.ends[1].landing_widths_skipped);
+    REQUIRE(xs.end_join.kind == JoinKind::Landing);
+    const auto rl = last_counted(xs);
+    // No width change: the lane keeps its own width; a ramp from that same width over the landing length marks the merge zone.
+    CHECK(xs.bands[rl].end.from_width_mm == xs.bands[rl].width_mm);
+    CHECK(xs.bands[rl].end.length_mm == xs.offset.end_length_mm);
+    CHECK(xs.offset.end_length_mm > 0);
+    // The link's left (facing) lane edge on S's rightmost lane edge at the node, in the link's frame up to cos(phi).
+    const auto sd = boundaries(b.xs, 0.0), rd = boundaries(xs, fit->length_m);
+    const double edge_mm = sd[last_counted(b.xs) + 1] * 1000.0;
+    CHECK(std::abs(rd[rl] * 1000.0 - edge_mm / cos_of(20, 3)) <= 2);
+    CHECK(std::abs((rd[rl] - rd[rl + 1]) * 1000.0 - xs.bands[rl].width_mm) <= 1);   // the lane is whole, right of the edge
 }

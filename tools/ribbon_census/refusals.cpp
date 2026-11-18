@@ -251,7 +251,7 @@ int run_refusals(TerrainService& svc, const geo::UtmZone& zone, const double box
                     ? std::clamp(static_cast<double>(ml.landing_m_per_m) * std::fabs(d.landing_needed_mm) / 1000.0,
                                  static_cast<double>(ml.landing_min_m), static_cast<double>(ml.landing_max_m)) : 0.0;
                 std::printf("RF %lld %.2f %.2f %d %s%s %lld %lld %lld %s %s %s %d %d %d %d %.1f %.1f %d %.0f\n",
-                            static_cast<long long>(node.osm_id), np.x, np.y, landed ? 1 : 0, reason.c_str(), d.roles ? "" : "/noroles",
+                            static_cast<long long>(node.osm_id), np.x, np.y, landed ? 1 : 0, reason.c_str(), d.roles ? (d.taper ? "/taper" : "") : "/noroles",
                             static_cast<long long>(ids[0]), static_cast<long long>(ids[1]), static_cast<long long>(ids[2]),
                             hw_of(way_of(G, ids[0])).c_str(), hw_of(way_of(G, ids[1])).c_str(), hw_of(way_of(G, ids[2])).c_str(),
                             cnt[0], cnt[1], cnt[2], d.added_count, d.through_deflection_deg, d.ramp_angle_deg,

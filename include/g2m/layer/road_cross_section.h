@@ -170,6 +170,7 @@ enum class MergeNodeReason : std::uint8_t {
     ArmWayMissing, ArmNoClass, ArmNoSection, ArmNotOneway, ArmNoCountedLane, ArmNoDirection,
     AllSameDirection, ThroughDeflection, RampAngle, RampNotLink, LaneSum, JoinSplit,
     AddedCountMismatch, AddedNotContiguous, AddedNotOnRampSide, Boundaries, RampBackward, LandingTooFar,
+    TaperRampLanes,   // ROADS stage 6: S == T, but the link has more than one counted lane
 };
 const char* merge_node_reason_name(MergeNodeReason reason);
 // The classification of one node with its refusal reason and, when Ok, the roles and the landing offset.
@@ -185,6 +186,7 @@ struct MergeNodeDiagnosis {
     int single_counted = 0, through_counted = 0, ramp_counted = 0, added_count = -1;
     double through_deflection_deg = 0, ramp_angle_deg = 0;
     std::int32_t landing_needed_mm = 0;
+    bool taper = false;   // ROADS stage 6: accepted as a taper node (no added lane)
 };
 MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules);
 // What resolve_cross_section did at each end of the stretch (0 = start, 1 = end).

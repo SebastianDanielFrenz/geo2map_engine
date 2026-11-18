@@ -646,7 +646,11 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
  // ramp (ROADS stage 2b, the shoulder band that starts at width 0 at the landed end), else its landing length (ROADS stage 4a).
  // The through arm is found as the arm joined to the single arm at a landed node, whatever its join kind (lane change or an
  // inferred alignment), so every landed node gets the one broken line, owned by the through ribbon.
- struct MergeZone { double length_m=0;bool ramp_right=true; };
+ // A taper node (ROADS stage 6, no added lane: the ramp's counted lane starts at width 0 at its landed end) has the zone of that
+ // lane's width ramp, L_t; where the far-end clearance left no room for it the lane keeps its width and a ramp from that same
+ // width (a no-op) carries the landing length instead. A way passing through such a node is the single and the through arm: its end at the node runs the
+ // through arm's way when it has the ramp's direction there (ramp_at_end: both arrive at a merge, both leave at an exit).
+ struct MergeZone { double length_m=0;bool ramp_right=true;bool ramp_at_end=false; };
  std::map<std::tuple<std::int64_t,std::int64_t>,MergeZone> merge_nodes; // (node, single arm) -> the ramp's side and landing length
  std::map<std::tuple<std::int64_t,std::uint32_t,bool>,MergeZone> ramp_ends;
  for(const auto& entry:geometry.entries) {
@@ -668,7 +672,12 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
     }
    }
    if(gore_mm>0)zone_mm=gore_mm;
-   const MergeZone zone{zone_mm/1000.0,join.raw_delta_mm<0};
+   {
+    std::int32_t taper_mm=0;
+    for(const auto& b:entry.cross_section->bands){const auto& r=at_end?b.end:b.start;if(b.counted&&r.length_mm>0&&(r.from_width_mm==0||r.from_width_mm==b.width_mm))taper_mm=std::max(taper_mm,r.length_mm);}
+    if(taper_mm>0)zone_mm=taper_mm;
+   }
+   const MergeZone zone{zone_mm/1000.0,join.raw_delta_mm<0,at_end};
    merge_nodes[{way->node_ids[ref],join.neighbour_way_id}]=zone;ramp_ends[{entry.way_id,entry.stretch.start_ref,at_end}]=zone;
   }
  }
@@ -712,9 +721,15 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
     // The through carriageway (not the single arm the ramp lands beside), whatever its join kind: its edge on the ramp's side
     // is broken.
     const std::uint32_t ref=at_end?entry.stretch.end_ref:entry.stretch.start_ref;if(ref>=w.node_ids.size())continue;
-    const auto it=merge_nodes.find({w.node_ids[ref],entry.way_id});if(it!=merge_nodes.end())continue; // this is the single arm
-    const auto other=merge_nodes.find({w.node_ids[ref],join.neighbour_way_id});if(other==merge_nodes.end())continue;
-    z={at_end?length-other->second.length_m:0.0,at_end?length:other->second.length_m,other->second.ramp_right?kRightEdgeBroken:kLeftEdgeBroken};
+    const MergeZone* mz=nullptr;
+    if(const auto it=merge_nodes.find({w.node_ids[ref],entry.way_id});it!=merge_nodes.end()) {
+     if(it->second.ramp_at_end!=at_end)continue; // this is the single arm
+     mz=&it->second;                             // a way passing through a taper node: this end is the through arm
+    } else {
+     const auto other=merge_nodes.find({w.node_ids[ref],join.neighbour_way_id});if(other==merge_nodes.end())continue;
+     mz=&other->second;
+    }
+    z={at_end?length-mz->length_m:0.0,at_end?length:mz->length_m,mz->ramp_right?kRightEdgeBroken:kLeftEdgeBroken};
    }
   }
   struct Row { double station,x,y,nx,ny,fade;Span span;bool separated; };

@@ -179,7 +179,7 @@ bool read_merge_lane_rules(Reader& rd, const json& root, MergeLaneRules& out) {
     static constexpr const char* kPath = "merge_lane";
     if (!m || !rd.keys(*m, kPath, {"enabled", "max_through_deflection_deg", "max_ramp_angle_deg", "direction_probe_m", "landing_m_per_m",
             "landing_min_m", "landing_max_m", "max_landing_offset_mm", "gore_max_m", "gore_step_m", "landing_clear_max_m", "gore_overlap_tol_mm",
-            "landing_width_far_margin_m", "landing_width_far_max_m"}) ||
+            "landing_width_far_margin_m", "landing_width_far_max_m", "taper_length_m"}) ||
         !rd.boolean(*m, kPath, "enabled", out.enabled) ||
         !rd.integer(*m, kPath, "max_through_deflection_deg", 1, 89, out.max_through_deflection_deg) ||
         !rd.integer(*m, kPath, "max_ramp_angle_deg", 1, 89, out.max_ramp_angle_deg) ||
@@ -193,11 +193,13 @@ bool read_merge_lane_rules(Reader& rd, const json& root, MergeLaneRules& out) {
         !rd.integer(*m, kPath, "landing_clear_max_m", 1, 2000, out.landing_clear_max_m) ||
         !rd.integer(*m, kPath, "gore_overlap_tol_mm", 0, 2000, out.gore_overlap_tol_mm) ||
         !rd.integer(*m, kPath, "landing_width_far_margin_m", 0, 100, out.landing_width_far_margin_m) ||
-        !rd.integer(*m, kPath, "landing_width_far_max_m", 0, 500, out.landing_width_far_max_m)) return false;
+        !rd.integer(*m, kPath, "landing_width_far_max_m", 0, 500, out.landing_width_far_max_m) ||
+        !rd.integer(*m, kPath, "taper_length_m", 1, 2000, out.taper_length_m)) return false;
     if (out.landing_width_far_max_m < out.landing_width_far_margin_m) return rd.fail("merge_lane: landing_width_far_max_m below landing_width_far_margin_m");
     if (out.gore_step_m > out.gore_max_m) return rd.fail("merge_lane: gore_step_m exceeds gore_max_m");
     if (out.landing_min_m > out.landing_max_m) return rd.fail("merge_lane: landing_min_m exceeds landing_max_m");
     if (out.landing_clear_max_m < out.landing_max_m) return rd.fail("merge_lane: landing_clear_max_m below landing_max_m");
+    if (out.taper_length_m > out.landing_clear_max_m) return rd.fail("merge_lane: taper_length_m above landing_clear_max_m");
     return true;
 }
 
@@ -348,6 +350,11 @@ Result<RoadRules> load_road_rules(std::span<const std::byte> bytes) {
                 if (4 * w_mm * out.min_edge_radius_m > 1000 * a_m * a_m) {
                     rd.fail("merge_lane: the landing S-ramp of " + name + " is too sharp for min_edge_radius_m " + std::to_string(out.min_edge_radius_m)); return fail();
                 }
+            }
+            // ROADS stage 6: a taper node's landing runs over at least taper_length_m (the largest offset is the worst case).
+            const std::int64_t at = ml.taper_length_m;
+            if (4 * static_cast<std::int64_t>(ml.max_landing_offset_mm) * out.min_edge_radius_m > 1000 * at * at) {
+                rd.fail("merge_lane: the taper landing S-ramp of " + name + " is too sharp for min_edge_radius_m " + std::to_string(out.min_edge_radius_m)); return fail();
             }
         }
         rules.classes.push_back(std::move(out));

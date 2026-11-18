@@ -38,6 +38,8 @@
 //       = the lateral distance in mm (node frame, signed towards rside) of S's / T's / R's reference point at the node from the node;
 //       zoneL / zoneG = R's landing length and its gore shoulder ramp length (0 = none) at the landed end in mm: the merge-zone
 //       markings (broken T edge, hidden R edge) run over zoneG, else zoneL (ROADS stage 4a; before it: zoneL, LaneChange only);
+//       ... rCtr taper dRl dRr: taper = 1 at a taper node (ROADS stage 6; S and T may then be the two ends of one way passing
+//       through), dRl / dRr = R's left / right counted-lane edge minus T's ramp-side lane edge, signed towards rside, in mm;
 //       rCtr = R's counted-lane centre minus the centre of S's ramp-side lanes R lands on (as many as R has), node frame, signed
 //       towards rside, mm (-999999 when S's lane boundaries are not contiguous)
 //   OV  wayA srA wayB srB s0 s1 maxw meanw E N   two entries' road beds overlapping more than 0.5 m wide over more than
@@ -326,7 +328,8 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
             }
             // E records (ROADS stage 3a): every node the tile owns where a ramp's end carries the Landing join
             if (builder) {
-                std::map<std::pair<std::int64_t, std::int64_t>, std::pair<std::size_t, bool>> at_node;   // (way, node) -> entry, at_end
+                // (way, node, at_end) -> entry: a way passing through the node has two entries there (ROADS stage 6)
+                std::map<std::tuple<std::int64_t, std::int64_t, bool>, std::size_t> at_node;
                 for (std::size_t i = 0; i < geometry->entries.size(); ++i) {
                     const auto& en = geometry->entries[i];
                     if (!en.cross_section || !en.profile) continue;
@@ -334,33 +337,39 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                     if (!way) continue;
                     for (const bool at_end : {false, true}) {
                         const std::uint32_t r = at_end ? en.stretch.end_ref : en.stretch.start_ref;
-                        if (r < way->node_ids.size()) at_node[{en.way_id, way->node_ids[r]}] = {i, at_end};
+                        if (r < way->node_ids.size()) at_node[{en.way_id, way->node_ids[r], at_end}] = i;
                     }
                 }
-                for (const auto& [k, v] : at_node) {
+                for (const auto& [k, vi] : at_node) {
+                    const std::pair<std::size_t, bool> v{vi, std::get<2>(k)};
                     const auto& rn = geometry->entries[v.first];
                     const auto& rj = v.second ? rn.cross_section->end_join : rn.cross_section->start_join;
                     if (rj.kind != JoinKind::Landing) continue;
-                    const std::int64_t node = k.second;
+                    const std::int64_t node = std::get<1>(k);
                     const auto* n = find_node(G, node);
                     if (!n) continue;
                     const double e = static_cast<double>(n->position.x) / 1000.0, nn = static_cast<double>(n->position.y) / 1000.0;
                     if (!owned(e, nn) || !in_box(e, nn, 0)) continue;
                     const auto d = diagnose_merge_node(*builder, node, rules);
                     const std::int64_t S = rj.neighbour_way_id, T = d.through_id, R = rn.way_id;
-                    const auto si = at_node.find({S, node}), ti = at_node.find({T, node});
-                    if (si == at_node.end() || ti == at_node.end()) {
+                    // one-way arms: S is alone in its direction, so S's end flag is R's flipped and T's is R's (also on a passing way)
+                    const auto si0 = at_node.find({S, node, !v.second}), ti0 = at_node.find({T, node, v.second});
+                    const auto any_end = [&](std::int64_t w) { auto f = at_node.find({w, node, true}); return f != at_node.end() ? f : at_node.find({w, node, false}); };
+                    const auto si1 = si0 != at_node.end() ? si0 : any_end(S), ti1 = ti0 != at_node.end() ? ti0 : any_end(T);
+                    if (si1 == at_node.end() || ti1 == at_node.end()) {
                         std::printf("E %lld %d %lld %lld %lld missing\n", static_cast<long long>(node), degree[node], static_cast<long long>(S),
                                     static_cast<long long>(T), static_cast<long long>(R));
                         continue;
                     }
-                    const auto& sn = geometry->entries[si->second.first];
-                    const auto& tn = geometry->entries[ti->second.first];
-                    const bool s_end = si->second.second;
+                    const std::pair<std::size_t, bool> si_v{si1->second, std::get<2>(si1->first)}, ti_v{ti1->second, std::get<2>(ti1->first)};
+                    const auto* si = &si_v; const auto* ti = &ti_v;
+                    const auto& sn = geometry->entries[si->first];
+                    const auto& tn = geometry->entries[ti->first];
+                    const bool s_end = si->second;
                     const auto sp = sn.profile->reference.at(s_end ? sn.profile->reference.length_m : 0.0);
                     if (!sp) continue;
                     const double nx = -std::sin(sp->heading), ny = std::cos(sp->heading);
-                    const auto as = arm_at_node(sn, s_end, sp->x, sp->y, nx, ny), at = arm_at_node(tn, ti->second.second, sp->x, sp->y, nx, ny),
+                    const auto as = arm_at_node(sn, s_end, sp->x, sp->y, nx, ny), at = arm_at_node(tn, ti->second, sp->x, sp->y, nx, ny),
                                ar = arm_at_node(rn, v.second, sp->x, sp->y, nx, ny);
                     if (!as.ok || !at.ok || !ar.ok) continue;
                     const double ul = std::max(at.lane_l, ar.lane_l), ur = std::min(at.lane_r, ar.lane_r);
@@ -371,7 +380,7 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                     const bool r_left = (ar.lane_l + ar.lane_r) > (at.lane_l + at.lane_r);
                     const double gap = r_left ? ar.lane_r - at.lane_l : at.lane_r - ar.lane_l;
                     const auto& sj = s_end ? sn.cross_section->end_join : sn.cross_section->start_join;
-                    const auto& tj = ti->second.second ? tn.cross_section->end_join : tn.cross_section->start_join;
+                    const auto& tj = ti->second ? tn.cross_section->end_join : tn.cross_section->start_join;
                     const auto mm = [](double x) { return static_cast<long long>(std::llround(x * 1000.0)); };
                     // cos residue of R's ramp-side edges: R's own side that projects outward (towards rside)
                     const double dotn = ar.nrx * nx + ar.nry * ny, cphi = std::min(1.0, std::abs(dotn));
@@ -404,11 +413,14 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                     if (CrossSectionTrace str; builder && rn.profile &&
                         resolve_cross_section(*builder, rn.way_id, rn.stretch, rn.profile->reference.length_m, rules, &str))
                         skip = str.ends[v.second ? 1 : 0].landing_widths_skipped ? 1 : 0;
-                    std::printf("E %lld %d %lld %lld %lld %s %s %s %d %d %lld %lld %lld %lld %lld %lld %lld %c %lld %lld %lld %d %d %lld %lld %lld %d %d %lld\n", static_cast<long long>(node), degree[node],
+                    // ROADS stage 6: taper = the node is a taper node; dRl / dRr = R's left / right lane edge minus T's ramp-side lane edge
+                    const double t_edge = r_left ? at.lane_l : at.lane_r;
+                    std::printf("E %lld %d %lld %lld %lld %s %s %s %d %d %lld %lld %lld %lld %lld %lld %lld %c %lld %lld %lld %d %d %lld %lld %lld %d %d %lld %d %lld %lld\n", static_cast<long long>(node), degree[node],
                                 static_cast<long long>(S), static_cast<long long>(T), static_cast<long long>(R), join_name(sj.kind), join_name(tj.kind),
                                 join_name(rj.kind), as.lanes, at.lanes + ar.lanes, mm(as.lane_l - ul), mm(ur - as.lane_r), mm(as.bed_l - ubl), mm(ubr - as.bed_r),
                                 mm(interior_mismatch(as.bounds, ub, as.lane_r, as.lane_l, ur, ul)), mm(interior_mismatch(as.drawn, ud, as.lane_r, as.lane_l, ur, ul)),
-                                mm(gap), r_left ? 'L' : 'R', phi_mdeg, mm(res_lane), mm(res_bed), static_cast<int>(ar.lane_ramp_mm), skip, mm(ref_off(as)), mm(ref_off(at)), mm(ref_off(ar)), static_cast<int>(zone_l), static_cast<int>(zone_g), r_ctr);
+                                mm(gap), r_left ? 'L' : 'R', phi_mdeg, mm(res_lane), mm(res_bed), static_cast<int>(ar.lane_ramp_mm), skip, mm(ref_off(as)), mm(ref_off(at)), mm(ref_off(ar)), static_cast<int>(zone_l), static_cast<int>(zone_g), r_ctr, d.taper ? 1 : 0,
+                                mm(side * (ar.lane_l - t_edge)), mm(side * (ar.lane_r - t_edge)));
                 }
             }
             // ribbon rows of the selected entries, and the bed overlap raster
