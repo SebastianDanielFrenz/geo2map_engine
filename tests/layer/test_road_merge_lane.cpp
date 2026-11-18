@@ -861,7 +861,7 @@ TEST_CASE("N3 a fork of two non-link carriageways: the through arm bends less; a
 // Y (2 lanes, left, 11.3 deg or 24.9 deg). Sabotages S26 (rule off: F1, F2, F4, F7 fail), S27 (no contradiction check: F3 fails), S28 (no
 // deflection window: F4 fails).
 namespace {
-RoadGraph role_fork(const std::string& s_turn, const std::string& s_ref, const std::string& x_ref, const std::string& y_ref, double y_north) {
+RoadGraph role_fork(const std::string& s_turn, const std::string& s_ref, const std::string& x_ref, const std::string& y_ref, int y_north) {
     const auto tags = [](int lanes, const std::string& turn, const std::string& ref) {
         Tags t = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", std::to_string(lanes)}};
         if (!turn.empty()) t.emplace_back("turn:lanes", turn);
@@ -922,7 +922,7 @@ TEST_CASE("F4 fork roles: an arm beyond role_tag_max_deflection_deg leaves the g
 namespace {
 // The merge mirror of role_fork: X (1 lane, from the south-west, 2.9 deg: the geometric through arm) and Y (2 lanes) arrive at node
 // 2, S (3 lanes) leaves east.
-RoadGraph role_merge(const std::string& s_ref, const std::string& x_ref, const std::string& y_ref, double y_north) {
+RoadGraph role_merge(const std::string& s_ref, const std::string& x_ref, const std::string& y_ref, int y_north) {
     const auto tags = [](int lanes, const std::string& ref) {
         Tags t = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", std::to_string(lanes)}};
         if (!ref.empty()) t.emplace_back("ref", ref);
