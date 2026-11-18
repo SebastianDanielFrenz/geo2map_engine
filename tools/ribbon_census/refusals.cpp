@@ -28,6 +28,10 @@
 //      kind lane-add or taper, the station of the worst gap from the node, the gap there with the landing offset 0 (the ramp's
 //      unshifted line; NA when no through way is abreast), where = at-node (station 0) or in-zone. Diagnostics only.
 //   HG node checked gap_known gap_mm dropped        (ROADS stage 9) every node whose ramp-side hint changed the through join
+//   RO node merge X Y deflX deflY geomT turnT refT nameT applied conflict T checked gapKnown gap dropped   (ROADS stage 10) every node whose roles were
+//      found: the two candidate arms and their deflections from S, the through arm by geometry and as each signal names it
+//      (S's turn:lanes / the arms' merge_to tokens, ref continuity, name continuity; 0 = undecided), whether the role-tag rule
+//      chose the roles, whether tokens and ref contradict, and the through arm used. Diagnostics only.
 //   LCSUM count_lane_add count_taper
 //   RFSUM reason count landed_count
 #include "g2m/core/tile_key.h"
@@ -273,6 +277,13 @@ int run_refusals(TerrainService& svc, const geo::UtmZone& zone, const double box
                     std::printf("TR %lld %s %.2f %d %lld %lld %lld %lld %d %d %.2f\n", static_cast<long long>(node.osm_id), reason.c_str(),
                                 d.ramp_angle_deg, d.room_known ? 1 : 0, static_cast<long long>(d.stretch_mm), static_cast<long long>(d.far_clear_mm),
                                 static_cast<long long>(d.claim_mm), static_cast<long long>(d.avail_mm), d.two_tapers ? 1 : 0, d.offset_held ? 1 : 0, d.ramp_fit_angle_deg);
+                if (d.role_x_id != 0)
+                    std::printf("RO %lld %d %lld %lld %.2f %.2f %lld %lld %lld %lld %d %d %lld %d %d %d %d\n", static_cast<long long>(node.osm_id), d.merge ? 1 : 0,
+                                static_cast<long long>(d.role_x_id), static_cast<long long>(d.role_y_id), d.role_x_defl_deg, d.role_y_defl_deg,
+                                static_cast<long long>(d.role_geom_through_id), static_cast<long long>(d.role_turn_through_id),
+                                static_cast<long long>(d.role_ref_through_id), static_cast<long long>(d.role_name_through_id),
+                                d.role_rule_applied ? 1 : 0, d.role_conflict ? 1 : 0, static_cast<long long>(d.through_id),
+                                d.role_checked ? 1 : 0, d.role_gap_known ? 1 : 0, d.role_gap_mm, d.role_dropped ? 1 : 0);
                 if (d.hint_checked)
                     std::printf("HG %lld %d %d %d %d\n", static_cast<long long>(node.osm_id), 1, d.hint_gap_known ? 1 : 0, d.hint_gap_mm, d.hint_dropped ? 1 : 0);
                 if (lc) {

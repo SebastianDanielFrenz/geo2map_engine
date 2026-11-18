@@ -16,12 +16,12 @@ g3xs.hoechst_a66.tile.454.5420 36780 51a41438368ec939
 g3xs.hoechst_a66.tile.455.5420 84279 1abc9f48fff490ae
 g3xs.hoechst_a66.tile.456.5420 42998 f9ff2f4f63df3156
 g3xs.hoechst_a66.tile.454.5421 96881 f6ff2ea3958a0e7b
-g3xs.hoechst_a66.tile.455.5421 234175 198a86c7750a7364
+g3xs.hoechst_a66.tile.455.5421 233419 72aa75bcfedf8b6a
 g3xs.hoechst_a66.tile.456.5421 72539 9737d8d270ccab11
 g3xs.hoechst_a66.tile.453.5422 2549 71f9679431363ba7
 g3xs.hoechst_a66.tile.454.5422 70239 d131466d736bf014
 g3xs.hoechst_a66.tile.455.5422 79649 19535f1d085f32e8
 g3xs.hoechst_a66.tile.456.5422 8332 1c52d64bbcc729d1
 g3xs.hoechst_a66.tiles 12 81bb4939500cde12
-g3xs.hoechst_a66.stretches 1519 fe8576b889a2cc6f
-all 1635249 c3ab0f8e68aef12e
+g3xs.hoechst_a66.stretches 1519 3c4d80da1a94b0c1
+all 1634493 cfc66102a21a9573

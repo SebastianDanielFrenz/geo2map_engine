@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 using namespace g2m;
 using namespace g2m::world;
@@ -39,13 +40,14 @@ std::uint8_t pattern(int i, int j) { return static_cast<std::uint8_t>((i + 3 * j
 struct CountingCtx {
     std::shared_ptr<const TerrainClassTile> tile;
     std::atomic<int> calls{0};
-    TileKey last{};
+    std::mutex m;      // build_view_chunks calls the lookup from its worker threads
+    TileKey last{};    // guarded by m
 };
 
 std::shared_ptr<const TerrainClassTile> counting_lookup(void* ctx, const TileKey& key) {
     auto* c = static_cast<CountingCtx*>(ctx);
     c->calls.fetch_add(1);
-    c->last = key;
+    { const std::lock_guard<std::mutex> lock(c->m); c->last = key; }
     return c->tile;
 }
 

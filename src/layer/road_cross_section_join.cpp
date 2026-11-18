@@ -431,8 +431,11 @@ TaperRoom taper_room(const RoadReferenceBuilder& builder, const RoadRules& rules
         std::int64_t node_id, const RoadNodeArm& ramp);
 // ROADS stage 9: the worst lane-edge gap (mm) of the ramp's landing at the node, its stretch resolved with the room gates and the
 // hint but no hint check (no recursion); nullopt when the end does not land on a Ramps offset or the stretch does not fit.
+// ROADS stage 10r: a flag on `room` for that nested resolve: its merge nodes take geometry's roles (the geometric fallback's own
+// hint check must measure the geometric landing); classify_merge_node strips it.
+constexpr int kRoomGeomRoles = 8;
 std::optional<std::int32_t> hint_landing_gap_mm(const RoadReferenceBuilder& builder, const RoadRules& rules, const ReferenceFitLimits& fit_limits,
-        const RoadNodeArm& ramp);
+        const RoadNodeArm& ramp, bool geom_roles = false);
 // Two joins of the through pair are the same join (widths, ramps, kind, deltas, corrections).
 bool same_join(const JoinOutcome& a, const JoinOutcome& b) {
     return a.kind == b.kind && a.delta == b.delta && a.corr_u == b.corr_u && a.corr_d == b.corr_d && a.split == b.split &&
@@ -459,15 +462,90 @@ std::optional<geom::CurvePose> arm_pose(const RoadReferenceBuilder& builder, con
     return std::nullopt;
 }
 
+// ROADS stage 10: which of the candidate arms X and Y each role signal names the through arm: 1 = X, 2 = Y, 0 = the signal does
+// not decide. Turn: at a fork S's tagged counted lanes - lanes with through/none and lanes whose only tokens turn to one side
+// (left/slight/sharp, all the same side): the arm on that side is the ramp; at a merge the arm whose tagged lanes all carry only
+// merge_to tokens is the ramp when the other's do not. Ref / name: the one arm sharing a ';'-separated value with S.
+struct RoleSignals { int turn = 0, ref = 0, name = 0; };
+
+std::string_view way_tag(const RoadGraphWay& w, std::string_view key) {
+    for (const auto& [k, v] : w.tags) if (k == key) return v;
+    return {};
+}
+
+bool shares_value(std::string_view a, std::string_view b) {
+    const auto trim_sv = [](std::string_view t) {
+        while (!t.empty() && t.front() == ' ') t.remove_prefix(1);
+        while (!t.empty() && t.back() == ' ') t.remove_suffix(1);
+        return t;
+    };
+    for (std::size_t i = 0; i <= a.size();) {
+        const auto j = std::min(a.find(';', i), a.size());
+        const auto ta = trim_sv(a.substr(i, j - i));
+        if (!ta.empty())
+            for (std::size_t k = 0; k <= b.size();) {
+                const auto l = std::min(b.find(';', k), b.size());
+                if (trim_sv(b.substr(k, l - k)) == ta) return true;
+                k = l + 1;
+            }
+        i = j + 1;
+    }
+    return false;
+}
+
+RoleSignals fork_role_signals(const NodeArm& S, const NodeArm& X, const NodeArm& Y, bool merge) {
+    RoleSignals r;
+    const double lx = X.fx * -S.dy + X.fy * S.dx, ly = Y.fx * -S.dy + Y.fy * S.dx;   // left of S's travel
+    const auto tagged = [](const CrossSectionBand& b) { return b.counted && b.provenance.turn == Provenance::Tagged && b.turn != 0; };
+    if (!merge) {
+        constexpr std::uint16_t kL = kTurnLeft | kTurnSlightLeft | kTurnSharpLeft, kR = kTurnRight | kTurnSlightRight | kTurnSharpRight;
+        bool thr = false, tl = false, tr = false;
+        for (const auto& b : S.xs.bands) {
+            if (!tagged(b)) continue;
+            if (b.turn & (kTurnThrough | kTurnNone)) thr = true;
+            else if ((b.turn & kL) && !(b.turn & kR)) tl = true;
+            else if ((b.turn & kR) && !(b.turn & kL)) tr = true;
+        }
+        if (thr && tl != tr && lx != ly) {
+            const bool x_on_ramp_side = tl ? lx > ly : lx < ly;
+            r.turn = x_on_ramp_side ? 2 : 1;
+        }
+    } else {
+        const auto merging = [&](const NodeArm& n) {
+            bool any = false;
+            for (const auto& b : n.xs.bands) {
+                if (!tagged(b)) continue;
+                if (!(b.turn & (kTurnMergeToLeft | kTurnMergeToRight)) || (b.turn & (kTurnThrough | kTurnNone))) return false;
+                any = true;
+            }
+            return any;
+        };
+        const bool mx = merging(X), my = merging(Y);
+        if (mx != my) r.turn = mx ? 2 : 1;
+    }
+    const auto continuity = [&](std::string_view key) {
+        const auto sv = way_tag(*S.way, key);
+        if (sv.empty()) return 0;
+        const bool sx = shares_value(sv, way_tag(*X.way, key)), sy = shares_value(sv, way_tag(*Y.way, key));
+        return sx == sy ? 0 : (sx ? 1 : 2);
+    };
+    r.ref = continuity("ref");
+    r.name = continuity("name");
+    return r;
+}
+
 std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules,
         const ReferenceFitLimits& fit_limits, MergeNodeReason* why = nullptr, MergeNodeDiagnosis* detail = nullptr, int room = 2,
-        bool hint = true) {
+        bool hint = true, int roles = 2) {
     // Every refusal names its reason (diagnostics only, g2m_xs_probe --merge-census). A node a way passes through keeps the reason
     // way_passes_through for every refusal but the taper ones (ROADS stage 6/6r), so the census still tells those nodes apart.
     // `room` false: the taper gates of ROADS stage 6r that need the link's stretch (room, held offset) are skipped and an accepted
     // taper carries taper_avail_mm -1 - only for the classifications inside taper_room's own resolve, which must not recurse.
     // `room` 2 (ROADS stage 9) also checks the ramp-side hint's landing gap; 1 keeps the hint unchecked (the check's own resolve).
     // `hint` false: the through pair joins without the ramp-side hint (the fallback when the check fails).
+    // `roles` (ROADS stage 10r): 2 the role-tag rule applies and, at room 2, a tag role differing from geometry's is checked; 1 the
+    // tag role applies unchecked (the check's own resolve); 0 geometry's roles (the fallback when the check fails).
+    if (room & kRoomGeomRoles) { roles = 0; room &= ~kRoomGeomRoles; }
     bool passing = false;
     const auto refuse = [why, &passing](MergeNodeReason r) -> std::optional<MergeNode> {
         const bool taper_reason = r == MergeNodeReason::TaperRampLanes || r == MergeNodeReason::TaperAngle ||
@@ -517,8 +595,56 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
             if (lx != ly) x_through = lx > ly;
         }
     }
+    // ROADS stage 10/10r: where both candidate arms stay within role_tag_max_deflection_deg of S, the roles follow the turn tokens
+    // (forks and merges), else at a fork ref continuity, where it decides; at a merge ref decides nothing. Ref never makes a _link
+    // arm the through arm when the other arm is no link. Tokens and ref naming different arms (forks) leave the geometry's choice.
+    const bool geom_x_through = x_through;
+    const RoleSignals sig = fork_role_signals(S, a[xi], a[yi], out.merge);
+    const int ref_use = out.merge || (sig.ref != 0 && is_link_arm(sig.ref == 1 ? a[xi] : a[yi]) && !is_link_arm(sig.ref == 1 ? a[yi] : a[xi]))
+                            ? 0 : sig.ref;
+    const bool role_conflict = sig.turn != 0 && ref_use != 0 && sig.turn != ref_use;
+    bool role_rule = false;
+    if (roles != 0 && !passing && ml.role_tag_max_deflection_deg > 0 &&
+        angle_deg(cos_x) <= static_cast<double>(ml.role_tag_max_deflection_deg) &&
+        angle_deg(cos_y) <= static_cast<double>(ml.role_tag_max_deflection_deg) && !role_conflict) {
+        if (const int pick = sig.turn != 0 ? sig.turn : ref_use; pick != 0) { x_through = pick == 1; role_rule = true; }
+    }
+    // ROADS stage 10r: a tag role that differs from geometry's is kept only if the node, resolved with it, lands and its ramp's
+    // landing keeps a worst lane gap of at least -accept_min_gap_mm (as the stage 9 hint check: the ramp's stretch resolved with
+    // the room gates and unchecked roles and hint; an unknown gap keeps it); else the node is exactly the geometric roles' result.
+    // One level: the two resolves below run with roles 1 and 0. A function of the node alone, so no landed node is lost by it.
+    if (roles == 2 && room >= 2 && role_rule && x_through != geom_x_through) {
+        MergeNodeReason tag_why = MergeNodeReason::Ok;
+        MergeNodeDiagnosis tag_detail;
+        auto tag = classify_merge_node(builder, node_id, rules, fit_limits, &tag_why, detail ? &tag_detail : nullptr, room, hint, 1);
+        std::optional<std::int32_t> g;
+        if (tag) g = hint_landing_gap_mm(builder, rules, fit_limits, (x_through ? a[yi] : a[xi]).arm);
+        if (tag && (!g || ml.accept_min_gap_mm <= 0 || *g >= -ml.accept_min_gap_mm)) {
+            if (why) *why = tag_why;
+            if (detail) { *detail = tag_detail; detail->role_checked = true; detail->role_gap_known = g.has_value(); detail->role_gap_mm = g.value_or(0); }
+            return tag;
+        }
+        if (detail) *detail = MergeNodeDiagnosis{};
+        auto r = classify_merge_node(builder, node_id, rules, fit_limits, why, detail, room, hint, 0);
+        if (detail) {
+            detail->role_checked = true; detail->role_dropped = true; detail->role_gap_known = g.has_value(); detail->role_gap_mm = g.value_or(0);
+            detail->role_turn_through_id = sig.turn == 1 ? a[xi].arm.way_id : sig.turn == 2 ? a[yi].arm.way_id : 0;
+            detail->role_ref_through_id = sig.ref == 1 ? a[xi].arm.way_id : sig.ref == 2 ? a[yi].arm.way_id : 0;
+            detail->role_name_through_id = sig.name == 1 ? a[xi].arm.way_id : sig.name == 2 ? a[yi].arm.way_id : 0;
+        }
+        return r;
+    }
     const NodeArm& T = x_through ? a[xi] : a[yi];
     const NodeArm& R = x_through ? a[yi] : a[xi];
+    if (detail) {   // diagnostics only (ROADS stage 10)
+        const auto id_of = [&](int k) { return k == 1 ? a[xi].arm.way_id : k == 2 ? a[yi].arm.way_id : std::int64_t{0}; };
+        detail->role_x_id = a[xi].arm.way_id; detail->role_y_id = a[yi].arm.way_id;
+        detail->role_x_defl_deg = angle_deg(cos_x); detail->role_y_defl_deg = angle_deg(cos_y);
+        detail->role_geom_through_id = id_of(geom_x_through ? 1 : 2);
+        detail->role_turn_through_id = id_of(sig.turn); detail->role_ref_through_id = id_of(sig.ref);
+        detail->role_name_through_id = id_of(sig.name);
+        detail->role_rule_applied = role_rule; detail->role_conflict = role_conflict;
+    }
     if (detail) {   // diagnostics only (ROADS stage 5a)
         detail->roles = true; detail->merge = out.merge;
         detail->through_id = T.arm.way_id; detail->single_id = S.arm.way_id; detail->ramp_id = R.arm.way_id;
@@ -666,11 +792,11 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     if (use_hint) {
         out.hinted = true;
         if (room >= 2 && ml.accept_min_gap_mm > 0 && !same_join(join, resolve_join(U, D, rules))) {
-            const auto g = hint_landing_gap_mm(builder, rules, fit_limits, R.arm);
+            const auto g = hint_landing_gap_mm(builder, rules, fit_limits, R.arm, roles == 0);
             if (detail) { detail->hint_checked = true; detail->hint_gap_known = g.has_value(); detail->hint_gap_mm = g.value_or(0); }
             if (g && *g < -ml.accept_min_gap_mm) {
                 if (detail) *detail = MergeNodeDiagnosis{};
-                auto r = classify_merge_node(builder, node_id, rules, fit_limits, why, detail, room, false);
+                auto r = classify_merge_node(builder, node_id, rules, fit_limits, why, detail, room, false, roles);
                 if (detail) { detail->hint_checked = true; detail->hint_gap_known = true; detail->hint_gap_mm = *g; detail->hint_dropped = true; }
                 return r;
             }
@@ -1338,7 +1464,7 @@ TaperRoom taper_room(const RoadReferenceBuilder& builder, const RoadRules& rules
 }
 
 std::optional<std::int32_t> hint_landing_gap_mm(const RoadReferenceBuilder& builder, const RoadRules& rules, const ReferenceFitLimits& fit_limits,
-        const RoadNodeArm& ramp) {
+        const RoadNodeArm& ramp, bool geom_roles) {
     const auto stretches = builder.stretches(ramp.way_id);
     if (!stretches) return std::nullopt;
     for (const auto& st : *stretches) {
@@ -1346,7 +1472,7 @@ std::optional<std::int32_t> hint_landing_gap_mm(const RoadReferenceBuilder& buil
         const auto fit = builder.fit_stretch(ramp.way_id, st, fit_limits);
         if (!fit) return std::nullopt;
         CrossSectionTrace tr;
-        const auto r = resolve_impl(builder, ramp.way_id, st, fit->length_m, rules, &tr, fit_limits, true, 0, 0u, 1);
+        const auto r = resolve_impl(builder, ramp.way_id, st, fit->length_m, rules, &tr, fit_limits, true, 0, 0u, geom_roles ? 1 | kRoomGeomRoles : 1);
         if (!r || !r->xs) return std::nullopt;
         const auto& t = tr.ends[ramp.leaves_node ? 0 : 1];
         if (!t.landing_clear) return std::nullopt;
