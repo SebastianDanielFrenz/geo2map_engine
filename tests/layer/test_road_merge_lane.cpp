@@ -274,6 +274,7 @@ TEST_CASE("M7 the B 8 exit at Hoechst: the exit lane is whole at the diverge nod
 //   S19 classify_merge_node: no side gate (the link's side read against the single arm only)                    -> T12 fails
 //   S20 classify_merge_node: a non-link R accepted without the lane sum (S = T + R)                            -> N2 fails
 //   S21 classify_merge_node: no fork tie rule (the way-id tie of before)                                         -> N3 fails
+//   S23 (ROADS stage 8a-1, 2026-11-18) apply_gore_shoulders: at a taper only the facing shoulder takes the gore, not the verge   -> T13 fails
 namespace {
 // The taper scene: A and B both 2 lanes (S == T), or one 2-lane way 10 passing through node 2 (`passing`); the link R as in
 // merge_scene with `ramp_lanes` lanes; `ramp_x` its distance along x from the node (merge: west of it; diverge: east).
@@ -370,6 +371,32 @@ TEST_CASE("T11 a carriageway drawn from its left edge: the gore rule still finds
     REQUIRE(d.reason == MergeNodeReason::Ok); REQUIRE(d.taper);
     const auto b = resolve_in(*builder, s.b, rules), r = resolve_in(*builder, s.r, rules);
     check_taper(r, true, b, false, cos_of(150, 3), true, rules);
+}
+
+TEST_CASE("T13 a taper's facing beds: the shoulder and the verge beyond it both start at width 0 at the node (ROADS 8a-1)", "[layer][road_merge_lane][roads]") {
+    // Merge from the right: the link's facing side is its left, the through arm's its right. At a lane-add node only the shoulder
+    // takes the gore (stage 2b); at a taper the link runs beside the through lanes, so the verge beyond the shoulder must yield too.
+    const auto s = taper_scene();
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    const auto& rules = builtin_road_rules_de();
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    REQUIRE(d.reason == MergeNodeReason::Ok); REQUIRE(d.taper);
+    const auto a = resolve_in(*builder, s.a, rules), r = resolve_in(*builder, s.r, rules);
+    const auto check_bed = [](const RoadCrossSection& xs, bool left) {
+        std::vector<std::size_t> bed;
+        if (left) { for (std::size_t i = first_counted(xs); i-- > 0;) { if (xs.bands[i].kind != LaneKind::Shoulder && xs.bands[i].kind != LaneKind::Verge) break; bed.push_back(i); } }
+        else for (std::size_t i = last_counted(xs) + 1; i < xs.bands.size(); ++i) { if (xs.bands[i].kind != LaneKind::Shoulder && xs.bands[i].kind != LaneKind::Verge) break; bed.push_back(i); }
+        REQUIRE(!bed.empty());
+        bool verge = false;
+        for (const auto i : bed) {
+            INFO("band " << i << " kind " << static_cast<int>(xs.bands[i].kind));
+            CHECK(xs.bands[i].end.from_width_mm == 0); CHECK(xs.bands[i].end.length_mm > 0);
+            verge = verge || xs.bands[i].kind == LaneKind::Verge;
+        }
+        CHECK(verge);
+    };
+    check_bed(r.xs, true);    // the link's left: toward the through lanes
+    check_bed(a.xs, false);   // the through arm's right: toward the link
 }
 
 TEST_CASE("T2 a taper diverge: the link leaves the outer lane edge with width 0", "[layer][road_merge_lane][roads]") {
@@ -662,6 +689,9 @@ TEST_CASE("N1 a non-link carriageway joining where the lanes balance lands like 
     CHECK(resolve_in(*builder, s.r, off).xs.end_join.kind == JoinKind::None);
 }
 
+// ROADS stage 8a-3: a non-link ramp's landing S-ramp is checked per node with its own class's min_edge_radius_m (a link class is
+// checked once by the loader). N1's trunk ramp lands at the shipped 60 m; with the trunk radius at the bound 4 W R <= a^2 it still
+// lands, one metre above it is refused landing_curvature and served as a junction. Sabotage S22 (no per-node check) -> N4 fails.
 TEST_CASE("N2 a non-link arm where the lanes do not balance stays a junction (ramp_not_link)", "[layer][road_merge_lane][roads]") {
     const auto& rules = builtin_road_rules_de();
     for (const int b_lanes : {2, 4}) {   // 2 = 2 + 0 would be a taper shape, 4 != 2 + 1

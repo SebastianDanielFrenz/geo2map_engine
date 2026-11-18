@@ -1398,7 +1398,21 @@ void apply_gore_shoulders(const RoadReferenceBuilder& builder, const RoadGraphWa
             return std::nullopt;
         };
         const auto sb = facing_shoulder(self, *self_left), ob = facing_shoulder(other, *other_left);
-        const std::int32_t sh_self = sb ? self.xs.bands[*sb].width_mm : 0, sh_other = ob ? other.xs.bands[*ob].width_mm : 0;
+        // ROADS stage 8a-1: at a taper node the whole facing bed takes the gore - the shoulder and the verge beyond it (a verge right
+        // outside the lanes when there is no shoulder) - so the two beds do not overlap where the link runs beside the carriageway.
+        const auto facing_bed = [&](const GoreArm& a, bool left, const std::optional<std::size_t>& sh) {
+            std::vector<std::size_t> out;
+            if (!m->taper) { if (sh) out.push_back(*sh); return out; }
+            const auto n = static_cast<std::ptrdiff_t>(a.xs.bands.size());
+            std::ptrdiff_t i = left ? static_cast<std::ptrdiff_t>(a.first) - 1 : static_cast<std::ptrdiff_t>(a.last) + 1;
+            if (i >= 0 && i < n && a.xs.bands[static_cast<std::size_t>(i)].kind == LaneKind::Shoulder) { out.push_back(static_cast<std::size_t>(i)); i += left ? -1 : 1; }
+            if (i >= 0 && i < n && a.xs.bands[static_cast<std::size_t>(i)].kind == LaneKind::Verge) out.push_back(static_cast<std::size_t>(i));
+            return out;
+        };
+        const auto bed_self = facing_bed(self, *self_left, sb), bed_other = facing_bed(other, *other_left, ob);
+        std::int32_t sh_self = 0, sh_other = 0;
+        for (const auto i : bed_self) sh_self += self.xs.bands[i].width_mm;
+        for (const auto i : bed_other) sh_other += other.xs.bands[i].width_mm;
         auto& t = tr.ends[e];
         t.gore = true; t.gore_shoulder_mm = sh_self;
         const double need = static_cast<double>(sh_self + sh_other) / 1000.0;
@@ -1424,7 +1438,7 @@ void apply_gore_shoulders(const RoadReferenceBuilder& builder, const RoadGraphWa
         t.gore_nose_reached = reached;
         t.gore_min_gap_mm = static_cast<std::int32_t>(std::round(min_g * 1000.0));
         t.gore_min_gap_at_mm = static_cast<std::int32_t>(std::round(min_at * 1000.0));
-        if (!sb) continue;
+        if (bed_self.empty()) continue;
         // The ramp length L_g (ROADS stage 2b), one per node: both ways compute it from the LINK's gap profile and both pre-gore
         // sections, so the two facing shoulders share it. L_g is the smallest multiple of gore_step_m at or past the link's nose
         // with smoothstep(s / L_g) * need <= max(gap(s), 0) + gore_overlap_tol at every sample s in [0, L_g] (no through way
@@ -1482,14 +1496,13 @@ void apply_gore_shoulders(const RoadReferenceBuilder& builder, const RoadGraphWa
         t.gore_capped = capped;
         t.gore_stretch_bound = capped && std::min(allow_self, allow_other) < gore_max_mm;
         t.gore_other_shorter = allow_other < allow_self && allow_other < gore_max_mm;
-        auto& band = xs.bands[*sb];
         // The section format bounds the longest ramp at one end plus the longest at the other (every band and the offset) by the
         // stretch length: the gore ramp yields to whatever reaches in from the far end of the served section (its other end may
         // carry a gore ramp the pre-gore length above did not see).
         const std::int64_t len = std::min<std::int64_t>(lg, length_mm - far_ramp_max(xs, at_end));
         t.gore_ramp_trimmed = len < lg;
         if (len <= 0) continue;
-        (at_end ? band.end : band.start) = WidthRamp{static_cast<std::int32_t>(len), 0};
+        for (const auto i : bed_self) (at_end ? xs.bands[i].end : xs.bands[i].start) = WidthRamp{static_cast<std::int32_t>(len), 0};
     }
 }
 } // namespace
