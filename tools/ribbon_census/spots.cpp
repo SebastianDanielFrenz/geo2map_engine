@@ -44,6 +44,11 @@
 //       towards rside, mm (-999999 when S's lane boundaries are not contiguous)
 //   OV  wayA srA wayB srB s0 s1 maxw meanw E N   two entries' road beds overlapping more than 0.5 m wide over more than
 //       10 m (a raster of 0.25 m cells, 1 m station bins of A; s0/s1 stations of A)
+//       ... lanew dz hd dir cdist halfs (ROADS stage 8b): lanew = the largest per-bin width inside both entries' counted lanes
+//       (0 = only shoulders/verges overlap), dz = the largest deck height difference in m, hd = the largest heading difference of
+//       the two references mod 180 deg, dir = same/opp travel direction (majority of bins), cdist / halfs = at the run's middle the
+//       distance of the two road-bed centres and the sum of the two half beds in m
+//   W records end (ROADS stage 8b) with "T bridge tunnel layer" (- = tag absent)
 //
 // Rows are matched to entries by geometry: a vertex at station v belongs to the entry whose reference normal at v
 // passes through it (tangential residual < 2 cm, lateral < 40 m). Rows of a tile are the ones the tile owns.
@@ -63,6 +68,7 @@
 #include <cmath>
 #include <cstdio>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -131,6 +137,30 @@ struct ArmAtNode {
     double half_l = 0, half_r = 0, bedd_l = 0, bedd_r = 0; // own frame: lane / bed edge distance from the counted-lane centre
     std::int32_t lane_ramp_mm = 0;                         // length of the first counted band's width ramp at this end
 };
+// ROADS stage 8b: whether a lateral offset (left positive) at station s lies inside the entry's counted lanes
+bool in_lanes(const RoadGeomEntry& en, double s, double lat) {
+    if (!en.cross_section || !en.profile) return false;
+    const auto& xs = *en.cross_section;
+    const std::size_t nb = xs.bands.size();
+    if (nb == 0 || nb > 32) return false;
+    std::array<double, 33> t{};
+    if (!xs.boundaries_at(std::clamp(s, 0.0, en.profile->reference.length_m), std::span<double>(t.data(), nb + 1))) return false;
+    for (std::size_t i = 0; i < nb; ++i)
+        if (xs.bands[i].counted && lat <= t[i] && lat >= t[i + 1]) return true;
+    return false;
+}
+// ROADS stage 8b: the entry's bed centre (world) and half bed width at station s
+struct BedAt { double cx = 0, cy = 0, half = 0; };
+std::optional<BedAt> bed_at(const RoadGeomEntry& en, double s) {
+    if (!en.cross_section || !en.profile) return std::nullopt;
+    const double sc = std::clamp(s, 0.0, en.profile->reference.length_m);
+    const auto p = en.profile->reference.at(sc);
+    if (!p) return std::nullopt;
+    const auto fp = carve_footprint(*en.cross_section, sc);
+    if (!(fp.roadbed_left > fp.roadbed_right)) return std::nullopt;
+    const double c = 0.5 * (fp.roadbed_left + fp.roadbed_right);
+    return BedAt{p->x - std::sin(p->heading) * c, p->y + std::cos(p->heading) * c, 0.5 * (fp.roadbed_left - fp.roadbed_right)};
+}
 ArmAtNode arm_at_node(const RoadGeomEntry& en, bool at_end, double ox, double oy, double nx, double ny) {
     ArmAtNode a;
     if (!en.cross_section || !en.profile) return a;
@@ -198,7 +228,10 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
     std::map<std::int64_t, std::set<std::string>> node_codes;
     std::map<std::int64_t, std::tuple<double, double, std::uint32_t>> node_pos;
     std::set<EntryKey> entries_printed;
-    struct Ov { std::map<int, int> cells; std::map<int, std::pair<double, double>> at; };
+    // ROADS stage 8b: per 1 m bin of A also the cells inside both entries' counted lanes, the largest deck height difference, the heading
+    // difference of the two references (mod 180 deg) and whether they run the same way, and B's station at the bin's last cell.
+    struct OvBin { int lane = 0; double dz = 0, hd = 0, cdist = -1, halfs = -1; bool same = true; };
+    struct Ov { std::map<int, int> cells; std::map<int, std::pair<double, double>> at; std::map<int, OvBin> x; };
     std::map<std::tuple<std::int64_t, std::uint32_t, std::int64_t, std::uint32_t>, Ov> overlaps;
     const RoadRibbonGround flat = [](double, double) -> std::optional<double> { return 0.0; };
     RoadRibbonOptions point;
@@ -272,7 +305,9 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                         if (n) std::printf(" %.2f %.2f", static_cast<double>(n->position.x) / 1000.0, static_cast<double>(n->position.y) / 1000.0);
                         else std::printf(" nan nan");
                     }
-                    std::printf("\n");
+                    // ROADS stage 8b: the layer tags (- = absent)
+                    const auto tg = [&](const char* k) { const auto v = tag_of(*way, k); return v.empty() ? std::string("-") : v; };
+                    std::printf(" T %s %s %s\n", tg("bridge").c_str(), tg("tunnel").c_str(), tg("layer").c_str());
                 }
                 if (!first) continue;
                 int counted = 0;
@@ -483,7 +518,7 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
             if (r_hi_e <= r_lo_e || r_hi_n <= r_lo_n) continue;
             const int nx_c = static_cast<int>(std::ceil((r_hi_e - r_lo_e) / cell)), ny_c = static_cast<int>(std::ceil((r_hi_n - r_lo_n) / cell));
             std::vector<std::int32_t> cell_owner(static_cast<std::size_t>(nx_c) * static_cast<std::size_t>(ny_c), -1);
-            std::vector<float> cell_station(cell_owner.size(), 0.f);
+            std::vector<float> cell_station(cell_owner.size(), 0.f), cell_lat(cell_owner.size(), 0.f);
             for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
                 const std::size_t a = static_cast<std::size_t>(mesh.indices[t]), b = static_cast<std::size_t>(mesh.indices[t + 1]), c = static_cast<std::size_t>(mesh.indices[t + 2]);
                 if (owner[a] == static_cast<std::size_t>(-1) || owner[a] != owner[b] || owner[a] != owner[c]) continue;
@@ -503,7 +538,8 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                         if (l0 < 0 || l1 < 0 || l2 < 0) continue;
                         const double st = l0 * mesh.vertices[a].v + l1 * mesh.vertices[b].v + l2 * mesh.vertices[c].v;
                         const std::size_t ci = static_cast<std::size_t>(j) * static_cast<std::size_t>(nx_c) + static_cast<std::size_t>(i);
-                        if (cell_owner[ci] < 0) { cell_owner[ci] = static_cast<std::int32_t>(ei); cell_station[ci] = static_cast<float>(st); continue; }
+                        const double lt = l0 * lateral[a] + l1 * lateral[b] + l2 * lateral[c];
+                        if (cell_owner[ci] < 0) { cell_owner[ci] = static_cast<std::int32_t>(ei); cell_station[ci] = static_cast<float>(st); cell_lat[ci] = static_cast<float>(lt); continue; }
                         const std::size_t ej = static_cast<std::size_t>(cell_owner[ci]);
                         if (ej == ei) continue;
                         const auto& A = geometry->entries[ej];
@@ -512,6 +548,21 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                         const int bin = static_cast<int>(std::floor(cell_station[ci]));
                         ++ov.cells[bin];
                         ov.at[bin] = {px, py};
+                        auto& xb = ov.x[bin];
+                        const double sa = cell_station[ci];
+                        if (in_lanes(A, sa, cell_lat[ci]) && in_lanes(Bn, st, lt)) ++xb.lane;
+                        const double ca = std::clamp(sa, 0.0, A.profile->reference.length_m), cb = std::clamp(st, 0.0, Bn.profile->reference.length_m);
+                        const auto za = A.profile->at(ca), zb = Bn.profile->at(cb);
+                        if (za && zb) xb.dz = std::max(xb.dz, std::abs(za->height_m - zb->height_m));
+                        const auto ha = A.profile->reference.at(ca), hb = Bn.profile->reference.at(cb);
+                        if (ha && hb) {
+                            constexpr double kPi = 3.14159265358979323846;
+                            double dh = std::fmod(std::abs(ha->heading - hb->heading), 2 * kPi); if (dh > kPi) dh = 2 * kPi - dh;
+                            xb.same = dh <= kPi / 2; xb.hd = std::max(xb.hd, (xb.same ? dh : kPi - dh) * 180.0 / kPi);
+                        }
+                        if (const auto ba = bed_at(A, sa), bb = bed_at(Bn, st); ba && bb) {
+                            xb.cdist = std::hypot(ba->cx - bb->cx, ba->cy - bb->cy); xb.halfs = ba->half + bb->half;
+                        }
                     }
             }
         }
@@ -533,9 +584,18 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
         double maxw = 0, sumw = 0;
         const auto flush = [&]() {
             if (len > 10) {
-                const auto at = ov.at.at(run0 + len / 2);
-                std::printf("OV %lld %u %lld %u %d %d %.2f %.2f %.1f %.1f\n", static_cast<long long>(std::get<0>(k)), std::get<1>(k), static_cast<long long>(std::get<2>(k)),
-                            std::get<3>(k), run0, run0 + len, maxw, sumw / len, at.first, at.second);
+                const int mid = run0 + len / 2;
+                const auto at = ov.at.at(mid);
+                // ROADS stage 8b: lane overlap (largest per-bin width inside both entries' counted lanes), deck height difference, heading
+                // difference (mod 180), same/opposite direction, and at the run's middle the two bed centres' distance and the summed half beds
+                double lanew = 0, dz = 0, hd = 0; int same = 0;
+                for (int bb = run0; bb < run0 + len; ++bb) if (const auto it = ov.x.find(bb); it != ov.x.end()) {
+                    lanew = std::max(lanew, it->second.lane * 0.0625); dz = std::max(dz, it->second.dz); hd = std::max(hd, it->second.hd); same += it->second.same ? 1 : -1;
+                }
+                double cdist = -1, halfs = -1;
+                if (const auto it = ov.x.find(mid); it != ov.x.end()) { cdist = it->second.cdist; halfs = it->second.halfs; }
+                std::printf("OV %lld %u %lld %u %d %d %.2f %.2f %.1f %.1f %.2f %.2f %.1f %s %.2f %.2f\n", static_cast<long long>(std::get<0>(k)), std::get<1>(k), static_cast<long long>(std::get<2>(k)),
+                            std::get<3>(k), run0, run0 + len, maxw, sumw / len, at.first, at.second, lanew, dz, hd, same >= 0 ? "same" : "opp", cdist, halfs);
             }
             len = 0; maxw = 0; sumw = 0;
         };

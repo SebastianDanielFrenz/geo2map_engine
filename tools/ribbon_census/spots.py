@@ -1,6 +1,6 @@
 """Stage-0c diagnostics: read the records of `g2m_ribbon_census ... --box E0 N0 E1 N1 --spots` (format in spots.cpp).
 
-  python spots.py RECORDS [--view NAME E N HALF] [--summary]
+  python spots.py RECORDS [--view NAME E N HALF] [--summary] [--overlaps]
 
 Prints per stretch end in the view the served join, bands, ramps, offset and the ribbon's road bed at 0/5/10/20/40 m
 from that end; marks square steps (a road-bed edge that moves more than 0.5 m within 1 m of travel, inside a stretch or
@@ -26,6 +26,8 @@ def parse(path):
         if t == 'W':
             n = int(p[5]); pts = [(float(p[6 + 2 * i]), float(p[7 + 2 * i])) for i in range(n)]
             d['ways'][int(p[1])] = {'hw': p[2], 'lanes': p[3], 'oneway': p[4], 'pts': pts}
+            if len(p) > 9 + 2 * n and p[6 + 2 * n] == 'T':   # ROADS stage 8b: layer tags
+                d['ways'][int(p[1])]['layer'] = (p[7 + 2 * n], p[8 + 2 * n], p[9 + 2 * n])
         elif t == 'X':
             e = ent(int(p[1]), int(p[2])); e['er'] = int(p[3]); e['len'] = float(p[4]); e['hw'] = p[5]; e['counted'] = int(p[6]); e['xs'] = p[7] == 'xs'
         elif t == 'B':
@@ -45,10 +47,13 @@ def parse(path):
             d['nodes'][int(p[1])] = {'E': float(p[2]), 'N': float(p[3]), 'deg': int(p[4]), 'codes': p[5:]}
         elif t == 'E' and len(p) >= 19:   # a landed merge node with all three arms (spots.cpp, ROADS stage 3a)
             d['landed'][int(p[1])] = {'S': int(p[3]), 'T': int(p[4]), 'R': int(p[5]), 'dLane': (int(p[11]), int(p[12])),
-                                      'dBed': (int(p[13]), int(p[14])), 'rside': p[18]}
+                                      'dBed': (int(p[13]), int(p[14])), 'rside': p[18],
+                                      'zone': max(int(p[27]), int(p[28])) / 1000.0 if len(p) > 28 else 0.0}
         elif t == 'OV':
             d['ovs'].append({'a': (int(p[1]), int(p[2])), 'b': (int(p[3]), int(p[4])), 's0': int(p[5]), 's1': int(p[6]), 'maxw': float(p[7]), 'meanw': float(p[8]),
                              'E': float(p[9]), 'N': float(p[10])})
+            if len(p) > 16:   # ROADS stage 8b
+                d['ovs'][-1].update({'lanew': float(p[11]), 'dz': float(p[12]), 'hd': float(p[13]), 'dir': p[14], 'cdist': float(p[15]), 'halfs': float(p[16])})
     for e in E.values():
         rows = {}
         for r in e['rows']: rows[round(r['v'], 3)] = r   # a row owned by two tiles' records only once
@@ -158,6 +163,85 @@ def sliver_cause(d, ov):
     return 'no shared node (%s %s / %s %s)' % (a['hw'], d['ways'].get(a['way'], {}).get('oneway', '?'), b['hw'], d['ways'].get(b['way'], {}).get('oneway', '?'))
 
 
+ONEWAY = ('yes', '1', '-1', 'true')
+PARALLEL_DEG = 15.0   # ROADS stage 8b: heading difference over the overlap for "parallel"
+LAYER_DZ = 2.0        # ROADS stage 8b: deck height difference for "different layers"
+
+
+def layer_of(w):
+    br, tu, ly = w.get('layer', ('-', '-', '-')) if w else ('-', '-', '-')
+    return (br not in ('-', 'no'), tu not in ('-', 'no'), ly if ly != '-' else '0')
+
+
+def is_one_way(w):
+    return bool(w) and (w['oneway'] in ONEWAY or w['hw'].endswith('_link') or w['hw'] == 'motorway')
+
+
+def sliver_class(d, ov):
+    """ROADS stage 8b, for a sliver with no shared node: 'layers' (different bridge/tunnel/layer tags, or decks more than LAYER_DZ apart -
+    a crossing, not a defect), 'parallel' (same level, both one-way, heading difference <= PARALLEL_DEG over the overlap) or 'other'."""
+    wa, wb = d['ways'].get(ov['a'][0]), d['ways'].get(ov['b'][0])
+    if layer_of(wa) != layer_of(wb) or ov.get('dz', 0.0) > LAYER_DZ: return 'layers'
+    if ov.get('hd', 180.0) <= PARALLEL_DEG and is_one_way(wa) and is_one_way(wb): return 'parallel'
+    return 'other'
+
+
+def landed_zone(d, ov):
+    """ROADS stage 8b: the landed node whose R is one of the two ways and whose landing/gore zone reaches the overlap, else None."""
+    for n, m in d['landed'].items():
+        if m['R'] not in (ov['a'][0], ov['b'][0]): continue
+        nd = d['nodes'].get(n)
+        if not nd: continue
+        dist = ((nd['E'] - ov['E']) ** 2 + (nd['N'] - ov['N']) ** 2) ** 0.5
+        if dist <= m['zone'] + 0.5 * (ov['s1'] - ov['s0']) + 1.0: return n
+    return None
+
+
+def quant(xs, qs=(0.0, 0.25, 0.5, 0.75, 0.9, 1.0)):
+    xs = sorted(xs)
+    return ' '.join('%.2f' % xs[min(len(xs) - 1, int(q * (len(xs) - 1) + 0.5))] for q in qs) if xs else '-'
+
+
+def overlap_report(d):
+    """ROADS stage 8b: the no-shared-node slivers split by sliver_class, and the parallel ones in detail."""
+    out = []
+    ns = [ov for ov in d['ovs'] if not sliver_cause(d, ov).startswith('shared')]
+    cls = {id(ov): sliver_class(d, ov) for ov in ns}
+    c = collections.Counter(cls.values())
+    out.append('no-shared-node slivers: %d = layers %d (not defects, outside the sliver count) + parallel %d + other %d'
+               % (len(ns), c['layers'], c['parallel'], c['other']))
+    par = [ov for ov in ns if cls[id(ov)] == 'parallel']
+    oth = [ov for ov in ns if cls[id(ov)] == 'other']
+    lay = [ov for ov in ns if cls[id(ov)] == 'layers']
+    out.append('  other: heading <= %g but not both one-way %d, heading > %g %d' % (
+        PARALLEL_DEG, sum(1 for ov in oth if ov.get('hd', 180) <= PARALLEL_DEG), PARALLEL_DEG, sum(1 for ov in oth if ov.get('hd', 180) > PARALLEL_DEG)))
+    out.append('  layers: by tags %d, by deck height only %d' % (
+        sum(1 for ov in lay if layer_of(d['ways'].get(ov['a'][0])) != layer_of(d['ways'].get(ov['b'][0]))),
+        sum(1 for ov in lay if layer_of(d['ways'].get(ov['a'][0])) == layer_of(d['ways'].get(ov['b'][0])))))
+    if not par: return out
+    out.append('parallel: max width  (q0 q25 q50 q75 q90 q100) %s' % quant([ov['maxw'] for ov in par]))
+    out.append('parallel: mean width (q0 q25 q50 q75 q90 q100) %s' % quant([ov['meanw'] for ov in par]))
+    out.append('parallel: length m   (q0 q25 q50 q75 q90 q100) %s' % quant([ov['s1'] - ov['s0'] for ov in par]))
+    lane = [ov for ov in par if ov.get('lanew', 0) >= 0.25]
+    any_lane = [ov for ov in par if ov.get('lanew', 0) > 0]
+    out.append('parallel: shoulder/verge only %d, lane overlap >= 0.25 m %d (any lane cell %d)' % (len(par) - len(lane), len(lane), len(any_lane)))
+    lz = [(ov, landed_zone(d, ov)) for ov in par]
+    out.append('parallel: one way a landed R within its landing/gore zone %d, independent ways %d' % (
+        sum(1 for _, n in lz if n), sum(1 for _, n in lz if not n)))
+    out.append('parallel: direction same %d, opposite %d' % (sum(1 for ov in par if ov.get('dir') == 'same'), sum(1 for ov in par if ov.get('dir') == 'opp')))
+    out.append('parallel: summed half beds minus centre distance (q0 q25 q50 q75 q90 q100) %s' % quant(
+        [ov['halfs'] - ov['cdist'] for ov in par if ov.get('cdist', -1) >= 0]))
+    out.append('parallel, 10 worst (by mean width x length):')
+    out.append('  wayA classA wayB classB len maxw meanw lanew cdist halfs hd dir landedNode E N')
+    for ov, n in sorted(lz, key=lambda x: -x[0]['meanw'] * (x[0]['s1'] - x[0]['s0']))[:10]:
+        wa, wb = d['ways'].get(ov['a'][0], {}), d['ways'].get(ov['b'][0], {})
+        out.append('  %d %s %d %s %d %.2f %.2f %.2f %.2f %.2f %.1f %s %s %.1f %.1f' % (
+            ov['a'][0], wa.get('hw', '?'), ov['b'][0], wb.get('hw', '?'), ov['s1'] - ov['s0'], ov['maxw'], ov['meanw'], ov.get('lanew', -1),
+            ov.get('cdist', -1), ov.get('halfs', -1), ov.get('hd', -1), ov.get('dir', '?'), n if n else '-', ov['E'], ov['N']))
+    out.append('parallel, all: ' + ' '.join('%d/%d%s' % (ov['a'][0], ov['b'][0], '(L)' if ov.get('lanew', 0) >= 0.25 else '') for ov in par))
+    return out
+
+
 def fmt_bands(e, at):
     s = []
     for b in e['bands']:
@@ -224,7 +308,9 @@ def summary(d):
         return 'near an end, no ramp'
     c = collections.Counter(where(e, s) for e, s in ist)
     for k, n in c.most_common(): out.append('  %-30s %d' % (k, n))
-    out.append('slivers (overlap > 0.5 m wide over > 10 m): %d' % len(d['ovs']))
+    nlay = sum(1 for ov in d['ovs'] if not sliver_cause(d, ov).startswith('shared') and sliver_class(d, ov) == 'layers')
+    out.append('slivers (overlap > 0.5 m wide over > 10 m): %d (+ %d crossings on different layers, not counted; all OV records %d)'
+               % (len(d['ovs']) - nlay, nlay, len(d['ovs'])))
     c = collections.Counter(sliver_cause(d, ov).split(' (')[0].split(':')[-1].strip() if 'landed' in sliver_cause(d, ov) else
                             ('shared node ' + sliver_cause(d, ov).split('(')[1].split(',')[0] if sliver_cause(d, ov).startswith('shared') else 'no shared node')
                             for ov in d['ovs'])
@@ -242,6 +328,8 @@ if __name__ == '__main__':
             view_report(d, args[1], float(args[2]), float(args[3]), float(args[4]), js, out); args = args[5:]
         elif args[0] == '--summary':
             out += summary(d)[0]; args = args[1:]
+        elif args[0] == '--overlaps':
+            out += overlap_report(d); args = args[1:]
         else:
             sys.exit('unknown argument ' + args[0])
     print('\n'.join(out))
