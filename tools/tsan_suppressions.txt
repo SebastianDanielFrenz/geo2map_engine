@@ -10,3 +10,9 @@
 # SQLite's design, not a g2m bug. TSan cannot see the barrier protocol.
 race:walIndexWriteHdr
 race:walIndexTryHdr
+#
+# libstdc++ std::ctype<char>::narrow fills its narrow cache lazily (_M_narrow, _M_narrow_ok) with plain
+# stores; two threads that build a std::regex at the same time (cpp-httplib builds one per request in
+# ClientImpl::handle_request; test_http_server.cpp runs concurrent clients) both write the same values. The
+# uninstrumented libstdc++ is a benign known race (GCC bug 77704), not a g2m bug.
+race:std::ctype<char>::narrow
