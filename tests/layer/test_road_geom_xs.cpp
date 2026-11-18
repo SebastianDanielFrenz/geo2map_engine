@@ -370,7 +370,7 @@ TEST_CASE("roads.geom config hash and release id carry the cross-section encodin
     // Phase 7a-2: the tunnel floor is the design floor of the connected component (de.json structure block, road column).
     const std::string design = after + " tunnel-design-floor=7a2/4.7000000000000002/1/0.050000000000000003/reach:0.9 component-walk=1";
     CHECK(road_geom_config_text() != design);   // G2M-032 is served on top of it
-    const std::string g30 = design + " merge-lane-full=G2M-032 landing-widths=ROADS-3c merge-taper=ROADS-6";
+    const std::string g30 = design + " merge-lane-full=G2M-032 landing-widths=ROADS-3c merge-taper=ROADS-6r";
     CHECK(road_geom_config_text() == g30);
     CHECK(deriver.config_hash() == Sha256::of(g30));
     CHECK(road_geom_desc().encoding == 10);

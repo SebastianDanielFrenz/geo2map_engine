@@ -152,8 +152,9 @@ ArmAtNode arm_at_node(const RoadGeomEntry& en, bool at_end, double ox, double oy
             if (t[i] - t[i + 1] > 1e-6) { a.bounds.push_back(proj(t[i])); a.bounds.push_back(proj(t[i + 1])); ++a.lanes; }
         }
     const auto fp = carve_footprint(xs, s);
-    if (left <= right) { left = fp.carriageway_left; right = fp.carriageway_right; }
-    if (!(left > right)) return a;
+    // a taper lands R at counted width 0 (left == right, ROADS 6r): an exact point, not a missing arm
+    if (left < right) { left = fp.carriageway_left; right = fp.carriageway_right; }
+    if (!(left >= right)) return a;
     const double bl = std::max(fp.roadbed_left, left), br = std::min(fp.roadbed_right, right);
     const double pl = proj(left), pr = proj(right), qbl = proj(bl), qbr = proj(br);
     a.lane_l = std::max(pl, pr); a.lane_r = std::min(pl, pr);

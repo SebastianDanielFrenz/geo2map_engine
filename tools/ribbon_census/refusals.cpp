@@ -256,6 +256,11 @@ int run_refusals(TerrainService& svc, const geo::UtmZone& zone, const double box
                             hw_of(way_of(G, ids[0])).c_str(), hw_of(way_of(G, ids[1])).c_str(), hw_of(way_of(G, ids[2])).c_str(),
                             cnt[0], cnt[1], cnt[2], d.added_count, d.through_deflection_deg, d.ramp_angle_deg,
                             d.landing_known ? d.landing_needed_mm : 0, land_len * 1000.0);
+                // ROADS stage 6r: a taper candidate's room (mm): stretch, far-end clearance, the other end's claim, what is left
+                if (d.taper_candidate)
+                    std::printf("TR %lld %s %.2f %d %lld %lld %lld %lld %d %d %.2f\n", static_cast<long long>(node.osm_id), reason.c_str(),
+                                d.ramp_angle_deg, d.room_known ? 1 : 0, static_cast<long long>(d.stretch_mm), static_cast<long long>(d.far_clear_mm),
+                                static_cast<long long>(d.claim_mm), static_cast<long long>(d.avail_mm), d.two_tapers ? 1 : 0, d.offset_held ? 1 : 0, d.ramp_fit_angle_deg);
                 if (!d.roles) continue;
                 const RoadNodeArm* ra = nullptr;
                 const RoadNodeArm* ta = nullptr;

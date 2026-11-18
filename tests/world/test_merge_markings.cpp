@@ -12,9 +12,11 @@
 //   S5 road_junction.cpp build_from: no MergeLane decline at a landed ramp (2026-10-20, with MK4)                          -> MK4 fails
 //   S6 road_ribbons.cpp: the zone is the landing length even where a gore ramp exists (pre-4a) (2026-11-17)           -> MK2, MK2b fail
 //   S7 road_ribbons.cpp: only a LaneChange through arm is marked (pre-4a) (2026-11-17)                                 -> MK1b fails
-//   S8, S9 (ROADS stage 6, 2026-11-18): see MK5 and MK7.
+//   S8 (ROADS stage 6, 2026-11-18): see MK5. (S9 tested the stage 6 fallback marker, removed in stage 6r with its test.)
 #include "road_fixture.h"
 
+#include "g2m/layer/road_cross_section.h"
+#include "g2m/layer/road_reference.h"
 #include "g2m/layer/road_rules.h"
 #include "g2m/world/road_ribbons.h"
 
@@ -22,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -208,7 +211,7 @@ RoadGraph taper_scene(bool passing, bool short_link = false) {
     return g;
 }
 // The link's taper length at the node: its counted lane's width ramp from 0.
-double taper_m(const RoadGraph& graph, const RoadRules& rules, bool keeps_width = false) {
+double taper_m(const RoadGraph& graph, const RoadRules& rules) {
     g2m_test::GeomOptions o;
     o.height_m = [](double, double) { return 100.0; };
     o.completion = served_road_completion_options();
@@ -216,7 +219,7 @@ double taper_m(const RoadGraph& graph, const RoadRules& rules, bool keeps_width 
     auto tile = g2m_test::geometry_in_tile_with(graph, kKey, o);
     if (!tile) throw std::runtime_error(tile.error().message);
     for (const auto& e : tile->entries) if (e.way_id == 12 && e.cross_section)
-        for (const auto& b : e.cross_section->bands) if (b.counted && b.end.length_mm > 0 && b.end.from_width_mm == (keeps_width ? b.width_mm : 0)) return b.end.length_mm / 1000.0;
+        for (const auto& b : e.cross_section->bands) if (b.counted && b.end.length_mm > 0 && b.end.from_width_mm == 0) return b.end.length_mm / 1000.0;
     return 0;
 }
 } // namespace
@@ -260,26 +263,83 @@ TEST_CASE("MK6 a taper node has no junction patch (decline MergeLane), also wher
     }
 }
 
-// ROADS stage 6 fallback: no room for the width ramp (far-end clearance) - the link keeps its lane width and lands beside the edge;
-// a ramp from that same width over the landing length marks the merge zone. Sabotage S9 (2026-11-18): the ribbons accept only a
-// counted ramp from 0 as the taper zone -> MK7 fails.
-TEST_CASE("MK7 a taper node without room for the width ramp: the broken line runs over the landing length", "[world][road_ribbons][merge_markings]") {
-    // A 1 m gore nose, so the zone is the landing length only through the taper end's own marker, not through the gore ramp.
-    auto rules = builtin_road_rules_de();
-    rules.merge_lane.gore_max_m = 1; rules.merge_lane.gore_step_m = 1;
+// ROADS stage 6r: a taper candidate without room (a 20 m link from a junction) is a junction: the node gets its patch and no marks.
+// An accepted taper never has a patch (MK6), a refused one always has.
+TEST_CASE("MK7 a short link at an S == T node is no taper: a junction patch, no merge marks", "[world][road_ribbons][merge_markings]") {
+    const auto& rules = builtin_road_rules_de();
     const auto g = taper_scene(false, true);
-    const double lt = taper_m(g, rules, true);
-    INFO("landing " << lt << " m");
-    REQUIRE(lt > 0.5);
-    REQUIRE(taper_m(g, rules) == 0);   // no ramp from 0: the lane keeps its width
-    const auto m = marked(g, rules);
-    REQUIRE_FALSE(m.right_broken.empty());
-    REQUIRE_FALSE(m.left_hidden.empty());
-    double first = 1e9;
-    for (const auto& v : m.right_broken) {
-        CHECK(std::abs(v.y - node_y()) < 5.0);
-        CHECK(v.x <= node_x() + 0.5);
-        first = std::min<double>(first, v.x);
+    CHECK(taper_m(g, rules) == 0);
+    g2m_test::GeomOptions o;
+    o.height_m = [](double, double) { return 100.0; };
+    o.completion = served_road_completion_options();
+    o.rules = &rules;
+    auto tile = g2m_test::geometry_in_tile_with(g, kKey, o);
+    REQUIRE(tile);
+    bool node2 = false;
+    for (const auto& j : tile->junctions) {
+        bool at2 = false;
+        for (const auto& a : j.approaches) if (a.entry_index < tile->entries.size() && tile->entries[a.entry_index].way_id == 12) at2 = true;
+        if (!at2) continue;
+        node2 = true;
+        CHECK(j.decline != JunctionDecline::MergeLane);
     }
-    CHECK(first > node_x() - lt * 1.1 - 2.5); CHECK(first < node_x() - lt + 2.5);
+    CHECK(node2);
+    const auto m = marked(g, rules);
+    CHECK(m.right_broken.empty());
+    CHECK(m.left_hidden.empty());
+}
+
+// ROADS stage 6r-3: the classifier accepts exactly the tapers the geometry lands, an accepted taper never has a junction patch
+// at its node and a refused one always has. Stage 6 accepted six region nodes whose far-end clearance or held offset left the link
+// unlanded, so they got a patch (and the short link merged them into a two-node cluster). A link of `link_m` from node 4 on a
+// two-way primary (node 4 a junction) to node 2 on the carriageway. Sabotage S10 (2026-11-18): classify_merge_node without the
+// room gate (stage 6) -> MK8 fails.
+TEST_CASE("MK8 an accepted taper never has a junction patch at its node, a refused one always has", "[world][road_ribbons][merge_markings]") {
+    const auto scene = [](int link_m) {
+        RoadGraph g;
+        const auto node = [&](std::int64_t id, double x, double y) { g.nodes.push_back({id, {std::llround((kE0 + x) * 1000.0), std::llround((kN0 + y) * 1000.0)}, {}}); };
+        node(1, -400, 0); node(2, 0, 0); node(3, 200, 0); node(4, -link_m, -3); node(5, -link_m - 300, 27); node(6, -link_m + 300, -33);
+        const Tags t2 = {{"highway", "trunk"}, {"oneway", "yes"}, {"lanes", "2"}};
+        g.ways.push_back(way(10, {1, 2}, t2)); g.ways.push_back(way(11, {2, 3}, t2));
+        g.ways.push_back(way(12, {4, 2}, {{"highway", "trunk_link"}, {"oneway", "yes"}, {"lanes", "1"}}));
+        // node 4: the link leaves a wide two-way road at a shallow angle
+        g.ways.push_back(way(13, {5, 4, 6}, {{"highway", "primary"}, {"lanes", "4"}}));
+        for (const auto& w : g.ways) for (std::size_t i = 1; i < w.node_ids.size(); ++i)
+            g.edges.push_back({w.osm_id, static_cast<std::uint32_t>(i - 1), w.node_ids[i - 1], w.node_ids[i]});
+        return g;
+    };
+    auto small = builtin_road_rules_de();
+    small.merge_lane.taper_min_length_m = 1;
+    // No far-end clearance: short links land too.
+    auto tight = small;
+    tight.merge_lane.landing_width_far_margin_m = 0; tight.merge_lane.landing_width_far_max_m = 0;
+    std::size_t landed = 0, refused = 0;
+    for (const RoadRules* rules : {&builtin_road_rules_de(), static_cast<const RoadRules*>(&small), static_cast<const RoadRules*>(&tight)})
+        for (const int link_m : {6, 8, 10, 12, 16, 20, 25, 30, 40, 60, 120}) {
+            INFO("link " << link_m << " m, min " << rules->merge_lane.taper_min_length_m);
+            const auto g = scene(link_m);
+            const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+            const bool accepted = diagnose_merge_node(*builder, 2, *rules).taper;
+            g2m_test::GeomOptions o;
+            o.height_m = [](double, double) { return 100.0; };
+            o.completion = served_road_completion_options();
+            o.rules = rules;
+            auto tile = g2m_test::geometry_in_tile_with(g, kKey, o);
+            REQUIRE(tile);
+            bool lands = false;
+            for (const auto& e : tile->entries) if (e.way_id == 12 && e.cross_section && e.cross_section->end_join.kind == JoinKind::Landing) lands = true;
+            std::size_t at2 = 0;
+            for (const auto& j : tile->junctions) {
+                if (std::find(j.nodes.begin(), j.nodes.end(), 2) == j.nodes.end()) continue;
+                ++at2;
+                if (lands) { CHECK(j.nodes.size() == 1); CHECK(j.decline == JunctionDecline::MergeLane); }
+                else CHECK(j.decline == JunctionDecline::None);
+            }
+            CHECK(at2 == 1);
+            CHECK(accepted == lands);   // the classifier accepts exactly the tapers the geometry lands
+            ++(lands ? landed : refused);
+        }
+    std::printf("[MK8] landed %zu, refused %zu\n", landed, refused);
+    CHECK(landed > 0);
+    CHECK(refused > 0);
 }

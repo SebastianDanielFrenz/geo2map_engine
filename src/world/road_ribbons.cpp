@@ -647,8 +647,8 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
  // The through arm is found as the arm joined to the single arm at a landed node, whatever its join kind (lane change or an
  // inferred alignment), so every landed node gets the one broken line, owned by the through ribbon.
  // A taper node (ROADS stage 6, no added lane: the ramp's counted lane starts at width 0 at its landed end) has the zone of that
- // lane's width ramp, L_t; where the far-end clearance left no room for it the lane keeps its width and a ramp from that same
- // width (a no-op) carries the landing length instead. A way passing through such a node is the single and the through arm: its end at the node runs the
+ // lane's width ramp, L_t (ROADS stage 6r: a node without room for it is no taper but a junction). A way passing through such
+ // a node is the single and the through arm: its end at the node runs the
  // through arm's way when it has the ramp's direction there (ramp_at_end: both arrive at a merge, both leave at an exit).
  struct MergeZone { double length_m=0;bool ramp_right=true;bool ramp_at_end=false; };
  std::map<std::tuple<std::int64_t,std::int64_t>,MergeZone> merge_nodes; // (node, single arm) -> the ramp's side and landing length
@@ -674,7 +674,7 @@ RoadRibbonTile build_road_ribbons(const g2m::RoadGeomTile& geometry,const g2m::T
    if(gore_mm>0)zone_mm=gore_mm;
    {
     std::int32_t taper_mm=0;
-    for(const auto& b:entry.cross_section->bands){const auto& r=at_end?b.end:b.start;if(b.counted&&r.length_mm>0&&(r.from_width_mm==0||r.from_width_mm==b.width_mm))taper_mm=std::max(taper_mm,r.length_mm);}
+    for(const auto& b:entry.cross_section->bands){const auto& r=at_end?b.end:b.start;if(b.counted&&r.length_mm>0&&r.from_width_mm==0)taper_mm=std::max(taper_mm,r.length_mm);}
     if(taper_mm>0)zone_mm=taper_mm;
    }
    const MergeZone zone{zone_mm/1000.0,join.raw_delta_mm<0,at_end};

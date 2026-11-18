@@ -324,7 +324,6 @@ TEST_CASE("carve T12b: landing widths end before a short ramp's far-end junction
                 for (const auto& b : xs.bands) {
                     const auto& r = at_end ? b.end : b.start;
                     if (r.length_mm <= 0 || r.from_width_mm == 0) continue;   // from 0: the facing gore shoulder (stage 2b), not a landing width
-                    if (r.from_width_mm == b.width_mm) continue;   // a no-op ramp: a taper end's merge-zone marker (ROADS stage 6), no width change
                     if (check_ramps) CHECK(r.length_mm + far_trim_mm <= length_mm);
                     if (r.length_mm < offset_len) ++capped;
                 }

@@ -178,6 +178,11 @@ struct MergeLaneRules {
     // width 0 at the node on the through arm's ramp-side lane edge and widens to its own over at least this length (0 = off,
     // only in rules built in code: the loader requires 1..2000).
     std::int32_t taper_length_m = 0;
+    // ROADS stage 6r: a taper only where the link meets the single arm at no more than taper_max_angle_deg and the link's stretch
+    // leaves at least taper_min_length_m for the taper (the stretch less the far-end clearance and what the other end claims);
+    // else the node stays a junction (0 and 0 only in rules built in code: the loader requires both).
+    std::int32_t taper_max_angle_deg = 0;
+    std::int32_t taper_min_length_m = 0;
     friend bool operator==(const MergeLaneRules&, const MergeLaneRules&) = default;
 };
 
@@ -237,7 +242,7 @@ struct RoadRules {
 // curvature bound 4 W / a^2 <= 1 / min_edge_radius_m of every link class at the largest offset;
 // gore_max_m 1..1000, gore_step_m 1..50 <= gore_max_m, landing_clear_max_m landing_max_m..2000, gore_overlap_tol_mm 0..2000,
 // landing_width_far_margin_m 0..100, landing_width_far_max_m margin..500, taper_length_m 1..landing_clear_max_m with the same
-// S-ramp curvature bound at the largest landing offset).
+// S-ramp curvature bound at the largest landing offset, taper_max_angle_deg 1..89, taper_min_length_m 1..landing_clear_max_m).
 Result<RoadRules> load_road_rules(std::span<const std::byte> json);
 // The embedded data/road_rules/de.json, parsed once. A corrupt build aborts.
 const RoadRules& builtin_road_rules_de();

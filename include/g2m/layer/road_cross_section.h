@@ -171,6 +171,11 @@ enum class MergeNodeReason : std::uint8_t {
     AllSameDirection, ThroughDeflection, RampAngle, RampNotLink, LaneSum, JoinSplit,
     AddedCountMismatch, AddedNotContiguous, AddedNotOnRampSide, Boundaries, RampBackward, LandingTooFar,
     TaperRampLanes,   // ROADS stage 6: S == T, but the link has more than one counted lane
+    TaperAngle,       // ROADS stage 6r: S == T, but the link meets the single arm steeper than taper_max_angle_deg
+    TaperNoRoom,      // ... its stretch leaves less than taper_min_length_m for the taper
+    TaperOffsetHeld,  // ... its stretch is shifted whole (a hold or transition offset): its end cannot land
+    TaperSide,        // ... the link lies on one side of the through arm and on the other of the single arm (the carriageway bends
+                      // at the node with the link between its two lines): a taper would land it across the through lanes
 };
 const char* merge_node_reason_name(MergeNodeReason reason);
 // The classification of one node with its refusal reason and, when Ok, the roles and the landing offset.
@@ -187,6 +192,15 @@ struct MergeNodeDiagnosis {
     double through_deflection_deg = 0, ramp_angle_deg = 0;
     std::int32_t landing_needed_mm = 0;
     bool taper = false;   // ROADS stage 6: accepted as a taper node (no added lane)
+    // ROADS stage 6r: the room of a taper candidate (S == T, one-lane link), measured whenever the classification got that far
+    // (also when the angle gate refuses it): the link's stretch length, the far-end clearance (3c-3; 0 unless that end is a
+    // junction), the length the other end claims (its longest ramp: a lane-add landing, a join's ramps; half the stretch when
+    // the other end is a taper of the same link) and what is left for the taper, all mm; held: the stretch is shifted whole.
+    bool taper_candidate = false, room_known = false, two_tapers = false, offset_held = false;
+    std::int64_t stretch_mm = 0, far_clear_mm = 0, claim_mm = 0, avail_mm = 0;
+    // the angle of the link's fitted reference at the node against the single arm (deg; -1 = not fitted); the angle gate
+    // takes the larger of this and ramp_angle_deg (a chord over direction_probe_m misses a kink in the last metres)
+    double ramp_fit_angle_deg = -1;
 };
 MergeNodeDiagnosis diagnose_merge_node(const RoadReferenceBuilder& builder, std::int64_t node_id, const RoadRules& rules);
 // What resolve_cross_section did at each end of the stretch (0 = start, 1 = end).
