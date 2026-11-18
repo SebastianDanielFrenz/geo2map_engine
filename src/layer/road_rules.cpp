@@ -180,7 +180,7 @@ bool read_merge_lane_rules(Reader& rd, const json& root, MergeLaneRules& out) {
     if (!m || !rd.keys(*m, kPath, {"enabled", "max_through_deflection_deg", "max_ramp_angle_deg", "direction_probe_m", "landing_m_per_m",
             "landing_min_m", "landing_max_m", "max_landing_offset_mm", "gore_max_m", "gore_step_m", "landing_clear_max_m", "gore_overlap_tol_mm",
             "landing_width_far_margin_m", "landing_width_far_max_m", "taper_length_m",
-            "taper_max_angle_deg", "taper_min_length_m"}) ||
+            "taper_max_angle_deg", "taper_min_length_m", "non_link_arm_classes", "fork_tie_deg"}) ||
         !rd.boolean(*m, kPath, "enabled", out.enabled) ||
         !rd.integer(*m, kPath, "max_through_deflection_deg", 1, 89, out.max_through_deflection_deg) ||
         !rd.integer(*m, kPath, "max_ramp_angle_deg", 1, 89, out.max_ramp_angle_deg) ||
@@ -197,7 +197,22 @@ bool read_merge_lane_rules(Reader& rd, const json& root, MergeLaneRules& out) {
         !rd.integer(*m, kPath, "landing_width_far_max_m", 0, 500, out.landing_width_far_max_m) ||
         !rd.integer(*m, kPath, "taper_length_m", 1, 2000, out.taper_length_m) ||
         !rd.integer(*m, kPath, "taper_max_angle_deg", 1, 89, out.taper_max_angle_deg) ||
-        !rd.integer(*m, kPath, "taper_min_length_m", 1, 2000, out.taper_min_length_m)) return false;
+        !rd.integer(*m, kPath, "taper_min_length_m", 1, 2000, out.taper_min_length_m) ||
+        !rd.integer(*m, kPath, "fork_tie_deg", 0, 30, out.fork_tie_deg)) return false;
+    {   // ROADS stage 7b: the classes a non-link merge/diverge node's arms may have (each arm a link or one of these; [] = off)
+        const auto* c = rd.field(*m, kPath, "non_link_arm_classes");
+        if (!c) return false;
+        if (!c->is_array()) return rd.fail("merge_lane.non_link_arm_classes must be an array of class names");
+        out.non_link_arm_classes.clear();
+        for (const auto& v : *c) {
+            if (!v.is_string() || v.get<std::string>().empty()) return rd.fail("merge_lane.non_link_arm_classes must be an array of class names");
+            const auto name = v.get<std::string>();
+            if (name.size() >= 5 && name.compare(name.size() - 5, 5, "_link") == 0) return rd.fail("merge_lane.non_link_arm_classes: " + name + " is a link class");
+            if (std::find(out.non_link_arm_classes.begin(), out.non_link_arm_classes.end(), name) != out.non_link_arm_classes.end())
+                return rd.fail("merge_lane.non_link_arm_classes: " + name + " listed twice");
+            out.non_link_arm_classes.push_back(name);
+        }
+    }
     if (out.landing_width_far_max_m < out.landing_width_far_margin_m) return rd.fail("merge_lane: landing_width_far_max_m below landing_width_far_margin_m");
     if (out.gore_step_m > out.gore_max_m) return rd.fail("merge_lane: gore_step_m exceeds gore_max_m");
     if (out.landing_min_m > out.landing_max_m) return rd.fail("merge_lane: landing_min_m exceeds landing_max_m");

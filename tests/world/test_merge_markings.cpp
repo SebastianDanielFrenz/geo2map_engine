@@ -163,7 +163,11 @@ TEST_CASE("MK2b a clearance landing with a gore ramp: the gore nose, not the lan
 
 TEST_CASE("MK3 no landing, no marks: a link that is no merge lane and the switched-off rules", "[world][road_ribbons][merge_markings]") {
     const auto none = [](const Marked& m) { CHECK(m.right_broken.empty()); CHECK(m.left_hidden.empty()); CHECK(m.others.empty()); };
-    none(marked(scene("tertiary", -12), builtin_road_rules_de()));
+    // A non-link arm whose lanes balance (3 = 2 + 1) is a merge arm since ROADS 7b and gets the zone; with non_link_arm_classes empty it does not.
+    CHECK_FALSE(marked(scene("tertiary", -12), builtin_road_rules_de()).right_broken.empty());
+    auto no_non_link = builtin_road_rules_de();
+    no_non_link.merge_lane.non_link_arm_classes.clear();
+    none(marked(scene("tertiary", -12), no_non_link));
     auto off = builtin_road_rules_de();
     off.merge_lane.enabled = false;
     none(marked(scene("trunk_link", -12), off));

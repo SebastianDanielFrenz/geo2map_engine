@@ -482,8 +482,20 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     const double cos_x = a[xi].dx * S.dx + a[xi].dy * S.dy, cos_y = a[yi].dx * S.dx + a[yi].dy * S.dy;
     // Passing through: the single arm is one of the passing way's arms (one leaves, one arrives) and its other arm is the through one.
     if (passing && a[xi].arm.way_id != S.arm.way_id && a[yi].arm.way_id != S.arm.way_id) return refuse(MergeNodeReason::WayPassesThrough);
-    const bool x_through = passing ? a[xi].arm.way_id == S.arm.way_id
-                                   : cos_x > cos_y || (cos_x == cos_y && a[xi].arm.way_id < a[yi].arm.way_id);
+    bool x_through = passing ? a[xi].arm.way_id == S.arm.way_id
+                             : cos_x > cos_y || (cos_x == cos_y && a[xi].arm.way_id < a[yi].arm.way_id);
+    // ROADS stage 7b: a fork of two non-link carriageways (neither arm a _link) has no ramp by class; the through arm is the one
+    // bending less, and where both bend alike (deflections within merge_lane.fork_tie_deg) the one with more counted lanes,
+    // then the left one in S's travel direction. Nodes with a link arm keep the choice above.
+    const auto is_link_arm = [](const NodeArm& n) { const auto h = highway_of(*n.way); return h.size() >= 5 && h.substr(h.size() - 5) == "_link"; };
+    if (!passing && !is_link_arm(a[xi]) && !is_link_arm(a[yi]) &&
+        std::fabs(angle_deg(cos_x) - angle_deg(cos_y)) <= static_cast<double>(ml.fork_tie_deg)) {
+        if (a[xi].counted != a[yi].counted) x_through = a[xi].counted > a[yi].counted;
+        else {
+            const double lx = a[xi].fx * -S.dy + a[xi].fy * S.dx, ly = a[yi].fx * -S.dy + a[yi].fy * S.dx;   // left of S's travel
+            if (lx != ly) x_through = lx > ly;
+        }
+    }
     const NodeArm& T = x_through ? a[xi] : a[yi];
     const NodeArm& R = x_through ? a[yi] : a[xi];
     if (detail) {   // diagnostics only (ROADS stage 5a)
@@ -495,10 +507,19 @@ std::optional<MergeNode> classify_merge_node(const RoadReferenceBuilder& builder
     }
     if (angle_deg(x_through ? cos_x : cos_y) > static_cast<double>(ml.max_through_deflection_deg)) return refuse(MergeNodeReason::ThroughDeflection);
     if (angle_deg(R.dx * S.dx + R.dy * S.dy) > static_cast<double>(ml.max_ramp_angle_deg)) return refuse(MergeNodeReason::RampAngle);
-    const auto hw = highway_of(*R.way);
-    if (hw.size() < 5 || hw.substr(hw.size() - 5) != "_link") return refuse(MergeNodeReason::RampNotLink);
+    // ROADS stage 7b: a non-link arm is a merge/diverge arm only where the lanes balance (S = T + R) - a carriageway splitting into,
+    // or joining from, two carriageways; it gets the lane-add landing, gore and markings of a link, never a taper.
+    const bool ramp_link = is_link_arm(R);
+    if (!ramp_link) {
+        const auto listed = [&](const NodeArm& n) {
+            if (is_link_arm(n)) return true;
+            const auto h = highway_of(*n.way);
+            return std::find(ml.non_link_arm_classes.begin(), ml.non_link_arm_classes.end(), h) != ml.non_link_arm_classes.end();
+        };
+        if (!listed(S) || !listed(T) || !listed(R) || S.counted != T.counted + R.counted) return refuse(MergeNodeReason::RampNotLink);
+    }
     // A taper node (ROADS stage 6): the carriageway keeps its lanes across the node and a one-lane link lands on its outer lane edge.
-    const bool taper = ml.taper_length_m > 0 && S.counted == T.counted;
+    const bool taper = ramp_link && ml.taper_length_m > 0 && S.counted == T.counted;
     if (taper && R.counted != 1) return refuse(MergeNodeReason::TaperRampLanes);
     // ROADS stage 6r: a short or steep link meeting the carriageway is a junction, not a taper - the angle gate here, the room gate
     // (and the held offset) once the landing is known. The census measures the room also where the angle refuses.

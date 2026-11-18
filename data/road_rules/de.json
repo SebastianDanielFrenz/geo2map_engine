@@ -65,7 +65,8 @@
                   "landing_m_per_m": 12, "landing_min_m": 30, "landing_max_m": 80, "max_landing_offset_mm": 8000,
                   "gore_max_m": 150, "gore_step_m": 5, "landing_clear_max_m": 250, "gore_overlap_tol_mm": 250,
                   "landing_width_far_margin_m": 10, "landing_width_far_max_m": 60, "taper_length_m": 60,
-                  "taper_max_angle_deg": 20, "taper_min_length_m": 20 },
+                  "taper_max_angle_deg": 20, "taper_min_length_m": 20, "fork_tie_deg": 2,
+                  "non_link_arm_classes": ["motorway", "trunk", "primary", "secondary", "tertiary"] },
   "min_edge_radius_m": {
     "default": 10,
     "motorway": 200,

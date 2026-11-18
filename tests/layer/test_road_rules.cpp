@@ -36,7 +36,7 @@ TEST_CASE("The embedded rules file equals data/road_rules/de.json and its hash i
     // A data edit must come with a conscious edit of this value (it enters the roads.geom config hash in slice 5).
     const auto bytes = builtin_road_rules_de_bytes();
     const auto digest = Sha256::of(bytes);
-    CHECK(to_hex(digest) == "293ba98caecfc01ef56d13e522c902d98f867103c22de3af5e4a6a25577dcd86");
+    CHECK(to_hex(digest) == "6d3ad8a811e4a21c80fee54bd3bdf74e60bdeef21a24445e31158bf5bdde6c32");
     CHECK(builtin_road_rules_de().content_sha256 == digest);
 }
 
@@ -298,6 +298,17 @@ TEST_CASE("The merge_lane block: angles, landing rate and bounds of the lane-add
     CHECK_FALSE(load_text(mutated("\"taper_min_length_m\": 20", "\"taper_min_length_m\": 0")));
     CHECK_FALSE(load_text(mutated("\"taper_min_length_m\": 20", "\"taper_min_length_m\": 251")));   // above landing_clear_max_m
     CHECK(load_text(mutated("\"taper_min_length_m\": 20", "\"taper_min_length_m\": 30")));
+    // ROADS stage 7b: non-link merge/diverge arms and the fork tie
+    CHECK(ml.fork_tie_deg == 2);
+    CHECK(ml.non_link_arm_classes == std::vector<std::string>{"motorway", "trunk", "primary", "secondary", "tertiary"});
+    const std::string cls = "\"non_link_arm_classes\": [\"motorway\", \"trunk\", \"primary\", \"secondary\", \"tertiary\"]";
+    CHECK_FALSE(load_text(mutated(",\n                  " + cls, "")));
+    CHECK_FALSE(load_text(mutated(cls, "\"non_link_arm_classes\": \"motorway\"")));
+    CHECK_FALSE(load_text(mutated(cls, "\"non_link_arm_classes\": [\"motorway_link\"]")));
+    CHECK_FALSE(load_text(mutated(cls, "\"non_link_arm_classes\": [\"trunk\", \"trunk\"]")));
+    CHECK(load_text(mutated(cls, "\"non_link_arm_classes\": []")));
+    CHECK_FALSE(load_text(mutated(", \"fork_tie_deg\": 2", "")));
+    CHECK_FALSE(load_text(mutated("\"fork_tie_deg\": 2", "\"fork_tie_deg\": 31")));
     // The landing S-ramp must not be sharper than min_edge_radius_m of the link classes: 4 W / a^2 <= 1 / R.
     CHECK_FALSE(load_text(mutated("\"landing_m_per_m\": 12", "\"landing_m_per_m\": 1")));          // 8 m over 30 m: radius far under 60 m
     const auto off = load_text(mutated(from, "\"merge_lane\": { \"enabled\": false,"));

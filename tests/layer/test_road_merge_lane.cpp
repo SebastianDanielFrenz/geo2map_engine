@@ -190,7 +190,7 @@ TEST_CASE("M5 what is no merge lane gets no landing and no join", "[layer][road_
         CHECK(r.xs.offset.mode == OffsetMode::None);
         CHECK(a.xs.end_join.kind == JoinKind::None);
     };
-    none(merge_scene({10, 11, 12}, "tertiary"), "not a link");
+    none(merge_scene({10, 11, 12}, "tertiary", -12, 2), "not a link and no added lane (a non-link arm is never a taper)");
     none(merge_scene({10, 11, 12}, "trunk_link", -12, 4), "the lanes do not add up (4 = 2 + 1 fails)");   // 2 = 2 is a taper (T1)
 }
 
@@ -272,6 +272,8 @@ TEST_CASE("M7 the B 8 exit at Hoechst: the exit lane is whole at the diverge nod
 //   S17 classify_merge_node: the angle gate reads the chord only, not the fitted line (ramp_fit_angle_deg)  -> T7b fails
 //   S18 other_on_left: the other way's side read from self's reference line, not its counted-lane centre        -> T11 fails
 //   S19 classify_merge_node: no side gate (the link's side read against the single arm only)                    -> T12 fails
+//   S20 classify_merge_node: a non-link R accepted without the lane sum (S = T + R)                            -> N2 fails
+//   S21 classify_merge_node: no fork tie rule (the way-id tie of before)                                         -> N3 fails
 namespace {
 // The taper scene: A and B both 2 lanes (S == T), or one 2-lane way 10 passing through node 2 (`passing`); the link R as in
 // merge_scene with `ramp_lanes` lanes; `ramp_x` its distance along x from the node (merge: west of it; diverge: east).
@@ -639,4 +641,64 @@ TEST_CASE("T10 a link that is a taper at both ends: each gets half its stretch, 
         const auto r = resolve_in(*builder, 12, rules);
         CHECK(r.xs.start_join.kind != JoinKind::Landing); CHECK(r.xs.end_join.kind != JoinKind::Landing);
     }
+}
+
+// ROADS stage 7b: a non-link arm is a merge/diverge arm where the lanes balance (S = T + R); at a fork of two non-link arms bending
+// alike (within merge_lane.fork_tie_deg) the through arm is the one with more counted lanes, then the left one.
+TEST_CASE("N1 a non-link carriageway joining where the lanes balance lands like a link", "[layer][road_merge_lane][roads]") {
+    const auto& rules = builtin_road_rules_de();
+    const auto s = merge_scene({10, 11, 12}, "trunk");
+    const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+    const auto d = diagnose_merge_node(*builder, 2, rules);
+    CHECK(d.reason == MergeNodeReason::Ok); CHECK_FALSE(d.taper);
+    CHECK(d.through_id == s.a); CHECK(d.ramp_id == s.r);
+    const auto r = resolve_in(*builder, s.r, rules), a = resolve_in(*builder, s.a, rules);
+    CHECK(r.xs.end_join.kind == JoinKind::Landing);
+    CHECK(r.xs.offset.mode != OffsetMode::None);
+    CHECK(a.xs.end_join.kind != JoinKind::None);
+    // Rules off: as before stage 7b.
+    auto off = rules; off.merge_lane.non_link_arm_classes.clear();
+    CHECK(diagnose_merge_node(*builder, 2, off).reason == MergeNodeReason::RampNotLink);
+    CHECK(resolve_in(*builder, s.r, off).xs.end_join.kind == JoinKind::None);
+}
+
+TEST_CASE("N2 a non-link arm where the lanes do not balance stays a junction (ramp_not_link)", "[layer][road_merge_lane][roads]") {
+    const auto& rules = builtin_road_rules_de();
+    for (const int b_lanes : {2, 4}) {   // 2 = 2 + 0 would be a taper shape, 4 != 2 + 1
+        INFO("single arm lanes " << b_lanes);
+        const auto s = merge_scene({10, 11, 12}, "trunk", -12, b_lanes);
+        const auto builder = RoadReferenceBuilder::make(s.graph); REQUIRE(builder);
+        const auto d = diagnose_merge_node(*builder, 2, rules);
+        CHECK(d.reason == MergeNodeReason::RampNotLink); CHECK_FALSE(d.taper_candidate);
+        check_junction(*builder, rules, s.a, s.b, s.r);
+    }
+}
+
+namespace {
+// A one-way motorway S (way 20, `s_lanes`) arriving along +x at node 2 forks into way 21 leaving to (300, yl) and way 22 to (300, yr).
+// `s_turn` (S's turn:lanes) says which of S's lanes go left; without it the through lanes keep S's left side.
+RoadGraph fork_scene(int s_lanes, int l_lanes, int yl, int r_lanes, int yr, const std::string& s_turn = {}) {
+    const auto t = [](int n) { return Tags{{"highway", "motorway"}, {"oneway", "yes"}, {"lanes", std::to_string(n)}}; };
+    auto ts = t(s_lanes); if (!s_turn.empty()) ts.emplace_back("turn:lanes", s_turn);
+    return graph_of({{1, {-400, 0}}, {2, {0, 0}}, {3, {300, yl}}, {4, {300, yr}}},
+        {way(20, {1, 2}, ts), way(21, {2, 3}, t(l_lanes)), way(22, {2, 4}, t(r_lanes))});
+}
+} // namespace
+
+TEST_CASE("N3 a fork of two non-link carriageways: the through arm bends less; alike, it has more lanes, then it is the left one", "[layer][road_merge_lane][roads]") {
+    const auto& rules = builtin_road_rules_de();
+    const auto through = [&](const RoadGraph& g) {
+        const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+        const auto d = diagnose_merge_node(*builder, 2, rules);
+        CHECK(d.reason == MergeNodeReason::Ok); CHECK_FALSE(d.taper);
+        return d.through_id;
+    };
+    CHECK(through(fork_scene(4, 2, 30, 2, -30)) == 21);    // 5.7 deg each, two lanes each: the left one
+    CHECK(through(fork_scene(4, 1, 30, 3, -36, "slight_left|none|none|none")) == 22);    // 5.7 vs 6.8 deg: alike, the right one has more lanes
+    CHECK(through(fork_scene(4, 3, 60, 1, -30, "slight_left|slight_left|slight_left|none")) == 22);    // 11.3 vs 5.7 deg: the right one bends less
+    CHECK(through(fork_scene(4, 2, 30, 2, -60)) == 21);    // 5.7 vs 11.3 deg: the left one bends less
+    // Its ramp lands where it leaves: the diverge arm starts with a landing.
+    const auto g = fork_scene(4, 2, 30, 2, -30);
+    const auto builder = RoadReferenceBuilder::make(g); REQUIRE(builder);
+    CHECK(resolve_in(*builder, 22, rules).xs.start_join.kind == JoinKind::Landing);
 }

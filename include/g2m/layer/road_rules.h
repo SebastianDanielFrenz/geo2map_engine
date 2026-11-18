@@ -183,6 +183,12 @@ struct MergeLaneRules {
     // else the node stays a junction (0 and 0 only in rules built in code: the loader requires both).
     std::int32_t taper_max_angle_deg = 0;
     std::int32_t taper_min_length_m = 0;
+    // ROADS stage 7b: a non-link arm R is a merge/diverge arm where the lanes balance (S = T + R) and every arm of the node is a link or
+    // of one of non_link_arm_classes (empty = only _link arms, as before); it gets the lane-add landing, gore and markings of a link and
+    // never a taper. At a fork of two non-link arms whose deflections from S differ by at most fork_tie_deg the through arm is the one
+    // with more counted lanes, then the left one.
+    std::vector<std::string> non_link_arm_classes;
+    std::int32_t fork_tie_deg = 0;
     friend bool operator==(const MergeLaneRules&, const MergeLaneRules&) = default;
 };
 
