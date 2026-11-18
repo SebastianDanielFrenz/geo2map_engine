@@ -20,7 +20,7 @@
 //       reference line, l/r = the bed's left/right edge point, w/lanes/flags = the row's vertex attributes
 //   NODE node E N deg codes                  a stretch end node; codes: PATCH (a served junction patch), JD:<decline>,
 //       LAND (a ramp landed here), TAPER (a LaneChange join here), M:<merge reason> (degree-3 classification), J:<kind>
-//   TJ  junctionNode way stretchLen trim landingLenMm  (ROADS stage 3b) a used approach of a built junction whose stretch lands at its other end
+//   TJ  junctionNode way stretchLen trim landingLenMm estMm  (ROADS stage 3b; estMm: 3c-3's resolve-time trim estimate) a used approach of a built junction whose stretch lands at its other end
 //   E   node deg S T R kindS kindT kindR lanesS lanesU dLaneL dLaneR dBedL dBedR intData intDrawn gapTR rside  (ROADS stage 3a) at a node
 //       where a ramp landed: in the node's cross frame (S's reference pose at the node, t positive left of S's way direction),
 //       S's outer counted-lane and road-bed edges minus those of the union of T and R, signed OUTWARD in mm (positive = S
@@ -32,7 +32,9 @@
 //       residue in mm of R's ramp-side lane / bed edge (its distance from R's counted-lane centre times 1 - cos phi: the amount the
 //       landing cannot close, since R's end cut is tilted), rRamp = the length in mm of R's counted-lane width ramp at the landed end
 //       (0 = no landing width ramp there), skip = 1 when the 3b rule gave R no landing widths at this end (its far end is a junction -
-//       degree > 2, no join - and the stretch minus merge_lane.landing_width_far_clear_m is shorter than gore_step_m); sRef / tRef / rRef
+//       degree > 2, no join - and the stretch minus the far-end clearance (ROADS 3c-3: the far trim estimate plus
+//       merge_lane.landing_width_far_margin_m, at most landing_width_far_max_m; before it landing_width_far_clear_m) is shorter
+//       than gore_step_m; the served resolve's trace); sRef / tRef / rRef
 //       = the lateral distance in mm (node frame, signed towards rside) of S's / T's / R's reference point at the node from the node;
 //       zoneL / zoneG = R's landing length and its gore shoulder ramp length (0 = none) at the landed end in mm: the merge-zone
 //       markings (broken T edge, hidden R edge) run over zoneG, else zoneL (ROADS stage 4a; before it: zoneL, LaneChange only);
@@ -238,8 +240,13 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                     const auto& xs = *en.cross_section;
                     const auto& other = a.at_end ? xs.start_join : xs.end_join;
                     if (other.kind != JoinKind::Landing) continue;
-                    std::printf("TJ %lld %lld %.3f %.3f %d\n", static_cast<long long>(j.nodes.front()), static_cast<long long>(en.way_id),
-                                en.profile->reference.length_m, a.trim_m, a.at_end ? xs.offset.start_length_mm : xs.offset.end_length_mm);
+                    // ROADS 3c-3: the resolve-time estimate of this trim (the landed end's trace), 0 when none
+                    std::int32_t est = 0;
+                    CrossSectionTrace etr;
+                    if (builder && resolve_cross_section(*builder, en.way_id, en.stretch, en.profile->reference.length_m, rules, &etr))
+                        est = etr.ends[a.at_end ? 0 : 1].far_trim_estimate_mm;
+                    std::printf("TJ %lld %lld %.3f %.3f %d %d\n", static_cast<long long>(j.nodes.front()), static_cast<long long>(en.way_id),
+                                en.profile->reference.length_m, a.trim_m, a.at_end ? xs.offset.start_length_mm : xs.offset.end_length_mm, est);
                 }
             }
             // junction codes (owner tile records)
@@ -394,15 +401,9 @@ int run_spots(TerrainService& svc, const geo::UtmZone& zone, const double box[4]
                         r_ctr = mm(side * (0.5 * (ar.lane_l + ar.lane_r) - sc));
                     }
                     int skip = 0;
-                    if (const auto* rw = find_way(G, R)) {
-                        const auto& fj = v.second ? rn.cross_section->start_join : rn.cross_section->end_join;
-                        const std::uint32_t fr = v.second ? rn.stretch.start_ref : rn.stretch.end_ref;
-                        const auto len_mm = static_cast<std::int64_t>(std::floor(rn.cross_section->length_m * 1000.0));
-                        if (fj.kind == JoinKind::None && fr < rw->node_ids.size() && degree[rw->node_ids[fr]] > 2 &&
-                            len_mm - static_cast<std::int64_t>(rules.merge_lane.landing_width_far_clear_m) * 1000 <
-                                static_cast<std::int64_t>(rules.merge_lane.gore_step_m) * 1000)
-                            skip = 1;
-                    }
+                    if (CrossSectionTrace str; builder && rn.profile &&
+                        resolve_cross_section(*builder, rn.way_id, rn.stretch, rn.profile->reference.length_m, rules, &str))
+                        skip = str.ends[v.second ? 1 : 0].landing_widths_skipped ? 1 : 0;
                     std::printf("E %lld %d %lld %lld %lld %s %s %s %d %d %lld %lld %lld %lld %lld %lld %lld %c %lld %lld %lld %d %d %lld %lld %lld %d %d %lld\n", static_cast<long long>(node), degree[node],
                                 static_cast<long long>(S), static_cast<long long>(T), static_cast<long long>(R), join_name(sj.kind), join_name(tj.kind),
                                 join_name(rj.kind), as.lanes, at.lanes + ar.lanes, mm(as.lane_l - ul), mm(ur - as.lane_r), mm(as.bed_l - ubl), mm(ubr - as.bed_r),

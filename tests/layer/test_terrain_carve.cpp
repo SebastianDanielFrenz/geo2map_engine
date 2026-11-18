@@ -11,6 +11,8 @@
 #include "g2m/layer/carve_params.h"
 #include "g2m/layer/deriver.h"
 #include "g2m/layer/height_tile.h"
+#include "g2m/layer/road_cross_section.h"
+#include "g2m/layer/road_reference.h"
 #include "g2m/layer/road_surface.h"
 #include "g2m/layer/terrain_carve.h"
 #include "g2m/layer/terrain_class.h"
@@ -32,6 +34,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -290,24 +293,26 @@ TEST_CASE("carve T12 sabotage: blending toward the raw DEM steps at the blend ed
     CHECK(j.blend_terrain > 0.005);
 }
 
-// ROADS stage 3b: a ramp's landing widths (its landed lane and outer shoulder start at the single arm's widths) end
-// landing_width_far_clear_m before the stretch's other end when that end is a junction. On this tile a 29.6 m ramp stretch lands at
-// one end and meets a junction 10.5 m from the other; with the widths ramping over the whole stretch its widened verge reached
-// into the neighbouring arm at the ring corner and the junction surface stepped 0.081 m on the trim line. Negative control in the
-// test: the same tile with the clearance set to 0 (recorded sabotage S15) brings the step back.
-TEST_CASE("carve T12b: landing widths end before a short ramp's far-end junction (ROADS 3b)", "[layer][carve][road_merge_lane]") {
+// ROADS stage 3b: a ramp's landing widths (its landed lane and outer shoulder start at the single arm's widths) end before the
+// stretch's other end when that end is a junction; ROADS stage 3c-3: by the resolve-time estimate of that junction's trim plus
+// landing_width_far_margin_m, at most landing_width_far_max_m. On this tile a 29.6 m ramp stretch lands at one end and meets a
+// junction 10.5 m from the other; with the widths ramping over the whole stretch its widened verge reached into the
+// neighbouring arm at the ring corner and the junction surface stepped 0.081 m on the trim line. The check: every landing width
+// ramp ends before the carved junction's trim at the far end. Negative control in the test: the same tile with margin and
+// maximum 0 (no clearance; recorded sabotage S15) brings the step back.
+TEST_CASE("carve T12b: landing widths end before a short ramp's far-end junction (ROADS 3b/3c-3)", "[layer][carve][road_merge_lane]") {
     const TileKey key = l0(1822, 21685);
-    const auto run = [&](const RoadRules& rules, const char* what, std::size_t& capped) {
+    const auto run = [&](const RoadRules& rules, const char* what, std::size_t& capped, bool check_ramps) {
         g2m_test::CarveFixture fx(world(kA66));
         fx.rules = &rules;
         const auto m = fx.model(key);
         const Jumps j = measure_jumps(*m.model, key);
         print_jumps(what, j);
-        // Every landed stretch whose other end has no join: no width ramp at the landed end runs into the far clearance.
+        // Every landed stretch whose other end has no join: no width ramp at the landed end runs past the far junction's trim.
         const auto& tile = m.model->core_tile();
-        const auto clear_mm = static_cast<std::int64_t>(rules.merge_lane.landing_width_far_clear_m) * 1000;
         capped = 0;
-        for (const auto& en : tile.entries) {
+        for (std::size_t ei = 0; ei < tile.entries.size(); ++ei) {
+            const auto& en = tile.entries[ei];
             if (!en.cross_section || !en.profile) continue;
             const auto& xs = *en.cross_section;
             const auto length_mm = static_cast<std::int64_t>(std::floor(en.profile->reference.length_m * 1000.0));
@@ -315,10 +320,11 @@ TEST_CASE("carve T12b: landing widths end before a short ramp's far-end junction
                 if ((at_end ? xs.end_join : xs.start_join).kind != JoinKind::Landing) continue;
                 if ((at_end ? xs.start_join : xs.end_join).kind != JoinKind::None) continue;
                 const std::int32_t offset_len = at_end ? xs.offset.end_length_mm : xs.offset.start_length_mm;
+                const auto far_trim_mm = static_cast<std::int64_t>(std::ceil((at_end ? m.model->trim_start(ei) : m.model->trim_end(ei)) * 1000.0));
                 for (const auto& b : xs.bands) {
                     const auto& r = at_end ? b.end : b.start;
                     if (r.length_mm <= 0 || r.from_width_mm == 0) continue;   // from 0: the facing gore shoulder (stage 2b), not a landing width
-                    CHECK(r.length_mm <= std::max<std::int64_t>(0, length_mm - clear_mm));
+                    if (check_ramps) CHECK(r.length_mm + far_trim_mm <= length_mm);
                     if (r.length_mm < offset_len) ++capped;
                 }
             }
@@ -327,13 +333,56 @@ TEST_CASE("carve T12b: landing widths end before a short ramp's far-end junction
     };
     std::size_t capped = 0, capped_sab = 0;
     const RoadRules& rules = builtin_road_rules_de();
-    REQUIRE(rules.merge_lane.landing_width_far_clear_m > 0);
-    const Jumps j = run(rules, "a66 1822/21685 flat, landing widths with far clearance", capped);
+    REQUIRE(rules.merge_lane.landing_width_far_max_m > 0);
+    const Jumps j = run(rules, "a66 1822/21685 flat, landing widths with far clearance", capped, true);
     CHECK(capped > 0);   // the short ramp stretch is on this tile
     CHECK(j.trim < 0.01);
-    RoadRules sabotage = rules; sabotage.merge_lane.landing_width_far_clear_m = 0;
-    const Jumps js = run(sabotage, "a66 1822/21685 flat, far clearance 0 (sabotage)", capped_sab);
-    CHECK(js.trim > 0.05);   // measured 0.0814
+    RoadRules sabotage = rules; sabotage.merge_lane.landing_width_far_margin_m = 0; sabotage.merge_lane.landing_width_far_max_m = 0;
+    const Jumps js = run(sabotage, "a66 1822/21685 flat, far clearance 0 (sabotage)", capped_sab, false);
+    CHECK(js.trim > 0.05);   // measured 0.0838
+}
+
+// ROADS stage 3c-3: the resolve-time far trim estimate against the trims the served junctions give. For every used approach of a
+// built junction in the fixtures' served roads.geom tiles whose stretch lands at its other end, the landing widths' far-end
+// clearance of that landed end (the estimate plus landing_width_far_margin_m, at most landing_width_far_max_m; the served
+// resolve's trace) covers the approach's trim. Recorded sabotage S18: far_trim_estimate_m
+// without the corner stations (the trim floor only) covers 7 of 11, worst shortfall 16.10 m.
+TEST_CASE("carve T12c: the far trim estimate covers the fixtures' far-end trims of landed ramps (ROADS 3c-3)", "[layer][carve][road_merge_lane]") {
+    const RoadRules& rules = builtin_road_rules_de();
+    std::size_t seen = 0, covered = 0, estimated = 0;
+    double worst_short = 0;
+    for (const char* file : {kA66, kFfm}) {
+        auto& fx = fixture(file, false);
+        std::set<TileKey> l2;
+        for (const auto& k : fx.level0_tiles()) l2.insert(k.parent().parent());
+        for (const auto& key : l2) {
+            const RoadGeomTile& g = fx.geom(key);
+            const auto builder = RoadReferenceBuilder::make(g.source.graph);
+            REQUIRE(builder);
+            for (const auto& j : g.junctions) {
+                if (j.decline != JunctionDecline::None) continue;
+                for (const auto& a : j.approaches) {
+                    if (a.status != JunctionApproachStatus::Used || a.entry_index >= g.entries.size()) continue;
+                    const auto& en = g.entries[a.entry_index];
+                    if (!en.cross_section || !en.profile) continue;
+                    if ((a.at_end ? en.cross_section->start_join : en.cross_section->end_join).kind != JoinKind::Landing) continue;
+                    CrossSectionTrace tr;
+                    REQUIRE(resolve_cross_section(*builder, en.way_id, en.stretch, en.profile->reference.length_m, rules, &tr));
+                    const auto& t = tr.ends[a.at_end ? 0 : 1];
+                    ++seen;
+                    if (t.far_trim_estimate_mm > 0) ++estimated;
+                    const double clear = static_cast<double>(t.far_clear_mm) / 1000.0;
+                    if (clear >= a.trim_m) ++covered; else worst_short = std::max(worst_short, a.trim_m - clear);
+                    std::printf("[T12c] %s way %lld trim %.2f estimate %.2f clearance %.2f\n", file, static_cast<long long>(en.way_id), a.trim_m,
+                                static_cast<double>(t.far_trim_estimate_mm) / 1000.0, clear);
+                }
+            }
+        }
+    }
+    std::printf("[T12c] far-end trims of landed stretches %zu, estimated %zu, covered %zu, worst shortfall %.2f m\n", seen, estimated, covered, worst_short);
+    CHECK(seen > 0);
+    CHECK(estimated == seen);
+    CHECK(covered == seen);
 }
 
 TEST_CASE("carve T12: continuity on every busy fixture tile, flat and tilted DEM (G3-D)", "[layer][carve][long]") {

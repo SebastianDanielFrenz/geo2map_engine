@@ -168,9 +168,12 @@ struct MergeLaneRules {
     // Overlap-free gore ramp (ROADS stage 2b): the facing shoulders' smoothstep may run ahead of the lane-edge gap by this much.
     std::int32_t gore_overlap_tol_mm = 0;
     // Landing widths (ROADS stage 3b): the landed lane and outer shoulder widths ramp back to the ramp's own over the landing
-    // length, but end at least this far before the stretch's other end when that end is a junction, so the junction sees the
-    // ramp's own widths at its trim; a remaining ramp shorter than gore_step_m makes no landing widths (0 = no clearance).
-    std::int32_t landing_width_far_clear_m = 0;
+    // length, but end before the stretch's other end when that end is a junction, so the junction sees the ramp's own widths at
+    // its trim; a remaining ramp shorter than gore_step_m makes no landing widths. ROADS stage 3c-3: the clearance is the
+    // resolve-time estimate of that junction's trim (from the node's arms) plus landing_width_far_margin_m, at most
+    // landing_width_far_max_m (which also stands in when no estimate can be made; 0 and 0 = no clearance).
+    std::int32_t landing_width_far_margin_m = 0;
+    std::int32_t landing_width_far_max_m = 0;
     friend bool operator==(const MergeLaneRules&, const MergeLaneRules&) = default;
 };
 
@@ -229,7 +232,7 @@ struct RoadRules {
 // per metre 1..1000 with min <= max in 1..2000 m, maximum landing offset 1..20000 mm, and the landing S-ramp
 // curvature bound 4 W / a^2 <= 1 / min_edge_radius_m of every link class at the largest offset;
 // gore_max_m 1..1000, gore_step_m 1..50 <= gore_max_m, landing_clear_max_m landing_max_m..2000, gore_overlap_tol_mm 0..2000,
-// landing_width_far_clear_m 0..500).
+// landing_width_far_margin_m 0..100, landing_width_far_max_m margin..500).
 Result<RoadRules> load_road_rules(std::span<const std::byte> json);
 // The embedded data/road_rules/de.json, parsed once. A corrupt build aborts.
 const RoadRules& builtin_road_rules_de();
